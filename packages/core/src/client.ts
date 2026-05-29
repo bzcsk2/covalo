@@ -100,18 +100,34 @@ export class DeepSeekClient {
     if (opts.thinking) body.thinking = opts.thinking
     if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort
 
-    let resp: Response
-    try {
-      resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: opts.signal })
-    } catch (e) {
-      yield { type: "error", message: errorMessage(e) }
-      return
-    }
+    const maxRetries = 3
+    const retryableStatuses = new Set([429, 502, 503])
 
-    if (!resp.ok) {
-      const text = await safeReadText(resp)
-      yield { type: "error", status: resp.status, message: `HTTP ${resp.status}`, body: text }
-      return
+    let resp: Response
+    let attempt = 0
+    while (true) {
+      attempt++
+      try {
+        resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: opts.signal })
+        if (resp.ok) break
+        const status = resp.status
+        if (!retryableStatuses.has(status) || attempt > maxRetries) {
+          const text = await safeReadText(resp)
+          yield { type: "error", status, message: `HTTP ${status}`, body: text }
+          return
+        }
+        const delay = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 500, 10_000)
+        await sleep(delay, opts.signal)
+        continue
+      } catch (e) {
+        if (attempt > maxRetries || isAbortError(e)) {
+          yield { type: "error", message: errorMessage(e) }
+          return
+        }
+        const delay = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 500, 10_000)
+        await sleep(delay, opts.signal)
+        continue
+      }
     }
 
     if (!resp.body) {
@@ -241,5 +257,21 @@ async function safeReadText(resp: Response): Promise<string> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
+}
+
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException("Aborted", "AbortError"))
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
 }
 

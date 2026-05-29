@@ -85,9 +85,10 @@
   - `DEEPSEEK_MODEL=deepseek-v4-flash`
 - `packages/core/src/config.ts` 支持从环境变量或项目根 `api-key` 文件读取 `DEEPSEEK_API_KEY`。
 
-未达到计划完整版的部分：
+额外完成：
 
-- 尚未实现 429/5xx 指数退避重试。
+- 429/5xx 指数退避重试（最多 3 次，1s/2s/4s + jitter）
+- 引擎 loop 错误恢复：stream 失败后自动重试，连续 3 次失败才终止
 
 ### Step 1.2 SegmentedLog 与 Session 持久化
 
@@ -189,6 +190,10 @@
 - 尚未拆出计划中的 `loop.ts`。
 - 尚未实现预算、fold、repair、force summary。
 
+额外完成：
+
+- Stream 错误自动重试：连续 3 次失败才终止，中间自动重试
+
 ### Phase 1 当前验证状态
 
 | 检查项 | 状态 | 说明 |
@@ -204,6 +209,7 @@
 | 工具结果顺序确定性 | 完成 | shared 工具并发执行后按声明 index 顺序提交到上下文 |
 | prefix fingerprint 覆盖 toolSpecs/fewShots | 完成 | cacheKey 三段组合，4 个单测覆盖三类变化 |
 | 核心测试 | 部分完成 | 现有 20 pass / 3 skip |
+| API 重试 | 完成 | 429/5xx 指数退避 + 引擎 loop 错误恢复 |
 
 ## Phase 2：智能推理强度调节系统
 
@@ -348,6 +354,7 @@ bun test
 | API 提供商 | DeepSeek 官方 | 默认 `https://api.deepseek.com` |
 | 模型 | `deepseek-v4-flash` | 可用 `DEEPSEEK_MODEL` 覆盖 |
 | API key | env 优先，其次 `api-key` 文件 | `api-key` 已加入 `.gitignore` |
+| API 重试 | 指数退避（最多 3 次） | 429/502/503 自动重试，400/401 直接报错 |
 | 核心事件 | `AsyncGenerator<LoopEvent>` | CLI 逐事件消费 |
 | 工具执行 | shared 并行 / exclusive 串行 | 当前为稳定优先最小版本 |
 | 会话持久化 | JSONL best-effort append | 写入 `.deepicode/sessions/`，不阻塞主流程 |

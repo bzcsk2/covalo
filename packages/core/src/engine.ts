@@ -96,6 +96,7 @@ export class ReasonixEngine implements CoreEngine {
 
       let turnCount = 0
       const maxTurns = 10
+      let consecutiveErrors = 0
 
       while (turnCount < maxTurns) {
         turnCount++
@@ -107,6 +108,7 @@ export class ReasonixEngine implements CoreEngine {
         let fullContent = ""
         let fullReasoning = ""
         const toolCalls: ToolCall[] = []
+        let streamError: LoopEvent | null = null
 
         for await (const event of this.client.chatCompletionsStream(this.ctx.buildMessages(), {
           apiKey: this.config.apiKey,
@@ -190,11 +192,27 @@ export class ReasonixEngine implements CoreEngine {
               break
             }
             case "error":
-              yield { role: "error", content: event.message, severity: "error", metadata: event.status ? { status: event.status } : undefined }
-              this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "error", content: event.message, status: event.status } })
-              return
+              streamError = { role: "error", content: event.message, severity: "error", metadata: event.status ? { status: event.status } : undefined }
+              yield streamError
+              this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: streamError })
+              break
           }
         }
+
+        if (streamError) {
+          // If we got partial content, we can try again next turn
+          if (fullContent) {
+            this.ctx.log.append({ role: "assistant", content: fullContent, reasoning_content: fullReasoning || null })
+          }
+          consecutiveErrors++
+          if (consecutiveErrors >= 3) {
+            yield { role: "error", content: `Stream failed after ${consecutiveErrors} consecutive attempts`, severity: "error" }
+            return
+          }
+          // Continue the while loop to retry
+          continue
+        }
+        consecutiveErrors = 0
       }
 
       yield { role: "warning", content: `Reached maximum tool loop count (${maxTurns}).`, severity: "warning" }
