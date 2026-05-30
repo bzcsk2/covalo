@@ -152,7 +152,7 @@ export function App({ engine, config }: AppProps) {
         ...prev,
         messages: [...prev.messages, {
           role: 'assistant' as const,
-          content: `Commands:\n  /exit, /bye  — exit\n  /help        — show this\n  /model       — switch provider/model\n  /agent       — switch agent\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
+          content: `Commands:\n  /exit, /bye  — exit\n  /help        — show this\n  /model       — switch provider/model\n  /agent       — switch agent\n  /skill       — list loaded skills\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
         }],
       }));
       return;
@@ -160,6 +160,16 @@ export function App({ engine, config }: AppProps) {
     if (text === '/model') {
       setShowModelPicker(true);
       return;
+    }
+    if (text === '/skill') {
+      import("../../tools/src/skills/index.js").then(async ({ createSkillTool }) => {
+        const tool = createSkillTool()
+        const result = await tool.execute({ command: "list" }, { cwd: process.cwd(), sessionId: "" })
+        let msg: string
+        try { const d = JSON.parse(result.content); msg = `Loaded ${d.count} skills.\n${d.skills.slice(0, 20).map((s: any) => `  ${s.name} — ${s.description}`).join("\n")}${d.count > 20 ? `\n  ... and ${d.count - 20} more` : ""}` } catch { msg = result.content }
+        setBridgeState(prev => ({ ...prev, messages: [...prev.messages, { role: 'assistant' as const, content: msg }] }))
+      })
+      return
     }
     if (text === '/agent') {
       const next = activeAgent === 'build' ? 'plan' : 'build';

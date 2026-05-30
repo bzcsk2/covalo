@@ -6,7 +6,73 @@
 - `最小完成`：具备可用闭环，但未达到实施计划中的完整版要求。
 - `部分完成`：只完成子集能力，仍需后续补齐。
 
-最后更新：2026-05-30（SIGINT / Raw Mode 修复 — 第三轮终版）
+最后更新：2026-06-01（TL1/TL3/TL4 工具层生态）
+
+## 第十一轮：工具层生态（TL1 + TL3 + TL4，2026-06-01）
+
+### TL1 收尾：glob/web-fetch 注册 + WebSearch 工具
+
+| 文件 | 改动 |
+|------|------|
+| `packages/tools/src/index.ts` | 导出 `createGlobTool`、`createWebFetchTool`、`createWebSearchTool` |
+| `packages/tools/src/web-search.ts` | 新建：Google 网页搜索工具，HTML 结果解析，15s 超时，最多 10 条结果 |
+| `packages/tools/src/glob.ts` | bugfix：`ReturnType<typeof stat>` → `Awaited<ReturnType<typeof stat>>` |
+| `packages/tools/src/skill-loader.ts` | bugfix：`unknown` 类型 `val.startsWith()` 用 `rawVal` 中间变量；`ReturnType<typeof stat>` → `Awaited<ReturnType<typeof stat>>` |
+| `packages/cli/src/tui.ts` | 注册 glob/WebFetch/WebSearch 工具 |
+| `packages/core/src/agent.ts` | Build Agent 工具列表追加 `glob`/`WebFetch`/`WebSearch`/`Skill`/`ListMcpResources`/`ReadMcpResource`/`McpAuth` |
+
+### TL3 Skills 技能系统
+
+| 文件 | 改动 |
+|------|------|
+| `packages/tools/src/skills/` | 新建目录，复制 52 个 SKILL.md（来自 ~/.claude/skills） |
+| `packages/tools/src/skills/index.ts` | SkillTool：search/list/load 三个命令，按名称/描述/标签匹配，返回技能内容 |
+| `packages/tui/src/App.tsx` | `/skill` 斜杠命令列出已加载技能；`/help` 更新 |
+| `tsconfig.json` | exclude 添加 `packages/tools/src/skills/**` 避免 TypeScript 编译技能目录内的 .ts 示例文件 |
+
+### TL4 MCP 协议集成
+
+| 文件 | 改动 |
+|------|------|
+| `packages/mcp/` | 新建包，package.json + 6 个源文件 |
+| `packages/mcp/src/client.ts` | `McpClient` 类：stdio 子进程 + JSON-RPC 2.0 协议（initialize/tools/list/call/resources） |
+| `packages/mcp/src/host.ts` | `McpHost` 类：多客户端管理 + 自动注册工具/资源 + `.deepicode/mcp.json` 配置加载 |
+| `packages/mcp/src/mcp-host-global.ts` | 共享 Symbol 全局引用，跨文件共享 McpHost 实例 |
+| `packages/mcp/src/list-resources.ts` | `ListMcpResources` 工具：列出所有 MCP 资源 |
+| `packages/mcp/src/read-resource.ts` | `ReadMcpResource` 工具：按 URI 读取 MCP 资源内容 |
+| `packages/mcp/src/auth.ts` | `McpAuth` 工具：MCP 认证凭据管理（set/list） |
+| `packages/cli/src/tui.ts` | MCP Host 启动 + 注册 3 个 MCP 工具 |
+| `tsconfig.json` | 添加 `@deepicode/mcp` 和 `types/**/*.d.ts` 路径映射 |
+
+### 基础设施
+
+| 文件 | 改动 |
+|------|------|
+| `tsconfig.json` | 添加 `types/**/*.d.ts` include、`@deepicode/mcp` 路径映射、skills 目录 exclude |
+| `types/bun.d.ts` | 新建：Bun.Glob 类型声明，修复 `Cannot find module 'bun'` |
+| `bun run typecheck` | 零错误 ✅ |
+| `bun test` | 66 pass / 3 skip / 0 fail ✅ |
+
+## ADVICE 审计修复（2026-06-01）
+
+根据 `DeepicodeAudit-2026-06-01.md` 评估结果修复 6 项 Bug。详细评判见 `ADVICE.md`。
+
+| 编号 | 问题 | 文件 | 改动 |
+|------|------|------|------|
+| P2-5 | TokenizerPool 单次超时永久降级 | `tokenizer-pool.ts` | `consecutiveTimeouts` 计数器 → 连续 3 次超时才 `healthy=false`；Worker 正常响应时重置为 0 |
+| P1-2 | StreamingToolExecutor 事件顺序不一致 | `streaming-executor.ts` | exclusive 路径 `executeToolCall`：`appendToolResult → yield event → yield done`，与 shared 路径对齐 |
+| SEC-1 | glob.ts 路径穿越 | `glob.ts` | `realpathSync` + `startsWith` 校验搜索路径在项目目录内 |
+| P2-3 | SessionLoader 崩溃恢复数据丢失 | `session.ts` | 从后向前遍历 JSONL，找最近的合法 `messages` 记录 |
+| P3-3 | DeepiMessages React key 流式闪烁 | `DeepiMessages.tsx` | key 改为 `role + index`，去掉 `content.slice(0,20)` 前缀 |
+| SEC-2 | web-fetch.ts SSRF | `web-fetch.ts` | `hasPrivateIP()` 拦截内网 IP + `isPrivateHostname()` 异步 DNS 解析 + `redirect: "manual"` |
+
+**驳回的审计误判**：
+- P1-1 (hash-edit 流式竞态)：审计误读代码结构，`!replaced` 检查在 for-await 循环之后，非循环内部
+- P3-1 (repair 语义变更)：理论可能但无实际触发路径
+- P3-4 (buildPiModel 硬编码)：死代码，TODO.md D5 标记清理
+- TUI-CtrlC：已在 SIGINT 修复中解决，审计基于旧代码
+
+---
 
 ## 第八轮：TUI 交互打磨（2026-05-30）
 

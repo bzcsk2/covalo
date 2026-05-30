@@ -20,18 +20,18 @@ export class SessionLoader {
       return []
     }
     const lines = raw.trim().split("\n")
-    let lastMessages: ChatMessage[] | null = null
-    for (const line of lines) {
+    // Scan from end to find the most recent valid messages record
+    for (let i = lines.length - 1; i >= 0; i--) {
       try {
-        const rec: SessionRecord = JSON.parse(line)
+        const rec: SessionRecord = JSON.parse(lines[i])
         if (rec.type === "messages" && Array.isArray(rec.payload)) {
-          lastMessages = rec.payload as ChatMessage[]
+          return rec.payload as ChatMessage[]
         }
       } catch {
         continue
       }
     }
-    return lastMessages ?? []
+    return []
   }
 }
 

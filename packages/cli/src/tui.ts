@@ -3,8 +3,9 @@ import { writeSync } from "node:fs"
 import { loadConfig } from "../../core/src/config.js"
 import { ReasonixEngine } from "../../core/src/engine.js"
 import { buildSystemPrompt } from "../../core/src/system-prompt.js"
-import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool } from "../../tools/src/index.js"
+import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool, createGlobTool, createWebFetchTool, createWebSearchTool, createSkillTool } from "../../tools/src/index.js"
 import { clearReadTracker } from "../../tools/src/stale-read.js"
+import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, setMcpHost } from "../../mcp/src/index.js"
 import React from "react"
 import { wrappedRender as render } from "@deepicode/ink"
 import { App } from "../../tui/src/App.js"
@@ -32,6 +33,11 @@ async function main(): Promise<void> {
   const sessionId = sessionIdx >= 0 ? process.argv[sessionIdx + 1] : undefined
   const config = loadConfig()
 
+  // Initialize MCP host
+  const mcpHost = new McpHost()
+  try { await mcpHost.loadConfig() } catch { /* no mcp.json */ }
+  setMcpHost(mcpHost)
+
   const engine = sessionId
     ? await ReasonixEngine.recover(config, sessionId)
     : new ReasonixEngine(config, clearReadTracker)
@@ -43,6 +49,13 @@ async function main(): Promise<void> {
   engine.registerTool(createListDirTool())
   engine.registerTool(createGrepTool())
   engine.registerTool(createTodoWriteTool())
+  engine.registerTool(createGlobTool())
+  engine.registerTool(createWebFetchTool())
+  engine.registerTool(createWebSearchTool())
+  engine.registerTool(createSkillTool())
+  engine.registerTool(createListMcpResourcesTool())
+  engine.registerTool(createReadMcpResourceTool())
+  engine.registerTool(createMcpAuthTool())
 
   if (!input.isTTY) {
     await runPipeMode(engine)

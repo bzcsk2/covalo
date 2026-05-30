@@ -22,9 +22,11 @@
       "@deepicode/ink": ["./packages/ink/src/index.ts"],
       "@deepicode/ink/*": ["./packages/ink/src/*"],
       "@deepicode/security": ["./packages/security/src/index.ts"],
-      "@deepicode/security/*": ["./packages/security/src/*"]
+      "@deepicode/security/*": ["./packages/security/src/*"],
+      "@deepicode/mcp": ["./packages/mcp/src/index.ts"],
+      "@deepicode/mcp/*": ["./packages/mcp/src/*"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"],
-  "exclude": ["node_modules", "dist", "**/__tests__/**"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx", "types/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "**/__tests__/**", "packages/tools/src/skills/**"]
 }

@@ -16,6 +16,7 @@ export class TokenizerPool {
   private tasks = new Map<TaskId, TaskEntry>()
   private nextId = 1
   private healthy = true
+  private consecutiveTimeouts = 0
 
   constructor() {
     try {
@@ -23,6 +24,7 @@ export class TokenizerPool {
       const workerPath = resolve(__dirname, "tokenizer-worker.js")
       this.worker = new Worker(workerPath)
       this.worker.on("message", (msg: { id: TaskId; result: number }) => {
+        this.consecutiveTimeouts = 0
         const entry = this.tasks.get(msg.id)
         if (entry) {
           this.tasks.delete(msg.id)
@@ -49,7 +51,8 @@ export class TokenizerPool {
       setTimeout(() => {
         if (this.tasks.has(id)) {
           this.tasks.delete(id)
-          this.healthy = false
+          this.consecutiveTimeouts++
+          if (this.consecutiveTimeouts >= 3) this.healthy = false
           resolve(fallbackEstimate(messages))
         }
       }, 5_000)

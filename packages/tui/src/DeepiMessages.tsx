@@ -20,7 +20,8 @@ export function DeepiMessages({ messages, activeTools, isLoading, streamingText,
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
       {messages.map((msg, i) => {
-        const key = msg.role + i + (msg.content?.slice(0, 20) ?? '');
+        // Stable key: role+index avoids unmount/remount during streaming
+        const key = msg.role + i;
         const isLast = i === messages.length - 1;
         return (
           <Box key={key} flexDirection="column" marginBottom={1}>

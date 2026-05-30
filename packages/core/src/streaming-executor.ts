@@ -139,9 +139,9 @@ export class StreamingToolExecutor {
   ): AsyncGenerator<LoopEvent, void> {
     yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
     const { event, result } = await this.executeToolResult(tc, index, signal)
-    yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "done" }
     appendToolResult(tc, result)
     yield event
+    yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "done" }
   }
 }
 
