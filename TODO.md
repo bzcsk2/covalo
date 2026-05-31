@@ -114,68 +114,17 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 
 ## 2. P2/P3 稳定性修复
 
-### L2：限制 SessionWriter 队列增长
+### L2：限制 SessionWriter 队列增长 ✅
 
-**现状**：`packages/core/src/session.ts` 的 `AsyncSessionWriter.queue` 为无界 `string[]`。磁盘持续失败或写入速度过慢时，队列可能一直增长。持久化本身是 best-effort，不能拖垮主流程。
+已修复。队列上限 500 条，溢出时优先丢弃旧 `event` 记录，保留 `messages` 和 `stats`。新增 `getDroppedCount()` 方法。4 个新测试通过。
 
-**建议实现**：
+### L5：编辑链路统一 CRLF ✅
 
-- 为队列设置合理上限，建议按记录条数和总字节数双重限制。
-- 队列溢出时优先丢弃旧的 `event` 记录，尽量保留较新的 `messages` 和 `stats` 快照。
-- 记录 drop 数量供测试观察，但不要向对话主循环抛异常。
-- 保持当前批量写入 `splice(0, 50)` 和失败吞没语义。
+已修复。`edit.ts` 检测 CRLF/LF，归一化后传给编辑函数，写回时恢复原始换行风格。支持精确匹配和 fuzzy fallback。4 个新 CRLF 测试通过。
 
-**涉及文件**：
+### N1：NotebookEdit 改为异步原子写 ✅
 
-- `packages/core/src/session.ts`
-- `packages/core/__tests__/session.test.ts`
-
-**验收**：
-
-- 模拟 `appendFile` 长期失败时，队列大小稳定在上限内。
-- 新增消息快照仍有机会进入队列。
-- `bun test packages/core/__tests__/session.test.ts` 通过。
-
-### L5：编辑链路统一 CRLF
-
-**现状**：`fuzzy-edit.ts` 和 `hash-edit.ts` 默认以 `\n` 比较。Windows 风格文件中的 `\r\n` 会造成无意义匹配失败。
-
-**建议实现**：
-
-- 明确选择“比较时归一化、写回时保持原始换行风格”。
-- `hashAnchoredReplaceOnce()` 的流式主路径仍应保持原子 rename、权限继承和大文件行为。
-- fuzzy pass 的顺序和歧义拒绝逻辑不能退化。
-
-**涉及文件**：
-
-- `packages/tools/src/hash-edit.ts`
-- `packages/tools/src/fuzzy-edit.ts`
-- `packages/tools/src/edit.ts`
-- `packages/tools/__tests__/edit.test.ts`
-- `packages/tools/__tests__/edit-integration.test.ts`
-
-**验收**：
-
-- CRLF 文件可使用 LF 形式的 `old_string` 编辑。
-- 写回后仍保持 CRLF。
-- 多处匹配仍返回歧义错误，不允许猜测替换。
-
-### N1：NotebookEdit 改为异步原子写
-
-**现状**：`packages/tools/src/notebook-edit.ts` 使用 `readFileSync()` / `writeFileSync()`，会阻塞事件循环，写入中断时可能损坏 notebook。
-
-**建议实现**：
-
-- 改用 `node:fs/promises`。
-- 写入同目录临时文件，再 `rename()` 原子替换。
-- 使用 `try/finally` 清理临时文件。
-- 保留敏感路径拒绝、cell index 检查和 notebook JSON 校验。
-- 如原文件存在，保留文件权限位。
-
-**验收**：
-
-- create/update/delete 单测全部通过。
-- 写入失败时原 notebook 内容不变，临时文件被清理。
+已修复。改用 `readFile`/`writeFile` 异步 API，写入通过临时文件 + `rename()` 原子替换，保留原始文件权限。9 个测试通过。
 
 ### N2：修正 `/skill` 跨包 import
 

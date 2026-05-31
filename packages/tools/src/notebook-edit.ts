@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { readFile, writeFile, rename, stat, mkdir } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { dirname, resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 import { safeStringify } from "./safe-stringify.js"
 import { isSensitive } from "./sensitive.js"
@@ -36,7 +37,7 @@ export function createNotebookEditTool(): AgentTool {
       }
       let raw: string
       try {
-        raw = readFileSync(filePath, "utf-8")
+        raw = await readFile(filePath, "utf-8")
       } catch {
         return { content: safeStringify({ error: `File not found: ${args.path}` }), isError: true }
       }
@@ -72,7 +73,7 @@ export function createNotebookEditTool(): AgentTool {
         } else {
           cells.splice(index, 0, newCell)
         }
-        writeFileSync(filePath, JSON.stringify(notebook, null, 1), "utf-8")
+        await atomicWrite(filePath, JSON.stringify(notebook, null, 1))
         return { content: safeStringify({ action: "create_cell", index, cell_type: cellType, path: args.path }), isError: false }
       }
 
@@ -82,7 +83,7 @@ export function createNotebookEditTool(): AgentTool {
           return { content: safeStringify({ error: `Cell index ${idx} out of bounds (cells: ${cells.length})` }), isError: true }
         }
         cells.splice(idx, 1)
-        writeFileSync(filePath, JSON.stringify(notebook, null, 1), "utf-8")
+        await atomicWrite(filePath, JSON.stringify(notebook, null, 1))
         return { content: safeStringify({ action: "delete_cell", index: idx, path: args.path }), isError: false }
       }
 
@@ -95,8 +96,28 @@ export function createNotebookEditTool(): AgentTool {
         return { content: safeStringify({ error: `Cell index ${idx} out of bounds (cells: ${cells.length})` }), isError: true }
       }
       cells[idx].source = [args.source]
-      writeFileSync(filePath, JSON.stringify(notebook, null, 1), "utf-8")
+      await atomicWrite(filePath, JSON.stringify(notebook, null, 1))
       return { content: safeStringify({ action: "update_cell", index: idx, path: args.path }), isError: false }
     },
+  }
+}
+
+async function atomicWrite(filePath: string, content: string): Promise<void> {
+  const dir = dirname(filePath)
+  await mkdir(dir, { recursive: true })
+  let originalMode: number | undefined
+  try { originalMode = (await stat(filePath)).mode } catch {}
+  const tmpPath = `${filePath}.deepicode_tmp_${randomUUID()}`
+  try {
+    await writeFile(tmpPath, content, "utf-8")
+    if (originalMode !== undefined) {
+      const { chmod } = await import("node:fs/promises")
+      await chmod(tmpPath, originalMode).catch(() => {})
+    }
+    await rename(tmpPath, filePath)
+  } catch (e) {
+    const { unlink } = await import("node:fs/promises")
+    await unlink(tmpPath).catch(() => {})
+    throw e
   }
 }

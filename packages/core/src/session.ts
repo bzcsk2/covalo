@@ -97,8 +97,12 @@ export class SessionLoader {
 export class AsyncSessionWriter {
   private path: string
   private queue: string[] = []
+  private queueRecords: SessionRecord[] = []
   private flushing = false
   private initPromise?: Promise<void>
+  private droppedCount = 0
+
+  private static MAX_QUEUE_SIZE = 500
 
   constructor(path: string) {
     this.path = path
@@ -113,11 +117,39 @@ export class AsyncSessionWriter {
 
   enqueue(record: SessionRecord): void {
     try {
-      this.queue.push(JSON.stringify(record) + "\n")
+      const serialized = JSON.stringify(record) + "\n"
+      this.queue.push(serialized)
+      this.queueRecords.push(record)
+      this.evictIfNeeded()
       this.flushSoon().catch(() => {})
     } catch {
       // best-effort: drop unserializable records silently
     }
+  }
+
+  private evictIfNeeded(): void {
+    while (this.queue.length > AsyncSessionWriter.MAX_QUEUE_SIZE) {
+      // Find the oldest "event" record to drop (least important)
+      const idx = this.queueRecords.findIndex(r => r.type === "event")
+      if (idx >= 0) {
+        this.queue.splice(idx, 1)
+        this.queueRecords.splice(idx, 1)
+        this.droppedCount++
+        continue
+      }
+      // No more events — drop oldest messages/stats (but keep at least 1)
+      if (this.queue.length > 1) {
+        this.queue.shift()
+        this.queueRecords.shift()
+        this.droppedCount++
+      } else {
+        break
+      }
+    }
+  }
+
+  getDroppedCount(): number {
+    return this.droppedCount
   }
 
   private async flushSoon(): Promise<void> {
@@ -129,6 +161,7 @@ export class AsyncSessionWriter {
       }
       while (this.queue.length > 0) {
         const chunk = this.queue.splice(0, 50).join("")
+        this.queueRecords.splice(0, 50)
         await appendFile(this.path, chunk, "utf-8")
       }
     } catch {

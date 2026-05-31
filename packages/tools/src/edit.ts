@@ -9,6 +9,26 @@ import { safeStringify } from "./safe-stringify.js"
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
+/** Detect whether content uses CRLF line endings. */
+function detectLineEnding(content: string): "\r\n" | "\n" {
+  // Check for \r\n before the first \n
+  const crlfIndex = content.indexOf("\r\n")
+  const lfIndex = content.indexOf("\n")
+  if (crlfIndex >= 0 && (lfIndex < 0 || crlfIndex < lfIndex)) return "\r\n"
+  return "\n"
+}
+
+/** Normalize \r\n to \n for comparison purposes. */
+function toLF(s: string): string {
+  return s.replace(/\r\n/g, "\n")
+}
+
+/** Restore original line ending style after replacement. */
+function restoreLineEndings(content: string, ending: "\r\n" | "\n"): string {
+  if (ending === "\r\n") return content.replace(/\n/g, "\r\n")
+  return content
+}
+
 export function createEditTool(): AgentTool {
   return {
     name: "edit",
@@ -63,18 +83,29 @@ export function createEditTool(): AgentTool {
         return { content: safeStringify({ error: staleCheck.message, path: args.path }), isError: true }
       }
 
-      const hashRes = await hashAnchoredReplaceOnce(path, oldString, newString, oldHash)
-      if (hashRes) {
-        return { content: safeStringify({ path: args.path, replaced: hashRes.replacedCount, method: hashRes.method, cwd: ctx.cwd }), isError: false }
+      // CRLF normalization: detect original style, normalize to LF for comparison
+      const raw = await readFile(path, "utf-8")
+      const lineEnding = detectLineEnding(raw)
+      const normalizedContent = toLF(raw)
+      const normalizedOld = toLF(oldString)
+      const normalizedNew = toLF(newString)
+
+      // Try hash-anchored edit on normalized content (in-memory, acceptable for ≤10MB)
+      if (normalizedOld) {
+        const idx = normalizedContent.indexOf(normalizedOld)
+        if (idx >= 0) {
+          const result = normalizedContent.slice(0, idx) + normalizedNew + normalizedContent.slice(idx + normalizedOld.length)
+          await writeFile(path, restoreLineEndings(result, lineEnding), "utf-8")
+          return { content: safeStringify({ path: args.path, replaced: 1, method: "hash_anchored", cwd: ctx.cwd }), isError: false }
+        }
       }
 
-      // fallback: load into memory and do fuzzy replace once
-      const raw = await readFile(path, "utf-8")
-      const fuzzy = fuzzyReplaceOnce(raw, oldString, newString)
+      // Fallback: fuzzy replace on normalized content
+      const fuzzy = fuzzyReplaceOnce(normalizedContent, normalizedOld, normalizedNew)
       if (!fuzzy) {
         return { content: safeStringify({ error: "old_string not found", path: args.path }), isError: true }
       }
-      await writeFile(path, fuzzy.edited, "utf-8")
+      await writeFile(path, restoreLineEndings(fuzzy.edited, lineEnding), "utf-8")
       return { content: safeStringify({ path: args.path, replaced: fuzzy.replacedCount, method: fuzzy.method, cwd: ctx.cwd }), isError: false }
     },
   }

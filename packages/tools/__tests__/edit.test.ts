@@ -273,3 +273,62 @@ describe("edit tool stale-read integration", () => {
     expect(readFileSync(d2, "utf-8")).toBe("modified B content")
   })
 })
+
+describe("CRLF normalization (L5)", () => {
+  let tmpDir: string
+
+  beforeEach(() => { tmpDir = tempDir() })
+  afterEach(() => rmSync(tmpDir, { recursive: true, force: true }))
+
+  it("should edit CRLF file using LF-form old_string", async () => {
+    const file = join(tmpDir, "crlf.txt")
+    writeFileSync(file, "line1\r\nline2\r\nline3")
+
+    const tool = createEditTool()
+    const ctx = { cwd: tmpDir, signal: new AbortController().signal } as any
+    const res = await tool.execute({ path: "crlf.txt", old_string: "line2", new_string: "LINE2" }, ctx)
+    expect(res.isError).toBe(false)
+    const content = readFileSync(file, "utf-8")
+    expect(content).toBe("line1\r\nLINE2\r\nline3")
+    expect(content).toContain("\r\n") // CRLF preserved
+  })
+
+  it("should edit LF file and keep LF", async () => {
+    const file = join(tmpDir, "lf.txt")
+    writeFileSync(file, "line1\nline2\nline3")
+
+    const tool = createEditTool()
+    const ctx = { cwd: tmpDir, signal: new AbortController().signal } as any
+    const res = await tool.execute({ path: "lf.txt", old_string: "line2", new_string: "LINE2" }, ctx)
+    expect(res.isError).toBe(false)
+    const content = readFileSync(file, "utf-8")
+    expect(content).toBe("line1\nLINE2\nline3")
+    expect(content).not.toContain("\r\n")
+  })
+
+  it("should handle multi-line CRLF replacement", async () => {
+    const file = join(tmpDir, "multi.txt")
+    writeFileSync(file, "aaa\r\nbbb\r\nccc\r\n")
+
+    const tool = createEditTool()
+    const ctx = { cwd: tmpDir, signal: new AbortController().signal } as any
+    const res = await tool.execute({ path: "multi.txt", old_string: "bbb\r\nccc", new_string: "BBB\nCCC" }, ctx)
+    expect(res.isError).toBe(false)
+    const content = readFileSync(file, "utf-8")
+    expect(content).toBe("aaa\r\nBBB\r\nCCC\r\n")
+  })
+
+  it("should handle CRLF with fuzzy fallback", async () => {
+    const file = join(tmpDir, "fuzzy-crlf.txt")
+    writeFileSync(file, "  line1\r\n  line2\r\n  line3\r\n")
+
+    const tool = createEditTool()
+    const ctx = { cwd: tmpDir, signal: new AbortController().signal } as any
+    // Use trimmed form that triggers fuzzy path
+    const res = await tool.execute({ path: "fuzzy-crlf.txt", old_string: "line1\r\n  line2", new_string: "LINE1\nLINE2" }, ctx)
+    expect(res.isError).toBe(false)
+    const content = readFileSync(file, "utf-8")
+    expect(content).toContain("LINE1")
+    expect(content).toContain("\r\n") // CRLF preserved
+  })
+})

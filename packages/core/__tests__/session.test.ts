@@ -467,4 +467,61 @@ describe("M9: SessionWriter enqueue", () => {
     expect(rec.type).toBe("messages")
     expect(rec.payload).toEqual(payload)
   })
+
+  it("should cap queue at MAX_QUEUE_SIZE and drop old event records", async () => {
+    const sessionPath = join(tmpDir, "test-cap.jsonl")
+    const writer = new AsyncSessionWriter(sessionPath)
+    await writer.init()
+
+    // Enqueue 600 event records (exceeds 500 limit)
+    for (let i = 0; i < 600; i++) {
+      writer.enqueue({ ts: i, type: "event", payload: { n: i } })
+    }
+
+    // Queue should be capped
+    expect((writer as any).queue.length).toBeLessThanOrEqual(500)
+    expect(writer.getDroppedCount()).toBeGreaterThan(0)
+  })
+
+  it("should preserve messages and stats when evicting events", async () => {
+    const sessionPath = join(tmpDir, "test-preserve.jsonl")
+    const writer = new AsyncSessionWriter(sessionPath)
+    await writer.init()
+
+    // Enqueue mixed records: 490 events + 10 messages/stats
+    for (let i = 0; i < 490; i++) {
+      writer.enqueue({ ts: i, type: "event", payload: { n: i } })
+    }
+    for (let i = 0; i < 9; i++) {
+      writer.enqueue({ ts: 500 + i, type: "messages", payload: [{ role: "user", content: `msg-${i}` }] })
+    }
+    writer.enqueue({ ts: 600, type: "stats", payload: { inputTokens: 100 } })
+
+    // Now enqueue more events to trigger eviction
+    for (let i = 0; i < 20; i++) {
+      writer.enqueue({ ts: 700 + i, type: "event", payload: { n: 700 + i } })
+    }
+
+    // Queue should still be <= 500
+    expect((writer as any).queue.length).toBeLessThanOrEqual(500)
+
+    // All messages and stats should still be in queue
+    const records = (writer as any).queueRecords as SessionRecord[]
+    const msgCount = records.filter(r => r.type === "messages").length
+    const statsCount = records.filter(r => r.type === "stats").length
+    expect(msgCount).toBe(9)
+    expect(statsCount).toBe(1)
+  })
+
+  it("should not throw when queue is at limit", async () => {
+    const sessionPath = join(tmpDir, "test-nothrow.jsonl")
+    const writer = new AsyncSessionWriter(sessionPath)
+    await writer.init()
+
+    expect(() => {
+      for (let i = 0; i < 1000; i++) {
+        writer.enqueue({ ts: i, type: "event", payload: { n: i } })
+      }
+    }).not.toThrow()
+  })
 })
