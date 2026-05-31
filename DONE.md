@@ -354,7 +354,7 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 | 问题 | 根因 | 文件 | 改动 |
 |------|------|------|------|
 | 工具调用结果在加载完成后消失 | bridge 的 `"tool"` 事件仅更新 `activeTools`（临时 Map），从未写入持久化存储 | `bridge.tsx` | 新增 `toolHistory: ToolCallRecord[]` 数组，`"tool"` 事件追加记录；`tool_start` 从 assistant 的 `tool_calls` 提取命令参数 |
-| 工具结果以 JSON 原始格式展示 | 所有工具返回 `safeStringify(obj)` = `JSON.stringify`，`tc.output` 是 JSON 字符串 | `DeepiMessages.tsx` | 复用 Claude Code `tryFormatJson` + `tryJsonFormatContent` 模式：bash 提取 stdout；list_dir 格式化文件列表；其他工具提取 message/content；fallback pretty-print |
+| assistant 回复以原始 markdown 格式显示 | 未做 markdown 渲染 | `DeepiMessages.tsx` + `markdown.ts` + `Markdown.tsx` (新) | 复用 Claude Code `marked.lexer` + `formatToken` 模式：heading/bold/italic/table/list/code 等 token 渲染为 ANSI 样式；安装 `marked` + `strip-ansi` |
 | 每个工具调用一个气泡，碎片化 | 工具消息逐条追加到 messages 数组 | `bridge.tsx` + `DeepiMessages.tsx` | 不再往 `messages` 追加 tool 消息；所有工具调用合并到一个 `codeBlockBackground` 气泡中渲染 |
 | toolCallArgs Map 类型不匹配 | number key vs string key | `bridge.tsx` + `DeepiMessages.tsx` | 移除 `toolCallArgs` Map，改用 `toolHistory` 数组 |
 

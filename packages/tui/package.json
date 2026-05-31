@@ -5,8 +5,10 @@
   "type": "module",
   "main": "./src/index.ts",
   "dependencies": {
-    "@deepicode/ink": "workspace:*",
     "@deepicode/core": "workspace:*",
-    "react": "^19.2.4"
+    "@deepicode/ink": "workspace:*",
+    "marked": "^18.0.4",
+    "react": "^19.2.4",
+    "strip-ansi": "^7.2.0"
   }
 }

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from '@deepicode/ink';
 import type { ChatMessage } from '@deepicode/core';
 import type { ToolStatus, ToolCallRecord } from './bridge.js';
+import { Markdown } from './MarkdownRenderer.js';
 
 interface DeepiMessagesProps {
   messages: ChatMessage[];
@@ -18,8 +19,7 @@ const MAX_LINES = 3;
 
 function tryFormatJson(line: string): string {
   try {
-    const parsed = JSON.parse(line);
-    return JSON.stringify(parsed, null, 2);
+    return JSON.stringify(JSON.parse(line), null, 2);
   } catch {
     return line;
   }
@@ -97,26 +97,7 @@ function MessageContent({ text, isStreaming = false }: { text: string; isStreami
     return <Text wrap="wrap">{text}</Text>;
   }
 
-  const parts = parseCodeBlocks(text);
-  if (parts.length === 1 && parts[0].type === 'text') {
-    return <Text wrap="wrap">{parts[0].content}</Text>;
-  }
-
-  return (
-    <>
-      {parts.map((part, i) => {
-        if (part.type === 'code') {
-          return (
-            <Box key={i} backgroundColor="codeBlockBackground" paddingX={1} paddingY={1} marginY={1} flexDirection="column">
-              {part.lang && <Text dimColor>{part.lang}</Text>}
-              <Text wrap="wrap">{part.content}</Text>
-            </Box>
-          );
-        }
-        return <Text key={i} wrap="wrap">{part.content}</Text>;
-      })}
-    </>
-  );
+  return <Markdown>{text}</Markdown>;
 }
 
 export function DeepiMessages({ messages, activeTools, toolHistory, isLoading, streamingText, reasoningText }: DeepiMessagesProps) {
