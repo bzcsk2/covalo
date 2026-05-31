@@ -173,22 +173,9 @@ engine.submit()
 
 已实现。新增 `StreamingCard` 组件（Reasonix 简化版）：流式阶段显示 Spinner + token/s 估算（text.length/4），完成后替换为 Markdown 渲染。`TurnView` 新增 `startTs` 字段。
 
-### T20：多行输入
+### T20：多行输入 ✅
 
-**目标**：`Enter` 插入换行，`Ctrl+Enter` 提交。
-
-**实现思路**：
-
-- `DeepiPromptInput` 当前是单个字符串 + 单个 cursor offset，可继续沿用，不必改成二维坐标。
-- 渲染时允许换行，不要使用只适合单行的 `wrap="truncate-end"`。
-- 历史记录仍以完整字符串保存。
-- loading 期间输入仍允许排队，这是现有能力。
-
-**验收**：
-
-- `Enter` 在 cursor 位置插入 `\n`。
-- `Ctrl+Enter` 提交并清空输入。
-- 上下左右移动不会破坏中英文文本。
+已实现。Enter 提交，Ctrl+Enter 插入换行，`wrap="wrap"` 自动换行。输入框支持多行文本编辑和历史记录。
 
 ### T22：输入编辑增强
 

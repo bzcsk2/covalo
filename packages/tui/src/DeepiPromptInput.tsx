@@ -56,7 +56,15 @@ export function DeepiPromptInput({ onSubmit, isLoading, disabled, queueCount = 0
       return;
     }
 
-    // --- Normal editing (works even during loading — messages are queued) ---
+    // Ctrl+Enter — insert newline
+    if (key.return && key.ctrl) {
+      const pos = cursor;
+      setInput(prev => prev.slice(0, pos) + '\n' + prev.slice(pos));
+      setCursor(pos + 1);
+      return;
+    }
+
+    // Enter — submit
     if (key.return) {
       submitLine();
       return;
@@ -172,7 +180,7 @@ export function DeepiPromptInput({ onSubmit, isLoading, disabled, queueCount = 0
 
   return (
     <Box flexDirection="column" width="100%" borderStyle="round" paddingX={1}>
-      <Text wrap="truncate-end" dimColor={isPlaceholder}>{displayText}</Text>
+      <Text wrap="wrap" dimColor={isPlaceholder}>{displayText}</Text>
     </Box>
   );
 }
