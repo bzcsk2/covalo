@@ -50,7 +50,7 @@ export class AppState {
 
   private notify(): void {
     for (const cb of this.listeners) {
-      try { cb(this.snapshot) } catch {}
+      try { cb(this.snapshot) } catch (e) { console.error("AppState listener error:", e) }
     }
   }
 

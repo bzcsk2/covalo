@@ -14,6 +14,8 @@ const DENY_PATTERNS = [
   /\bdd\b/,
   /\bfdisk\b/,
   /\bmkfs\.\w+\b/,
+  /\bgit\s+push\b/,
+  /\bgit\s+commit\b/,
 ]
 
 function isDenied(command: string): string | null {
@@ -81,7 +83,7 @@ async function runBash(command: string, cwd: string, timeoutMs: number, maxChars
   return await new Promise((resolve, reject) => {
     const isWindows = os.platform() === "win32"
     // Use detached to create a process group on Unix, so we can kill children (zombies)
-    const child = spawn("bash", ["-lc", command], {
+    const child = spawn("bash", ["-c", command], {
       cwd, detached: !isWindows,
       env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true", EDITOR: "true" },
     })

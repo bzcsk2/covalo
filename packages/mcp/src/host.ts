@@ -40,9 +40,10 @@ export class McpHost {
       } catch { continue }
     }
 
+    const auth = await readAuthStore()
     const entries = Object.entries(config.mcpServers ?? {})
     await Promise.all(entries.map(([name, serverConfig]) =>
-      this.connect(name, serverConfig).catch(() => { /* individual failure doesn't block others */ })
+      this.connect(name, withCredential(serverConfig, auth[name]?.apiKey)).catch(() => { /* individual failure doesn't block others */ })
     ))
   }
 
@@ -53,8 +54,8 @@ export class McpHost {
     await client.connect(config.command, config.args ?? [], config.env)
     this.clients.set(name, client)
 
-    // Register tools
-    const tools = await client.listTools()
+    // Register tools (sorted for stable prefix cache)
+    const tools = (await client.listTools()).sort((a, b) => a.name.localeCompare(b.name))
     for (const tool of tools) {
       this.tools.set(`${name}:${tool.name}`, { client, tool })
     }
@@ -99,5 +100,25 @@ export class McpHost {
       }
     }
     throw new Error(`Resource not found: ${resourceUri}`)
+  }
+}
+
+async function readAuthStore(): Promise<Record<string, { apiKey: string }>> {
+  try {
+    return JSON.parse(await readFile(resolve(process.cwd(), ".deepicode/mcp-auth.json"), "utf8")) as Record<string, { apiKey: string }>
+  } catch {
+    return {}
+  }
+}
+
+function withCredential(config: McpServerConfig, apiKey?: string): McpServerConfig {
+  if (!apiKey) return config
+  return {
+    ...config,
+    env: {
+      MCP_API_KEY: apiKey,
+      DEEPICODE_MCP_API_KEY: apiKey,
+      ...config.env,
+    },
   }
 }

@@ -114,7 +114,7 @@ deepicode                    MCP Servers
 
 ### Subagents
 
-Complex tasks auto-decompose into parallel sub-agents. The main Agent handles planning and result synthesis; sub-agents each focus on independent subtasks — code search, security audit, test generation all running simultaneously.
+Complex tasks can be delegated to isolated sub-agents. The main Agent handles planning and result synthesis. Background sub-agents can read, write, search, and analyze, but cannot bypass interactive confirmation to run `exec` tools.
 
 ```text
 User: "Audit this PR for security and generate tests"
@@ -130,7 +130,20 @@ User: "Audit this PR for security and generate tests"
   Combined result → complete audit report + test suite
 ```
 
-> **Current status**: Skills system is integrated via system prompts; MCP and Subagents are planned for Phase 6. Extension points are already reserved in the interface layer (`CoreEngine.switchAgent()`, `ToolRegistry` with agent filtering).
+> **Current status**: Skills, dynamic MCP tool discovery and invocation, and isolated sub-agents are integrated. There are 34 statically registered Agent Tools. LSP requires a configured language server in `.deepicode/lsp.json`; browser interaction requires Playwright.
+
+Minimal LSP configuration:
+
+```json
+{
+  "languages": {
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"]
+    }
+  }
+}
+```
 
 ---
 

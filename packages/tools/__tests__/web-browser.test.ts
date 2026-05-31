@@ -31,12 +31,11 @@ describe("WebBrowser", () => {
     expect(JSON.parse(r.content as string).error).toContain("url")
   })
 
-  it("should accept valid actions without network call for click/fill/extract", async () => {
+  it("should require url for click/fill/extract", async () => {
     const tool = createWebBrowserTool()
-    // These should not make network calls, just return Playwright-not-installed error
     const r = await tool.execute({ action: "click", selector: "#btn" }, ctx)
     expect(r.isError).toBe(true)
     const p = JSON.parse(r.content as string)
-    expect(p.error).toContain("Playwright")
+    expect(p.error).toContain("url")
   })
 })

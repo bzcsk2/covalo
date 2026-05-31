@@ -1,6 +1,6 @@
 # Deepicode 完成记录
 
-最后更新：2026-05-31（TUI timeline 状态模型收尾，584 tests）
+最后更新：2026-05-31（高级工具补齐，592 tests）
 
 本文按 **阶段 (Phase)** + **时间线** 记录已完成内容。
 
@@ -11,7 +11,7 @@
 | 指标 | 状态 |
 |------|------|
 | TypeScript 编译 | `bun run typecheck` 零错误 |
-| 测试 | `bun test` 584 tests；已知 `FileSnapshot` 同毫秒快照排序存在偶发测试波动 |
+| 测试 | `bun test` 592 tests；`FileSnapshot` 同毫秒快照排序已用递增序号修复 |
 | 运行时 | Bun |
 | API 提供商 | DeepSeek / Zen (Free) / Mimo |
 | TUI 框架 | Ink (React)，复制自 best-claude-code |
@@ -117,7 +117,7 @@
 
 ---
 
-### Phase 6：高级功能生态接入（未开始）
+### Phase 6：高级功能生态接入（部分完成）
 
 ### Phase 7：集成测试与调优（未开始）
 
@@ -429,7 +429,7 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 - `git diff --check` 通过
 - TUI + engine 定向测试 14 pass / 0 fail
 - 完整测试曾运行通过：584 pass / 0 fail
-- `FileSnapshot` 同毫秒快照按随机后缀排序会偶发失败，单独重跑通过；与本轮 TUI 修改无关
+- `FileSnapshot` 同毫秒快照按随机后缀排序会偶发失败；已在高级工具补齐轮次加入递增序号修复
 
 ---
 
@@ -601,6 +601,20 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 
 ## 六、技能系统 & MCP 集成
 
+### 高级工具补齐（2026-05-31）
+
+| 模块 | 完成内容 |
+|------|----------|
+| Workflow | 通过 Engine `ToolContext.invokeTool()` 串行执行真实工具；禁止递归，嵌套 `exec` 不绕过确认 |
+| AgentTool | 启动隔离子会话执行任务；后台子 Agent 禁止无交互确认的 `exec` 工具 |
+| SendMessage | 项目级 JSONL 邮箱 `.deepicode/messages.jsonl`，支持 send/list |
+| PlanMode | 通过 Engine 上下文真实切换 build/plan agent |
+| MCP | 修复 JSON-RPC `result` 解包；新增 `ListMcpTools` / `CallMcpTool`；McpAuth 以 `0600` 权限持久化 |
+| LSP | stdio JSON-RPC initialize/didOpen；支持 definition/references/hover/diagnostics/completion |
+| WebBrowser | Playwright 隔离进程支持 screenshot/click/fill/extract；所有页面入口执行 SSRF 检查 |
+
+内置静态 Agent Tool：`packages/tools` 29 个 + MCP 桥接 5 个 = **34 个**。
+
 ### Skills（TL3，52 个 SKILL.md）
 
 | 文件 | 说明 |
@@ -617,7 +631,9 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 | `packages/mcp/src/host.ts` | McpHost：多客户端管理 + 自动注册 + .deepicode/mcp.json 配置 |
 | `packages/mcp/src/list-resources.ts` | ListMcpResources 工具 |
 | `packages/mcp/src/read-resource.ts` | ReadMcpResource 工具 |
-| `packages/mcp/src/auth.ts` | McpAuth 工具（set/list） |
+| `packages/mcp/src/auth.ts` | McpAuth 工具（set/list/delete） |
+| `packages/mcp/src/list-tools.ts` | ListMcpTools：列举外部 MCP Tool |
+| `packages/mcp/src/call-tool.ts` | CallMcpTool：调用外部 MCP Tool |
 
 ### 性能优化（2026-06-05）
 
@@ -649,7 +665,7 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 
 - `token_estimate` 事件尚未产出（#11 提供了 ContextManager 接口，未接入 loop event）
 - Phase 2（智能推理强度调节）未开始
-- Phase 6（TTSR/LSP/Python Kernel/Universal Config）未开始
+- Phase 6 剩余项（TTSR/Python Kernel/Universal Config）未开始
 - Phase 7（E2E 测试矩阵/性能基准/长会话压测）未开始
 - 尚无 E2E 测试覆盖 TUI 流程
 - SegmentedLog 尚未接入主上下文，未实现原子写入/rewrite/archive/compact

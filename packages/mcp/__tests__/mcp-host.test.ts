@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import { join } from "node:path"
 import { McpHost, setMcpHost } from "../src/index.js"
 import { getMcpHost } from "../src/mcp-host-global.js"
 
@@ -18,6 +19,14 @@ describe("McpHost", () => {
       // Expected - no config file or timeout
     }
     expect(host).toBeDefined()
+  })
+
+  it("should discover and call tools from a connected MCP server", async () => {
+    const host = new McpHost()
+    await host.connect("fake", { command: process.execPath, args: [join(import.meta.dir, "fixtures", "fake-mcp.mjs")] })
+    expect(host.allTools.map(entry => entry.tool.name)).toEqual(["echo"])
+    expect(await host.callTool("fake", "echo", { text: "hello" })).toEqual({ content: [{ type: "text", text: "hello" }] })
+    await host.disconnectAll()
   })
 })
 

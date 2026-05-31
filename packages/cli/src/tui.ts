@@ -5,7 +5,7 @@ import { ReasonixEngine } from "../../core/src/engine.js"
 import { buildSystemPrompt } from "../../core/src/system-prompt.js"
 import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool, createGlobTool, createWebFetchTool, createWebSearchTool, createSkillTool, createTaskCreateTool, createTaskUpdateTool, createTaskListTool, createTaskGetTool, createTaskStopTool, createAskUserQuestionTool, createPlanModeTool, createNotebookEditTool, createSleepTool, createPushNotificationTool, createMonitorTool, createWebBrowserTool, createWorktreeTool, createCronTool, createWorkflowTool, createAgentToolTool, createSendMessageTool, createLspTool } from "../../tools/src/index.js"
 import { clearReadTracker } from "../../tools/src/stale-read.js"
-import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, setMcpHost } from "../../mcp/src/index.js"
+import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "../../mcp/src/index.js"
 import React from "react"
 import { wrappedRender as render } from "@deepicode/ink"
 import { App } from "../../tui/src/App.js"
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   }
 
   const sessionIdx = process.argv.indexOf("--session")
-  const sessionId = sessionIdx >= 0 ? process.argv[sessionIdx + 1] : undefined
+  const sessionId = (sessionIdx >= 0 && sessionIdx + 1 < process.argv.length) ? process.argv[sessionIdx + 1] : undefined
   const config = loadConfig()
 
   // Initialize MCP host in background — don't block startup
@@ -56,6 +56,8 @@ async function main(): Promise<void> {
   engine.registerTool(createListMcpResourcesTool())
   engine.registerTool(createReadMcpResourceTool())
   engine.registerTool(createMcpAuthTool())
+  engine.registerTool(createListMcpToolsTool())
+  engine.registerTool(createCallMcpToolTool())
   engine.registerTool(createTaskCreateTool())
   engine.registerTool(createTaskUpdateTool())
   engine.registerTool(createTaskListTool())

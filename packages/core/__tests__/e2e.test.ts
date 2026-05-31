@@ -241,18 +241,28 @@ describe("TT2: E2E tool chains through engine", () => {
     expect(events.some((e) => e.role === "done")).toBe(true)
   })
 
-  it("exec-tier tool denied without allow rule", async () => {
+  it("exec-tier tool asks permission then allows on confirm", async () => {
     mockClient.setGenerators([
       genBash(`echo "test"`),
-      genText("denied"),
+      genText("done"),
     ])
     const engine = makeEngine()
     engine.registerTool(createBashTool())
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("bash without allow")) events.push(e)
-    const errorEvents = events.filter((e) => e.role === "error" && e.toolName === "bash")
-    expect(errorEvents.length).toBeGreaterThanOrEqual(1)
-    expect(errorEvents[0].content).toContain("denied")
+    // Auto-confirm: when permission_ask is yielded, respond immediately
+    const submitPromise = (async () => {
+      for await (const e of engine.submit("run bash")) {
+        events.push(e)
+        if (e.role === "permission_ask") engine.respondPermission(true)
+      }
+    })()
+    await submitPromise
+    const permEvents = events.filter((e) => e.role === "permission_ask")
+    expect(permEvents.length).toBe(1)
+    expect(permEvents[0].toolName).toBe("bash")
+    // After confirmation, tool should execute (no error)
+    const errorEvents = events.filter((e) => e.role === "error")
+    expect(errorEvents.length).toBe(0)
   })
 
   it("should survive write_file with empty content", async () => {

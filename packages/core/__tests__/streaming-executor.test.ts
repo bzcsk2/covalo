@@ -332,4 +332,52 @@ describe("StreamingToolExecutor", () => {
     const err = events.find((e: any) => e.role === "error")
     expect(err).toBeUndefined()
   })
+
+  it("should allow a tool to invoke another read tool through context", async () => {
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
+    const nested = makeHandler("nested", { result: "nested-ok" })
+    const parent: AgentTool = {
+      ...makeHandler("parent", { concurrency: "exclusive" }),
+      async execute(_args, ctx) {
+        return ctx.invokeTool!("nested", {})
+      },
+    }
+    const executor = new StreamingToolExecutor(new Map([["parent", parent], ["nested", nested]]), "test-session", process.cwd())
+    const events: LoopEvent[] = []
+    for await (const event of executor.run([{ id: "1", type: "function", function: { name: "parent", arguments: "{}" } }], new AbortController().signal, () => {})) events.push(event)
+    expect(events.find(event => event.role === "tool")?.content).toBe("nested-ok")
+  })
+
+  it("should reject recursive nested tool calls", async () => {
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
+    const recursive: AgentTool = {
+      ...makeHandler("recursive", { concurrency: "exclusive" }),
+      async execute(_args, ctx) {
+        return ctx.invokeTool!("recursive", {})
+      },
+    }
+    const executor = new StreamingToolExecutor(new Map([["recursive", recursive]]), "test-session", process.cwd())
+    const events: LoopEvent[] = []
+    for await (const event of executor.run([{ id: "1", type: "function", function: { name: "recursive", arguments: "{}" } }], new AbortController().signal, () => {})) events.push(event)
+    expect(events.find(event => event.role === "error")?.content).toContain("Recursive tool invocation")
+  })
+
+  it("should allow a confirmed Workflow to invoke declared exec steps", async () => {
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
+    const permissions: PermissionEngine = {
+      decide: (name: string) => ({ decision: name === "Workflow" ? "allow" as const : "ask" as const }),
+      addRule: () => {},
+    }
+    const execStep = makeHandler("exec-step", { approval: "exec", result: "ran" })
+    const workflow: AgentTool = {
+      ...makeHandler("Workflow", { concurrency: "exclusive", approval: "exec" }),
+      async execute(_args, ctx) {
+        return ctx.invokeTool!("exec-step", {})
+      },
+    }
+    const executor = new StreamingToolExecutor(new Map([["Workflow", workflow], ["exec-step", execStep]]), "test-session", process.cwd(), permissions)
+    const events: LoopEvent[] = []
+    for await (const event of executor.run([{ id: "1", type: "function", function: { name: "Workflow", arguments: "{}" } }], new AbortController().signal, () => {})) events.push(event)
+    expect(events.find(event => event.role === "tool")?.content).toBe("ran")
+  })
 })

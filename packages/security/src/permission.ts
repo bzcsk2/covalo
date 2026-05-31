@@ -40,7 +40,7 @@ export class PermissionEngine {
   removeDenyRule(toolName: string): void {
     this.denyRules = this.denyRules.filter(r => {
       if (typeof r.toolName === "string") return r.toolName !== toolName
-      return false
+      return true // keep RegExp rules — use clear() to remove all
     })
   }
 
@@ -51,7 +51,7 @@ export class PermissionEngine {
   removeAllowRule(toolName: string): void {
     this.allowRules = this.allowRules.filter(r => {
       if (typeof r.toolName === "string") return r.toolName !== toolName
-      return false
+      return true
     })
   }
 

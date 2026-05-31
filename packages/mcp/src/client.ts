@@ -40,7 +40,7 @@ const REQUEST_TIMEOUT = 30_000
 export class McpClient {
   private proc: ChildProcess | null = null
   private buffer = ""
-  private pending = new Map<string | number, { resolve: (v: JsonRpcResponse) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  private pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private msgId = 0
   private _connected = false
   private name: string
@@ -94,16 +94,22 @@ export class McpClient {
     })
 
     const initResult = result as { protocolVersion?: string; capabilities?: Record<string, unknown>; serverInfo?: Record<string, unknown> }
-    if (initResult?.protocolVersion) {
-      // notification — no id, no response expected
-      this.proc?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n")
+    if (!initResult?.protocolVersion) {
+      this.proc?.kill("SIGTERM")
+      throw new Error("MCP initialize failed: no protocolVersion in response")
     }
-
+    this.proc?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n")
     this._connected = true
   }
 
   async disconnect(): Promise<void> {
     if (!this._connected || !this.proc) return
+    // Reject all pending requests so callers don't hang
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer)
+      entry.reject(new Error("MCP client disconnected"))
+    }
+    this.pending.clear()
     try {
       this.proc.kill("SIGTERM")
       await new Promise<void>(resolve => {
@@ -164,7 +170,7 @@ export class McpClient {
           if (resp.error) {
             handler.reject(new Error(`MCP error ${resp.error.code}: ${resp.error.message}`))
           } else {
-            handler.resolve(resp)
+            handler.resolve(resp.result)
           }
         }
       } catch {

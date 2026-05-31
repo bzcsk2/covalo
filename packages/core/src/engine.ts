@@ -87,7 +87,16 @@ export class ReasonixEngine implements CoreEngine {
     this.currentAgent = "build"
     this.permissionEngine = new PermissionEngine()
     this.hookManager = new HookManager()
-    this.toolExecutor = new StreamingToolExecutor(this.tools, this.sessionId, undefined, this.permissionEngine, this.hookManager, this.requestPermission)
+    this.toolExecutor = new StreamingToolExecutor(
+      this.tools,
+      this.sessionId,
+      undefined,
+      this.permissionEngine,
+      this.hookManager,
+      this.requestPermission,
+      (task, agentType, files) => this.delegateTask(task, agentType, files),
+      (name) => this.switchAgent(name),
+    )
     this.onStart = onStart
     this.onStart?.()
 
@@ -264,6 +273,30 @@ export class ReasonixEngine implements CoreEngine {
       name: tc.function.name,
       is_error: result.isError,
     })
+  }
+
+  private async delegateTask(task: string, agentType: "build" | "plan", files: string[]): Promise<string> {
+    const child = new ReasonixEngine(this.config)
+    for (const tool of this.tools.values()) {
+      if (tool.name === "AgentTool") continue
+      child.registerTool(tool)
+      if (tool.approval === "exec") {
+        child.permissionEngine.addDenyRule({
+          toolName: tool.name,
+          reason: `Background sub-agent cannot run exec tool without an interactive confirmation channel: ${tool.name}`,
+        })
+      }
+    }
+
+    const fileContext = files.length > 0
+      ? `\nRelevant files:\n${files.map(file => `- ${file}`).join("\n")}`
+      : ""
+    let output = ""
+    for await (const event of child.submit(`${task}${fileContext}`, agentConfigFor(agentType))) {
+      if (event.role === "assistant_delta") output += event.content ?? ""
+      if (event.role === "error") output += `\n[error] ${event.content ?? "unknown error"}`
+    }
+    return output.trim()
   }
 }
 

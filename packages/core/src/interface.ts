@@ -52,6 +52,9 @@ export interface ToolContext {
   cwd: string
   sessionId: string
   signal?: AbortSignal
+  invokeTool?: (name: string, args: Record<string, unknown>) => Promise<ToolResult>
+  delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>
+  switchAgent?: (name: "build" | "plan") => string
 }
 
 export interface ToolResult {

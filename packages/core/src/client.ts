@@ -148,10 +148,20 @@ export class DeepSeekClient implements ChatClient {
       const finalized = new Set<number>()
       let finishReasonYielded = false
 
+      const WATCHDOG_MS = 60_000
+      let watchdog: ReturnType<typeof setTimeout> | undefined
+      const resetWatchdog = () => {
+        clearTimeout(watchdog)
+        watchdog = setTimeout(() => { reader.cancel("SSE stall").catch(() => {}) }, WATCHDOG_MS)
+      }
+      resetWatchdog()
+
       while (true) {
         const { value, done } = await reader.read()
+        clearTimeout(watchdog)
         if (done) break
         buf += decoder.decode(value, { stream: true })
+        resetWatchdog()
 
         while (true) {
           const sep = buf.indexOf("\n\n")
@@ -172,11 +182,9 @@ export class DeepSeekClient implements ChatClient {
           if (payload === "[DONE]") {
             // finalize any pending tool calls before done
             if (toolState.size > 0) {
-              let idx = 0
-              for (const tc of toolState.values()) {
+              for (const [index, tc] of toolState.entries()) {
                 if (tc.id && tc.name) {
-                  yield { type: "tool_call_end", toolCallIndex: idx, id: tc.id, name: tc.name, arguments: tc.args }
-                  idx++
+                  yield { type: "tool_call_end", toolCallIndex: index, id: tc.id, name: tc.name, arguments: tc.args }
                 }
               }
             }

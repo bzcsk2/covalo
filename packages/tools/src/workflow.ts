@@ -1,6 +1,5 @@
 import type { AgentTool } from "../../core/src/interface.js"
 import { safeStringify } from "./safe-stringify.js"
-import { spawn } from "node:child_process"
 
 export function createWorkflowTool(): AgentTool {
   return {
@@ -27,22 +26,35 @@ export function createWorkflowTool(): AgentTool {
     },
     concurrency: "exclusive",
     approval: "exec",
-    async execute(args) {
+    async execute(args, ctx) {
       if (!Array.isArray(args.steps) || args.steps.length === 0) {
         return { content: safeStringify({ error: "steps array is required" }), isError: true }
       }
       const results: Array<{ step: number; tool: string; status: string; output?: unknown; error?: string }> = []
+      if (!ctx.invokeTool) {
+        return { content: safeStringify({ error: "Workflow requires an engine tool invocation context" }), isError: true }
+      }
       for (let i = 0; i < args.steps.length; i++) {
         const step = args.steps[i]
         if (typeof step.tool !== "string" || !step.tool) {
           results.push({ step: i, tool: "unknown", status: "error", error: "step missing tool name" })
           continue
         }
-        results.push({ step: i, tool: step.tool, status: "simulated", output: `Workflow step ${i + 1}/${args.steps.length}: ${step.description ?? step.tool}` })
+        const stepArgs = step.args && typeof step.args === "object" && !Array.isArray(step.args)
+          ? step.args as Record<string, unknown>
+          : {}
+        const result = await ctx.invokeTool(step.tool, stepArgs)
+        results.push({
+          step: i,
+          tool: step.tool,
+          status: result.isError ? "error" : "completed",
+          ...(result.isError ? { error: result.content } : { output: result.content }),
+        })
+        if (result.isError) break
       }
       return {
         content: safeStringify({ totalSteps: args.steps.length, results }),
-        isError: false,
+        isError: results.some(result => result.status === "error"),
       }
     },
   }

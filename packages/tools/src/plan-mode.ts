@@ -23,9 +23,15 @@ export function createPlanModeTool(): AgentTool {
         return { content: safeStringify({ error: "action must be 'enter' or 'exit'" }), isError: true }
       }
       const isEnter = args.action === "enter"
+      const mode = isEnter ? "plan" : "build"
+      if (!ctx.switchAgent) {
+        return { content: safeStringify({ error: "PlanMode requires an engine runtime context" }), isError: true }
+      }
+      const label = ctx.switchAgent(mode)
       return {
         content: safeStringify({
-          mode: isEnter ? "plan" : "build",
+          mode,
+          label,
           message: isEnter
             ? "Switched to planning mode. Analyze requirements, design architecture, and outline implementation before writing code."
             : "Switched to build mode. Implement the planned solution with code.",

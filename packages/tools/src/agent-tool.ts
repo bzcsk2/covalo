@@ -16,20 +16,23 @@ export function createAgentToolTool(): AgentTool {
     },
     concurrency: "exclusive",
     approval: "exec",
-    async execute(args) {
+    async execute(args, ctx) {
       if (typeof args.task !== "string" || !args.task) {
         return { content: safeStringify({ error: "task is required" }), isError: true }
       }
       const agentType = args.agent_type === "plan" ? "plan" : "build"
       const files = Array.isArray(args.files) ? args.files.map(String) : []
+      if (!ctx.delegateTask) {
+        return { content: safeStringify({ error: "Sub-agent execution is unavailable outside the engine runtime" }), isError: true }
+      }
+      const result = await ctx.delegateTask(args.task, agentType, files)
       return {
         content: safeStringify({
-          status: "delegated",
+          status: "completed",
           agent: agentType,
           task: args.task,
           files,
-          result: `[Sub-agent ${agentType} would process: ${args.task.slice(0, 100)}${args.task.length > 100 ? "..." : ""}]`,
-          note: "Sub-agent execution requires async engine support. Current implementation returns a simulated result.",
+          result,
         }),
         isError: false,
       }

@@ -110,11 +110,11 @@ describe("WebBrowser", () => {
     expect(r.isError).toBe(true)
   })
 
-  it("should indicate playwright unavailable", async () => {
+  it("should require url for browser interactions", async () => {
     const tool = createWebBrowserTool()
     const r = await tool.execute({ action: "click", selector: "#btn" }, ctx)
     expect(r.isError).toBe(true)
-    expect(r.content).toContain("Playwright")
+    expect(r.content).toContain("url")
   })
 })
 

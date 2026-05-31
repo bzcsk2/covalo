@@ -1,8 +1,4 @@
 import { spawnSync } from "node:child_process"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { readFileSync, unlinkSync } from "node:fs"
-import { randomUUID } from "node:crypto"
 import { isIP } from "node:net"
 import type { AgentTool } from "../../core/src/interface.js"
 import { safeStringify } from "./safe-stringify.js"
@@ -20,7 +16,7 @@ export function createWebBrowserTool(): AgentTool {
           enum: ["navigate", "click", "fill", "screenshot", "extract"],
           description: "The action to perform.",
         },
-        url: { type: "string", description: "The URL to navigate to (required for navigate/screenshot)." },
+        url: { type: "string", description: "The URL to open. Required for every action." },
         selector: { type: "string", description: "CSS selector for click/fill/extract." },
         value: { type: "string", description: "Value to fill (required for fill action)." },
         timeout_ms: { type: "number", description: "Timeout in milliseconds (default 15000)." },
@@ -105,46 +101,54 @@ export function createWebBrowserTool(): AgentTool {
         }
       }
 
-      if (action === "screenshot") {
-        const url = args.url as string | undefined
-        if (!url) return { content: safeStringify({ error: "url is required for screenshot action" }), isError: true }
-
-        const urlErr = validateUrl(url)
-        if (urlErr) return { content: safeStringify({ error: urlErr }), isError: true }
-        const hostname = new URL(url).hostname
-        if (hasPrivateIP(hostname) || isPrivateHostnameSync(hostname)) {
-          return { content: safeStringify({ error: `URL resolves to private network: ${url}` }), isError: true }
-        }
-
-        const tmpFile = join(tmpdir(), `deepicode-shot-${randomUUID()}.png`)
-        const result = spawnSync("npx", ["playwright", "screenshot", url, "--output", tmpFile], { timeout: timeoutMs })
-
-        if (result.error || result.status !== 0) {
-          return {
-            content: safeStringify({
-              error: "Screenshot not available: Playwright is not installed or failed to capture screenshot. Try using the navigate action or WebFetch tool instead.",
-            }),
-            isError: true,
-          }
-        }
-
-        try {
-          const img = readFileSync(tmpFile)
-          const b64 = img.toString("base64")
-          return { content: safeStringify({ screenshot: `data:image/png;base64,${b64}`, url }), isError: false }
-        } finally {
-          try { unlinkSync(tmpFile) } catch { /* ignore */ }
-        }
+      const url = args.url as string | undefined
+      if (!url) return { content: safeStringify({ error: `url is required for ${action} action` }), isError: true }
+      const urlErr = await validateRemoteUrl(url)
+      if (urlErr) return { content: safeStringify({ error: urlErr }), isError: true }
+      if ((action === "click" || action === "fill" || action === "extract") && typeof args.selector !== "string") {
+        return { content: safeStringify({ error: `selector is required for ${action} action` }), isError: true }
+      }
+      if (action === "fill" && typeof args.value !== "string") {
+        return { content: safeStringify({ error: "value is required for fill action" }), isError: true }
       }
 
-      return {
-        content: safeStringify({
-          error: `${action} requires Playwright which is not installed. Use navigate to retrieve page content or a different approach.`,
-        }),
-        isError: true,
+      const runner = new URL("./web-browser-runner.mjs", import.meta.url)
+      const result = spawnSync(process.execPath, [runner.pathname, JSON.stringify({
+        action,
+        url,
+        selector: args.selector,
+        value: args.value,
+        timeoutMs,
+      })], { timeout: timeoutMs + 5000, encoding: "utf8" })
+      if (result.error || result.status !== 0) {
+        const detail = result.stderr?.trim()
+        return {
+          content: safeStringify({ error: detail || "Playwright is not installed or the browser action failed. Install playwright and its Chromium browser." }),
+          isError: true,
+        }
+      }
+      try {
+        return { content: safeStringify(JSON.parse(result.stdout)), isError: false }
+      } catch {
+        return { content: safeStringify({ error: "Playwright runner returned invalid output" }), isError: true }
       }
     },
   }
+}
+
+async function validateRemoteUrl(raw: string): Promise<string | null> {
+  const urlErr = validateUrl(raw)
+  if (urlErr) return urlErr
+  const hostname = new URL(raw).hostname
+  if (hasPrivateIP(hostname) || isPrivateHostnameSync(hostname)) return `URL resolves to private network: ${raw}`
+  if (!isIP(hostname)) {
+    try {
+      if (await isPrivateHostname(hostname)) return `URL resolves to private network: ${raw}`
+    } catch {
+      return `Cannot resolve hostname: ${raw}`
+    }
+  }
+  return null
 }
 
 function validateUrl(raw: string): string | null {

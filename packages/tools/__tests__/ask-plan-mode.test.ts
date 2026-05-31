@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest"
 import { createAskUserQuestionTool } from "../src/ask-user.js"
 import { createPlanModeTool } from "../src/plan-mode.js"
 
-const ctx = { cwd: process.cwd(), signal: new AbortController().signal } as any
+const ctx = {
+  cwd: process.cwd(),
+  signal: new AbortController().signal,
+  switchAgent: (name: string) => `${name} agent`,
+} as any
 
 describe("AskUserQuestion", () => {
   it("should return a structured question", async () => {

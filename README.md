@@ -114,7 +114,7 @@ deepicode                    MCP Servers
 
 ### Subagents（子 Agent 系统）
 
-复杂任务自动拆解为多个子 Agent 并行执行。主 Agent 负责任务规划和结果整合，子 Agent 各自专注独立子任务——代码搜索、安全审查、测试生成同时进行。
+复杂任务可委托给隔离子 Agent 执行。主 Agent 负责任务规划和结果整合；后台子 Agent 可读写、检索和分析，但不会绕过交互确认执行 `exec` 工具。
 
 ```text
 用户: "审计这个 PR 的安全性并生成测试"
@@ -130,7 +130,20 @@ deepicode                    MCP Servers
   整合结果 → 一份完整的审计报告 + 测试代码
 ```
 
-> **当前状态**：Skills 系统已通过系统提示词集成；MCP 和 Subagents 在 Phase 6 实现。接口层已预留扩展点（`CoreEngine.switchAgent()`、`ToolRegistry` 支持 Agent 过滤）。
+> **当前状态**：Skills、MCP 动态工具发现与调用、隔离子 Agent 已接入。内置静态 Agent Tool 共 34 个；LSP 需要在 `.deepicode/lsp.json` 配置 language server，浏览器交互需要安装 Playwright。
+
+LSP 最小配置示例：
+
+```json
+{
+  "languages": {
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"]
+    }
+  }
+}
+```
 
 ---
 

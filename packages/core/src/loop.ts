@@ -25,12 +25,13 @@ export interface LoopOptions {
   stats: SessionStats
   isInterrupted: () => boolean
   appendToolResult: (tc: ToolCall, result: ToolResult) => void
+  maxTurns?: number
 }
 
-const MAX_TURNS = 10
+const DEFAULT_MAX_TURNS = 100
 
 export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
-  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult } = opts
+  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, maxTurns = DEFAULT_MAX_TURNS } = opts
 
   const contextWindow = ctx.getContextWindow()
 
@@ -52,7 +53,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   let consecutiveErrors = 0
   const recentToolCalls = new Map<string, number>()
 
-  while (turnCount < MAX_TURNS) {
+  while (turnCount < maxTurns) {
     turnCount++
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
@@ -99,8 +100,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             function: { name: event.name, arguments: event.arguments },
           }
           toolCalls.push(tc)
-          yield { role: "tool_call_delta", toolName: event.name, content: event.arguments }
-          sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "tool_call_delta", toolName: event.name, content: event.arguments } })
+          yield { role: "tool_call_delta", toolName: event.name, toolCallIndex: event.toolCallIndex, content: event.arguments }
+          sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "tool_call_delta", toolName: event.name, toolCallIndex: event.toolCallIndex, content: event.arguments } })
           break
         }
 
@@ -193,6 +194,6 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     consecutiveErrors = 0
   }
 
-  yield { role: "warning", content: `Reached maximum tool loop count (${MAX_TURNS}).`, severity: "warning" as const }
+  yield { role: "warning", content: `Reached maximum tool loop count (${maxTurns}).`, severity: "warning" as const }
   yield { role: "done", metadata: { reason: "maxTurns" } }
 }

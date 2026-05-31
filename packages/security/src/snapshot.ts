@@ -1,10 +1,11 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join, relative } from "node:path"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 export class FileSnapshot {
   private patchesDir: string
+  private sequence = 0
 
   constructor(patchesDir?: string) {
     this.patchesDir = patchesDir ?? join(process.cwd(), ".deepicode_patches")
@@ -15,7 +16,8 @@ export class FileSnapshot {
     const dir = join(this.patchesDir, id)
     await mkdir(dir, { recursive: true })
     const content = await readFile(filepath)
-    const snapPath = join(dir, `${Date.now()}.snap`)
+    const sequence = String(this.sequence++).padStart(8, "0")
+    const snapPath = join(dir, `${Date.now()}_${sequence}_${randomUUID().slice(0, 8)}.snap`)
     await writeFile(snapPath, content)
     return id
   }

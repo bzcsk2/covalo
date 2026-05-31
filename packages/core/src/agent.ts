@@ -17,7 +17,7 @@ export const AGENTS: Record<string, AgentDefinition> = {
     systemPrompt: `You are a full-stack engineering agent with access to a complete toolset.
 You can read, write, edit files, run bash commands, search code, and manage tasks.
 Always verify your changes — re-read files after editing when needed.`,
-    toolNames: ["bash", "read_file", "write_file", "edit", "list_dir", "grep", "todowrite", "glob", "WebFetch", "WebSearch", "Skill", "ListMcpResources", "ReadMcpResource", "McpAuth", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "AskUserQuestion", "PlanMode", "NotebookEdit", "Sleep", "PushNotification", "Monitor", "WebBrowser", "Worktree", "Cron", "Workflow", "AgentTool", "SendMessage", "LSP"],
+    toolNames: ["bash", "read_file", "write_file", "edit", "list_dir", "grep", "todowrite", "glob", "WebFetch", "WebSearch", "Skill", "ListMcpResources", "ReadMcpResource", "McpAuth", "ListMcpTools", "CallMcpTool", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "AskUserQuestion", "PlanMode", "NotebookEdit", "Sleep", "PushNotification", "Monitor", "WebBrowser", "Worktree", "Cron", "Workflow", "AgentTool", "SendMessage", "LSP"],
   },
   plan: {
     name: "plan",

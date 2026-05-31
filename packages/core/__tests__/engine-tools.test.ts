@@ -60,6 +60,9 @@ describe("ReasonixEngine tool loop regressions", () => {
     const toolStarts = events.filter((e) => e.role === "tool_start")
     expect(toolStarts.map((e) => e.toolCallIndex)).toEqual([0, 1])
 
+    const toolCallDeltas = events.filter((e) => e.role === "tool_call_delta")
+    expect(toolCallDeltas.map((e) => e.toolCallIndex)).toEqual([0, 1])
+
     const toolResults = events.filter((e) => e.role === "tool")
     expect(toolResults.map((e) => e.toolCallIndex)).toEqual([0, 1])
 

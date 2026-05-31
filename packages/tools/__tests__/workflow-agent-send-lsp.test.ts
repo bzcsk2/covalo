@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest"
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createWorkflowTool } from "../src/workflow.js"
 import { createAgentToolTool } from "../src/agent-tool.js"
 import { createSendMessageTool } from "../src/send-message.js"
@@ -6,7 +9,13 @@ import { createLspTool } from "../src/lsp.js"
 import { createWebSearchTool } from "../src/web-search.js"
 import { createWebFetchTool } from "../src/web-fetch.js"
 
-const ctx = { cwd: process.cwd(), signal: new AbortController().signal } as any
+const ctx = {
+  cwd: mkdtempSync(join(tmpdir(), "deepicode-tools-")),
+  sessionId: "test-session",
+  signal: new AbortController().signal,
+  invokeTool: async (name: string, args: Record<string, unknown>) => ({ content: JSON.stringify({ name, args }), isError: false }),
+  delegateTask: async (task: string, agent: string, files: string[]) => JSON.stringify({ task, agent, files }),
+} as any
 
 describe("Workflow", () => {
   it("should execute multiple steps", async () => {
@@ -87,11 +96,10 @@ describe("SendMessage", () => {
     expect(p.messageType).toBe("error")
   })
 
-  it("should accept empty string recipient (handled by source)", async () => {
+  it("should reject empty string recipient", async () => {
     const tool = createSendMessageTool()
     const r = await tool.execute({ recipient: "", message: "hi" }, ctx)
-    // Source only validates typeof, not .trim() - empty string passes
-    expect(r).toBeDefined()
+    expect(r.isError).toBe(true)
   })
 })
 
@@ -108,12 +116,26 @@ describe("LSP", () => {
     expect(r.isError).toBe(true)
   })
 
-  it("should return unavailable for existing file", async () => {
+  it("should return an error when no server is configured", async () => {
     const tool = createLspTool()
-    const r = await tool.execute({ action: "diagnostics", file_path: "package.json" }, ctx)
+    writeFileSync(join(ctx.cwd, "test.json"), "{}")
+    const r = await tool.execute({ action: "diagnostics", file_path: "test.json" }, ctx)
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error).toContain("No LSP server configured")
+  })
+
+  it("should execute a configured LSP hover request", async () => {
+    const tool = createLspTool()
+    mkdirSync(join(ctx.cwd, ".deepicode"), { recursive: true })
+    writeFileSync(join(ctx.cwd, "test.ts"), "const answer = 42\n")
+    writeFileSync(join(ctx.cwd, ".deepicode", "lsp.json"), JSON.stringify({
+      languages: { typescript: { command: process.execPath, args: [join(import.meta.dir, "fixtures", "fake-lsp.mjs")] } },
+    }))
+    const r = await tool.execute({ action: "hover", file_path: "test.ts" }, ctx)
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
-    expect(p.status).toBe("unavailable")
+    expect(p.result.contents).toBe("fake hover")
   })
 })
 
