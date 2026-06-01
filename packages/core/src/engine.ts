@@ -14,6 +14,8 @@ import { getAgent, agentConfigFor } from "./agent.js"
 import { createModeSelectorState } from "./mode-selector.js"
 import type { ModeSelectorState } from "./mode-selector.js"
 import type { ThinkingMode } from "./provider-thinking.js"
+import { createModeStats, getModeSummary } from "./mode-stats.js"
+import type { ModeStats } from "./mode-stats.js"
 
 /**
  * ReasonixEngine 是 Deepicode 的核心引擎，负责：
@@ -69,9 +71,17 @@ export class ReasonixEngine implements CoreEngine {
   /** AS3: Thinking mode selector state */
   private modeSelectorState: ModeSelectorState = createModeSelectorState()
 
+  /** AS6: Thinking mode statistics */
+  private modeStats: ModeStats = createModeStats()
+
   /** AS3: Set thinking mode for auto-switch */
   setThinkingMode(mode: ThinkingMode): void {
     this.modeSelectorState.currentMode = mode
+  }
+
+  /** AS6: Get thinking mode statistics summary */
+  getModeSummary(): string {
+    return getModeSummary(this.modeStats)
   }
 
   /** P2: Mid-session instruction queue — consumed by loop at safe points */
@@ -291,6 +301,7 @@ export class ReasonixEngine implements CoreEngine {
         },
         thinkingMode: this.modeSelectorState.currentMode,
         modeSelectorState: this.modeSelectorState,
+        modeStats: this.modeStats,
       }
 
       for await (const event of runLoop(loopOpts)) {

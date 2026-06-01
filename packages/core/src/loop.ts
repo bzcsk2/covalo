@@ -10,6 +10,8 @@ import type { ModeSelectorState, SwitchSignal } from "./mode-selector.js"
 import type { ThinkingMode } from "./provider-thinking.js"
 import { evaluateModeSwitch } from "./mode-selector.js"
 import { createDeepSeekCapabilities } from "./provider-thinking.js"
+import type { ModeStats } from "./mode-stats.js"
+import { logModeSwitch } from "./mode-stats.js"
 import { calculateCost } from "./pricing.js"
 import { randomUUID } from "node:crypto"
 
@@ -47,12 +49,13 @@ export interface LoopOptions {
   maxTurns?: number
   thinkingMode?: ThinkingMode
   modeSelectorState?: ModeSelectorState
+  modeStats?: ModeStats
 }
 
 const DEFAULT_MAX_TURNS = 100
 
 export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
-  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns = DEFAULT_MAX_TURNS, thinkingMode = "off", modeSelectorState } = opts
+  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns = DEFAULT_MAX_TURNS, thinkingMode = "off", modeSelectorState, modeStats } = opts
 
   // P2: Safe-point helper — consume one pending instruction from the queue.
   // Returns a status event if an instruction was injected, null otherwise.
@@ -264,9 +267,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       }
       const decision = evaluateModeSwitch(modeSelectorState, signalBundle)
       if (decision.action === "switch") {
+        const from = signalBundle.currentMode
         currentMode = decision.target
         modeSelectorState.lastSwitchTime = Date.now()
-        yield { role: "status", content: "thinking_mode_switch", metadata: { from: signalBundle.currentMode, to: currentMode, reason: decision.reason } }
+        if (modeStats) logModeSwitch(modeStats, from, currentMode, decision.reason)
+        yield { role: "status", content: "thinking_mode_switch", metadata: { from, to: currentMode, reason: decision.reason } }
       }
     }
 
