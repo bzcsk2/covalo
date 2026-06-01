@@ -431,6 +431,25 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 - 完整测试曾运行通过：584 pass / 0 fail
 - `FileSnapshot` 同毫秒快照按随机后缀排序会偶发失败；已在高级工具补齐轮次加入递增序号修复
 
+### T30/T31/T32：i18n 国际化（2026-06-01）
+
+**实现**：`eb658db`
+
+- 创建 `packages/tui/src/i18n/` 模块：`strings.ts`（接口）、`zh-CN.ts`、`en.ts`（字典）、`persist.ts`（持久化）、`index.ts`（导出）
+- 类型安全的 `t()` 函数，支持参数化字符串（如 `t().queued(n)`、`t().switchedModel(provider, model)`）
+- 运行时 `setLocale()` 切换，持久化到 `.deepicode/lang.json`
+- `/lang` 命令循环切换 zh-CN ↔ en
+- 替换 14 个文件中 ~55 个硬编码用户可见字符串
+- 不翻译：工具名、事件 role、provider id、JSON 字段、Unicode 符号
+- typecheck 通过，596 pass / 4 fail（web-search 超时为预存问题）
+
+**新文件**：
+- `packages/tui/src/i18n/strings.ts` — Strings 接口定义
+- `packages/tui/src/i18n/zh-CN.ts` — 中文字典
+- `packages/tui/src/i18n/en.ts` — 英文字典
+- `packages/tui/src/i18n/persist.ts` — .deepicode/lang.json 读写
+- `packages/tui/src/i18n/index.ts` — t() / setLocale() / getLocale() / toggleLocale()
+
 ---
 
 ## 三、ADVICE 审计修复总汇（共 38 项，4 份审计报告全部处理完毕）

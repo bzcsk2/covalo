@@ -103,8 +103,8 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 2 | `N2`、`N3`、`N4`、`N5` | 小型维护项，先减少后续 TUI 和 provider 工作中的噪音 | ✅ 全部完成 |
 | 3 | `F3/F5` | 在现有时间线模型上补齐流式显示，不改变架构 | ✅ 全部完成 |
 | 4 | `T20`、`T22`、`T21` | 输入体验；先数据模型，再编辑行为，再补全窗口 | ✅ 全部完成 |
-| 5 | `T30`、`T31`、`T32` | i18n；等 TUI 字符串结构稳定后进行 | ⬜ 下一步 |
-| 6 | `T40`、`T41` | 长会话渲染和搜索，属于独立显示层增强 | ⬜ |
+| 5 | `T30`、`T31`、`T32` | i18n；等 TUI 字符串结构稳定后进行 | ✅ 全部完成 |
+| 6 | `T40`、`T41` | 长会话渲染和搜索，属于独立显示层增强 | ⬜ 下一步 |
 | 7 | `ST1`–`ST4` | 策略系统涉及 Core + TUI，必须单独设计和测试 | ⬜ |
 | 8 | `M10`、`H1`–`H23` | 测试矩阵和压力验证，伴随相应模块逐步补齐 | ⬜ |
 
@@ -185,18 +185,9 @@ engine.submit()
 
 已实现。新增 `CommandRegistry.ts`（命令注册表）、`CommandAutocomplete.tsx`（弹出补全组件）。输入以 `/` 开头时自动显示，↑↓ 选择，Enter/Tab 补全，Esc 关闭。App.tsx 的 handleSubmit 使用统一命令处理。
 
-### T30/T31/T32：中英文切换
+### T30/T31/T32：中英文切换 ✅
 
-**顺序**：
-
-1. `T30`：新增 `packages/tui/src/i18n/`，实现类型安全的 `t(key)` 和 `zh-CN/en` 字典。
-2. `T31`：替换 TUI 用户可见硬编码字符串。
-3. `T32`：新增 `/lang`，运行时切换并持久化偏好。
-
-**边界**：
-
-- 不要翻译工具名、事件 role、provider id、agent name 或 JSON 字段。
-- Core 错误消息暂时不纳入 TUI i18n，避免跨层耦合。
+已实现。新增 `packages/tui/src/i18n/` 模块：类型安全的 `t()` 函数 + `zh-CN/en` 字典，运行时 `setLocale()` 切换并持久化到 `.deepicode/lang.json`。替换 14 个文件中 ~55 个硬编码字符串。`/lang` 命令循环切换语言。
 
 ### T40：虚拟消息列表
 
