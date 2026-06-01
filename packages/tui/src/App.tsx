@@ -177,7 +177,7 @@ export function App({ engine, config }: AppProps) {
       const s = t();
       appendMessage({
         role: 'assistant' as const,
-        content: `Commands:\n  /exit, /bye  — ${s.cmdExit}\n  /help        — ${s.cmdHelp}\n  /model       — ${s.cmdModel}\n  /sessions    — ${s.cmdSessions}\n  /agent       — ${s.cmdAgent}\n  /skill       — ${s.cmdSkill}\n  /lang        — ${s.cmdLang}\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
+        content: `Commands:\n  /exit, /bye  — ${s.cmdExit}\n  /help        — ${s.cmdHelp}\n  /model       — ${s.cmdModel}\n  /sessions    — ${s.cmdSessions}\n  /agent       — ${s.cmdAgent}\n  /skill       — ${s.cmdSkill}\n  /lang        — ${s.cmdLang}\n  /thinking    — set thinking mode\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
       });
       return;
     }
@@ -207,6 +207,19 @@ export function App({ engine, config }: AppProps) {
       const label = engineRef.current.switchAgent(next);
       setActiveAgent(next);
       appendMessage({ role: 'assistant' as const, content: t().switchedTo(label) });
+      return;
+    }
+    if (text.startsWith('/thinking')) {
+      const parts = text.split(/\s+/);
+      const mode = parts[1];
+      const validModes = ['off', 'low', 'medium', 'high', 'max'];
+      if (!mode || !validModes.includes(mode)) {
+        appendMessage({ role: 'assistant' as const, content: `Usage: /thinking <mode>\nModes: ${validModes.join(', ')}\nCurrent: ${bridgeState.thinkingMode}` });
+        return;
+      }
+      engineRef.current.setThinkingMode(mode as any);
+      setBridgeState(prev => ({ ...prev, thinkingMode: mode }));
+      appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${mode}` });
       return;
     }
     if (text === '/lang') {

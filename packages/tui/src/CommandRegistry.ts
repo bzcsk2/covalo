@@ -14,6 +14,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/agent', description: 'switch agent' },
   { name: '/skill', description: 'list loaded skills' },
   { name: '/lang', description: 'switch language' },
+  { name: '/thinking', description: 'set thinking mode (off/low/medium/high/max)' },
 ];
 
 export function filterCommands(query: string): SlashCommand[] {
