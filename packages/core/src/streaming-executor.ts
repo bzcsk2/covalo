@@ -2,6 +2,7 @@ import type { AgentTool, LoopEvent, ToolContext, ToolResult } from "./interface.
 import type { ToolCall } from "./types.js"
 import { repairToolArguments } from "./context/repair.js"
 import type { PermissionEngine, HookManager, PermissionDecision } from "@deepicode/security"
+import { maybePersistResult, type ResultPersistenceConfig } from "./result-persistence.js"
 
 export class StreamingToolExecutor {
   private tools: Map<string, AgentTool>
@@ -12,6 +13,7 @@ export class StreamingToolExecutor {
   private requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
   private delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>
   private switchAgent?: (name: "build" | "plan") => string
+  private resultPersistenceConfig?: ResultPersistenceConfig
 
   constructor(
     tools: Map<string, AgentTool>,
@@ -22,6 +24,7 @@ export class StreamingToolExecutor {
     requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>,
     delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>,
     switchAgent?: (name: "build" | "plan") => string,
+    resultPersistenceConfig?: ResultPersistenceConfig,
   ) {
     this.tools = tools
     this.sessionId = sessionId
@@ -31,6 +34,7 @@ export class StreamingToolExecutor {
     this.requestPermission = requestPermission
     this.delegateTask = delegateTask
     this.switchAgent = switchAgent
+    this.resultPersistenceConfig = resultPersistenceConfig
   }
 
   async *run(toolCalls: ToolCall[], signal: AbortSignal, appendToolResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
@@ -211,7 +215,27 @@ export class StreamingToolExecutor {
         return { event: makeErrorEvent(result, tc.function.name, index), result }
       }
 
-      const result = normalizeToolResult(await handler.execute(args, toolCtx))
+      const rawResult = normalizeToolResult(await handler.execute(args, toolCtx))
+
+      // P4: Check if result needs overflow persistence
+      let result = rawResult
+      if (!rawResult.isError && this.resultPersistenceConfig) {
+        const persisted = await maybePersistResult(
+          rawResult.content,
+          this.sessionId,
+          tc.function.name,
+          this.resultPersistenceConfig,
+        )
+        result = { ...rawResult, content: persisted.content }
+        if (persisted.persisted) {
+          result.metadata = { ...result.metadata, ...persisted.persisted }
+        }
+        if (persisted.warning) {
+          // Emit warning via hook (non-blocking)
+          this.hookManager?.runAfterToolCall(tc.function.name, { content: persisted.warning, isError: false, metadata: { warning: true } })
+        }
+      }
+
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: result.isError, metadata: result.metadata })
       return {
         event: {
