@@ -581,6 +581,14 @@ DEEPICODE_TRACE=1
 - MCP 动态工具仍单独注册（`createListMcpToolsTool`、`createCallMcpToolTool` 等）。
 - 验收：typecheck 通过 + 774/774 测试通过。
 
+### CL-42：热路径同步阻塞清理
+
+- `packages/tools/src/grep.ts`：`spawnSync("rg"/"grep")` → `spawn` 异步，支持 `AbortSignal`、15s 超时、500KB 输出上限。
+- `packages/tools/src/web-browser.ts`：`spawnSync(node, [runner])` → `spawn` 异步，支持 `AbortSignal`、可配置超时、5MB 输出上限。
+- `packages/tools/src/cron.ts`：`spawnSync("crontab")` → `spawn` 异步，`getCrontab()` 和 `setCrontab()` 均支持 `AbortSignal`、5s 超时。
+- 所有工具保持现有返回格式不变。
+- 验收：typecheck 通过 + 774/774 测试通过。
+
 ---
 
 ## 6. 文档维护规则

@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import type { AgentTool } from "@deepicode/core"
 import { safeStringify } from "./safe-stringify.js"
 
 const JOB_MARKER = "# deepicode-job:"
+const TIMEOUT_MS = 5_000
 
 export function createCronTool(): AgentTool {
   return {
@@ -24,13 +25,13 @@ export function createCronTool(): AgentTool {
     },
     concurrency: "exclusive",
     approval: "write",
-    async execute(args) {
+    async execute(args, ctx) {
       const action = args.action as string | undefined
       if (!action || !["create", "delete", "list"].includes(action)) {
         return { content: safeStringify({ error: "action must be one of: create, delete, list" }), isError: true }
       }
 
-      const { lines, error } = getCrontab()
+      const { lines, error } = await getCrontab(ctx.signal)
       if (error) {
         return { content: safeStringify({ error: `Crontab error: ${error}` }), isError: true }
       }
@@ -49,7 +50,6 @@ export function createCronTool(): AgentTool {
         if (!schedule) return { content: safeStringify({ error: "schedule is required for create action" }), isError: true }
         if (!command) return { content: safeStringify({ error: "command is required for create action" }), isError: true }
 
-        // Sanitize: filter newlines to prevent crontab injection
         const sanitizedCommand = command.replace(/[\n\r]/g, " ")
         const sanitizedName = name.replace(/[\n\r]/g, "_")
 
@@ -59,7 +59,7 @@ export function createCronTool(): AgentTool {
         }
 
         const newLines = [...lines, "", `${JOB_MARKER}${sanitizedName}`, schedule + " " + sanitizedCommand]
-        const setErr = setCrontab(newLines)
+        const setErr = await setCrontab(newLines, ctx.signal)
         if (setErr) return { content: safeStringify({ error: setErr }), isError: true }
 
         return { content: safeStringify({ message: `Cron job "${name}" created`, name, schedule, command }), isError: false }
@@ -73,7 +73,7 @@ export function createCronTool(): AgentTool {
         return { content: safeStringify({ error: `No job found with name "${name}"` }), isError: true }
       }
 
-      const setErr = setCrontab(newLines)
+      const setErr = await setCrontab(newLines, ctx.signal)
       if (setErr) return { content: safeStringify({ error: setErr }), isError: true }
 
       return { content: safeStringify({ message: `Cron job "${name}" deleted` }), isError: false }
@@ -81,38 +81,58 @@ export function createCronTool(): AgentTool {
   }
 }
 
-function getCrontab(): { lines: string[]; error?: string } {
-  const result = spawnSync("crontab", ["-l"], { timeout: 5000 })
+async function getCrontab(signal?: AbortSignal): Promise<{ lines: string[]; error?: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn("crontab", ["-l"], { timeout: TIMEOUT_MS, signal })
+    let stdout = ""
+    let stderr = ""
 
-  if (result.error) {
-    return { lines: [], error: "crontab not available on this system" }
-  }
+    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString() })
+    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
 
-  if (result.status !== 0) {
-    const stderr = result.stderr?.toString() || ""
-    if (stderr.includes("no crontab") || stderr.includes("No crontab")) {
-      return { lines: [] }
-    }
-    return { lines: [], error: stderr.trim() || "crontab -l failed" }
-  }
+    proc.on("error", () => {
+      resolve({ lines: [], error: "crontab not available on this system" })
+    })
 
-  const text = result.stdout?.toString() || ""
-  return { lines: text.split("\n").filter((l) => !l.endsWith("\r")).map((l) => l.replace(/\r$/, "")) }
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        if (stderr.includes("no crontab") || stderr.includes("No crontab")) {
+          resolve({ lines: [] })
+        } else {
+          resolve({ lines: [], error: stderr.trim() || "crontab -l failed" })
+        }
+        return
+      }
+      const text = stdout || ""
+      resolve({ lines: text.split("\n").filter((l) => !l.endsWith("\r")).map((l) => l.replace(/\r$/, "")) })
+    })
+  })
 }
 
-function setCrontab(lines: string[]): string | undefined {
+async function setCrontab(lines: string[], signal?: AbortSignal): Promise<string | undefined> {
   const input = lines.join("\n") + (lines.length > 0 && !lines[lines.length - 1] ? "" : "\n")
-  const result = spawnSync("crontab", ["-"], { input, timeout: 5000 })
 
-  if (result.error) {
-    return result.error.message
-  }
+  return new Promise((resolve) => {
+    const proc = spawn("crontab", ["-"], { timeout: TIMEOUT_MS, signal })
+    let stderr = ""
 
-  if (result.status !== 0) {
-    return result.stderr?.toString().trim() || "crontab update failed"
-  }
+    proc.stdin.write(input)
+    proc.stdin.end()
 
-  return undefined
+    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
+
+    proc.on("error", (err) => {
+      resolve(err.message)
+    })
+
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        resolve(stderr.trim() || "crontab update failed")
+      } else {
+        resolve(undefined)
+      }
+    })
+  })
 }
 
 function parseJobs(lines: string[]): Array<{ name: string; schedule: string; command: string }> {

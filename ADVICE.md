@@ -508,7 +508,7 @@ os: [ubuntu-latest, macos-latest, windows-latest]
 - 保留工具构造顺序和名称，不改变 system prompt 中工具规格排序策略。
 - MCP 动态工具与内置工具仍分开管理。
 
-### CL-42 热路径同步阻塞清理
+### ✅ CL-42 热路径同步阻塞清理
 
 优先顺序：
 

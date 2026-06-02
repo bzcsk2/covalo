@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import { isIP } from "node:net"
 import type { AgentTool } from "@deepicode/core"
 import { safeStringify } from "./safe-stringify.js"
@@ -113,22 +113,38 @@ export function createWebBrowserTool(): AgentTool {
       }
 
       const runner = new URL("./web-browser-runner.mjs", import.meta.url)
-      const result = spawnSync(process.execPath, [runner.pathname, JSON.stringify({
+      const payload = JSON.stringify({
         action,
         url,
         selector: args.selector,
         value: args.value,
         timeoutMs,
-      })], { timeout: timeoutMs + 5000, encoding: "utf8" })
-      if (result.error || result.status !== 0) {
-        const detail = result.stderr?.trim()
+      })
+
+      let stdout: string
+      let stderr: string
+      let exitCode: number | null
+      try {
+        const result = await runPlaywright(runner.pathname, payload, timeoutMs + 5000, ctx.signal)
+        stdout = result.stdout
+        stderr = result.stderr
+        exitCode = result.exitCode
+      } catch (e) {
+        return {
+          content: safeStringify({ error: `Playwright process failed: ${e instanceof Error ? e.message : String(e)}` }),
+          isError: true,
+        }
+      }
+
+      if (exitCode !== 0) {
+        const detail = stderr?.trim()
         return {
           content: safeStringify({ error: detail || "Playwright is not installed or the browser action failed. Install playwright and its Chromium browser." }),
           isError: true,
         }
       }
       try {
-        return { content: safeStringify(JSON.parse(result.stdout)), isError: false }
+        return { content: safeStringify(JSON.parse(stdout)), isError: false }
       } catch {
         return { content: safeStringify({ error: "Playwright runner returned invalid output" }), isError: true }
       }
@@ -199,4 +215,42 @@ function htmlToText(html: string): string {
   text = text.replace(/\n{3,}/g, "\n\n")
   text = text.trim()
   return text
+}
+
+function runPlaywright(
+  runnerPath: string,
+  payload: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, [runnerPath, payload], {
+      timeout: timeoutMs,
+      signal,
+    })
+    let stdout = ""
+    let stderr = ""
+    let killed = false
+
+    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString() })
+    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
+
+    proc.on("close", (code) => {
+      resolve({ stdout, stderr, exitCode: code })
+    })
+
+    proc.on("error", (err) => {
+      if (!killed) reject(err)
+    })
+
+    // Enforce output limit
+    const checkSize = () => {
+      if (stdout.length > 5_000_000) {
+        killed = true
+        proc.kill()
+        resolve({ stdout: stdout.slice(0, 5_000_000), stderr, exitCode: null })
+      }
+    }
+    proc.stdout.on("data", checkSize)
+  })
 }

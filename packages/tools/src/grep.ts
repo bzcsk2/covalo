@@ -1,7 +1,10 @@
 import { resolve } from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import type { AgentTool } from "@deepicode/core"
 import { safeStringify } from "./safe-stringify.js"
+
+const MAX_OUTPUT_CHARS = 500_000
+const TIMEOUT_MS = 15_000
 
 export function createGrepTool(): AgentTool {
   return {
@@ -29,9 +32,10 @@ export function createGrepTool(): AgentTool {
 
       let stdout: string
       try {
-        stdout = runSearch(pattern, searchPath, include)
-      } catch {
-        return { content: safeStringify({ error: "Search failed. Pattern may be invalid or path not found." }), isError: true }
+        stdout = await runSearch(pattern, searchPath, include, ctx.signal)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return { content: safeStringify({ error: `Search failed: ${msg}` }), isError: true }
       }
 
       const lines = stdout.split("\n").filter(Boolean)
@@ -54,23 +58,68 @@ export function createGrepTool(): AgentTool {
   }
 }
 
-function runSearch(pattern: string, searchPath: string, include?: string): string {
-  try {
+function runSearch(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+  return tryRg(pattern, searchPath, include, signal).catch(() => tryGrep(pattern, searchPath, include, signal))
+}
+
+function tryRg(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
     const rgArgs = ["-n", "--no-heading"]
     if (include) rgArgs.push("-g", include)
     rgArgs.push("--", pattern, searchPath)
-    const result = spawnSync("rg", rgArgs, { encoding: "utf-8", timeout: 15000 })
-    if (result.error || result.status === 127) throw result.error ?? new Error("rg not found")
-    return result.stdout ?? ""
-  } catch {
-    // rg not found or failed, fallback to grep
+
+    const proc = spawn("rg", rgArgs, { signal, timeout: TIMEOUT_MS })
+    let stdout = ""
+    let outputTruncated = false
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      if (outputTruncated) return
+      stdout += chunk.toString()
+      if (stdout.length > MAX_OUTPUT_CHARS) {
+        stdout = stdout.slice(0, MAX_OUTPUT_CHARS)
+        outputTruncated = true
+        proc.kill()
+      }
+    })
+
+    proc.stderr.on("data", () => {})
+
+    proc.on("close", (code) => {
+      if (code === 127) reject(new Error("rg not found"))
+      else resolve(stdout)
+    })
+
+    proc.on("error", reject)
+  })
+}
+
+function tryGrep(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
     const grepArgs = ["-rn"]
     if (include) grepArgs.push(`--include=${include}`)
     grepArgs.push("--", pattern, searchPath)
-    const result = spawnSync("grep", grepArgs, { encoding: "utf-8", timeout: 15000 })
-    // grep returns exit code 1 when no matches found
-    if (result.status === 1) return ""
-    if (result.error) throw result.error
-    return result.stdout ?? ""
-  }
+
+    const proc = spawn("grep", grepArgs, { signal, timeout: TIMEOUT_MS })
+    let stdout = ""
+    let outputTruncated = false
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      if (outputTruncated) return
+      stdout += chunk.toString()
+      if (stdout.length > MAX_OUTPUT_CHARS) {
+        stdout = stdout.slice(0, MAX_OUTPUT_CHARS)
+        outputTruncated = true
+        proc.kill()
+      }
+    })
+
+    proc.stderr.on("data", () => {})
+
+    proc.on("close", (code) => {
+      if (code === 1) resolve("") // no matches
+      else resolve(stdout)
+    })
+
+    proc.on("error", reject)
+  })
 }
