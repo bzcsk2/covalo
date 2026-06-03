@@ -222,6 +222,25 @@ export class ReasonixEngine implements CoreEngine {
     this.stats = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0, apiCalls: 0, toolCalls: 0, totalCost: 0 }
   }
 
+  async getStatusSnapshot(): Promise<EngineStatusSnapshot> {
+    const budget = await this.ctx.getBudget()
+    return {
+      sessionId: this.sessionId,
+      context: {
+        prefixTokens: budget.prefixTokens,
+        logTokens: budget.logTokens,
+        scratchTokens: budget.scratchTokens,
+        totalTokens: budget.totalTokens,
+        window: budget.window,
+        ratio: budget.ratio,
+      },
+      stats: { ...this.stats },
+      currentAgent: this.currentAgent,
+      isSubmitting: this.isSubmitting,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
   /** 设置系统级 system prompt */
   setSystemPrompt(prompt: string): void {
     this.ctx.prefix.build(prompt)

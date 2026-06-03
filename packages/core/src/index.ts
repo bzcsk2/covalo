@@ -1,6 +1,7 @@
 export { ReasonixEngine } from "./engine.js"
 export { RuntimeLogger, createRuntimeLoggerFromEnv } from "./runtime-logger.js"
 export type { RuntimeLoggerOptions } from "./runtime-logger.js"
+export type { EngineStatusSnapshot } from "./status.js"
 export { ContextManager } from "./context/manager.js"
 export { ImmutablePrefix } from "./context/immutable.js"
 export { AppendOnlyLog } from "./context/append-log.js"

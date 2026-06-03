@@ -61,7 +61,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 顺序 | 任务 | 原因 |
 |------|------|------|
 | 1 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
-| 2 | `STAT-10` 状态卡片，按 [ADVICE.md](ADVICE.md) 推进 | Plugin 系统已完成，需实现状态显示。 |
+| 2 | `STAT-20` Slash command 接入，按 [ADVICE.md](ADVICE.md) 推进 | STAT-10 已完成，需实现 /status 命令。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。
 
@@ -176,7 +176,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 ## 3. 当前验证状态
 
 
-下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `STAT-10` 开始领取。
+下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `STAT-20` 开始领取。
 
 ---
 

@@ -21,7 +21,7 @@ bun test
 | 检查项 | 状态 |
 |--------|------|
 | TypeScript | `bun run typecheck` 通过 |
-| 测试 | `945 pass / 0 fail / 18 skip`，共 `72` 个测试文件 |
+| 测试 | `953 pass / 0 fail / 18 skip`，共 `73` 个测试文件 |
 | 稳定性 | 连续 3 次全绿（TEST-STABILITY-01 已关闭） |
 | CI | ✓ ubuntu-latest ✓ windows-latest ✓ macos-latest（OS-17-R 已关闭） |
 
@@ -813,7 +813,15 @@ DEEPICODE_TRACE=1
 
 ---
 
-## 8. 文档维护规则
+## 8. Status 卡片
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| STAT-10：Core 状态快照 | ✅ 已完成 | EngineStatusSnapshot、getStatusSnapshot()、8 个测试 |
+
+---
+
+## 9. 文档维护规则
 
 1. `DONE.md` 只记录已存在且仍然成立的能力。
 2. 未完成事项移入 `TODO.md`，不要在 DONE 中维护第二套待办列表。

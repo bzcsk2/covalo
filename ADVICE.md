@@ -1569,12 +1569,15 @@ getSessionId(): string
 
 ### STAT-10：Core 状态快照
 
-目标：
+**状态：✅ 已完成（2026-06-03）**
 
-- 新增 `EngineStatusSnapshot` 类型。
-- `ReasonixEngine` 新增 `getStatusSnapshot()`。
+实现内容：
+
+- 新增 `EngineStatusSnapshot` 类型（`packages/core/src/status.ts`）。
+- `ReasonixEngine` 新增 `getStatusSnapshot()` 方法。
 - 从 `ContextManager.getBudget()` 读取真实 context。
 - 不改变现有 `submit()` 行为。
+- 8 个单元测试覆盖所有场景。
 
 测试：
 
