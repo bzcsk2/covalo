@@ -157,8 +157,10 @@ describe("ContextPolicyStore", () => {
   })
 
   it("should return false when save fails", async () => {
-    // Create store with invalid path
-    const invalidStore = new ContextPolicyStore("/nonexistent/path/that/does/not/exist")
+    const fileAsWorkspace = join(tmpDir, "not-a-directory")
+    await writeFile(fileAsWorkspace, "blocks nested .deepicode creation")
+
+    const invalidStore = new ContextPolicyStore(fileAsWorkspace)
     const saved = await invalidStore.save(DEFAULT_CONTEXT_POLICY)
     expect(saved).toBe(false)
   })

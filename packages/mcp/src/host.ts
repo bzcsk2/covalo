@@ -88,10 +88,11 @@ export class McpHost {
       this.logger.info("mcp.server.connect.start", { mcpServer: name })
     }
 
+    const client = new McpClient(name, this.logger)
+    this.clients.set(name, client)
+
     try {
-      const client = new McpClient(name, this.logger)
       await client.connect(config.command, config.args ?? [], config.env)
-      this.clients.set(name, client)
 
       // Register tools (sorted for stable prefix cache)
       const tools = (await client.listTools()).sort((a, b) => a.name.localeCompare(b.name))
@@ -123,6 +124,10 @@ export class McpHost {
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("mcp.server.connect.error", { mcpServer: name, durationMs: Date.now() - startedAt, errorClass: e instanceof Error ? e.name : "Unknown" })
       }
+      if (this.clients.get(name) === client) {
+        this.clients.delete(name)
+      }
+      await client.disconnect().catch(() => {})
       throw e
     }
   }

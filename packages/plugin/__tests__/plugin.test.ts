@@ -4,6 +4,7 @@ import { loadPlugins } from "../src/loader.js"
 import { mkdirSync, writeFileSync, unlinkSync, rmSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { pathToFileURL } from "node:url"
 
 describe("Plugin Config", () => {
   const tmpDir = join(tmpdir(), "plugin-config-test-" + Date.now())
@@ -34,7 +35,7 @@ describe("Plugin Config", () => {
   })
 
   it("reads file:// URL plugins", () => {
-    writeFileSync(configPath, JSON.stringify(["file:///path/to/plugin.ts"]))
+    writeFileSync(configPath, JSON.stringify([pathToFileURL(join(tmpDir, "plugin.ts")).href]))
     const result = readPluginConfig(configPath)
     expect(result.items.length).toBe(1)
     expect(result.items[0].spec).toContain("plugin.ts")

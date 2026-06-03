@@ -124,10 +124,12 @@ describe("CL-10: MCP client lifecycle", () => {
     const origTimeout = 30_000
     // We can't easily mock the timeout, so verify basic connect-then-disconnect works
     const host = new McpHost()
-    const p = host.connect("silent", { command: process.execPath, args: [script] })
+    const connectPromise = host.connect("silent", { command: process.execPath, args: [script] }).catch((error) => error)
     await new Promise(r => setTimeout(r, 100))
     // Connection will hang — disconnect and verify no crash
     await host.disconnectAll().catch(() => {})
+    const result = await connectPromise
+    expect(result).toBeInstanceOf(Error)
     // Should have cleaned up
     expect(true).toBe(true)
   })
