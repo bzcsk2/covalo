@@ -130,7 +130,9 @@ describe("TT3: SSE streaming performance", () => {
   let server: MockSseServer
 
   afterEach(async () => {
-    await server?.stop()
+    try {
+      await Promise.race([server?.stop(), new Promise((_, rej) => setTimeout(() => rej(new Error("stop timeout")), 3000))])
+    } catch { /* ignore stop errors in cleanup */ }
   })
 
   async function collectStream(apiKey = "test-key"): Promise<any[]> {

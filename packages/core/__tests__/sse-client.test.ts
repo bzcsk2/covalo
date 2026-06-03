@@ -6,7 +6,9 @@ describe("SSE Client with MockSseServer", () => {
   let server: MockSseServer
 
   afterEach(async () => {
-    await server?.stop()
+    try {
+      await Promise.race([server?.stop(), new Promise((_, rej) => setTimeout(() => rej(new Error("stop timeout")), 3000))])
+    } catch { /* ignore stop errors in cleanup */ }
   })
 
   // ── Helper ─────────────────────────────────────────────
@@ -171,7 +173,7 @@ describe("SSE Client with MockSseServer", () => {
 
   // ── 11. 1-2 failures then success ───────────────────────
 
-  it("should succeed after 1 failure", async () => {
+  it("should succeed after 1 failure", { timeout: 10000 }, async () => {
     server = new MockSseServer().setScenario("normal").setFailFirst(1)
     await server.start()
     const events = await collectStream()

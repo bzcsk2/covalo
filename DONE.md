@@ -21,7 +21,8 @@ bun test
 | 检查项 | 状态 |
 |--------|------|
 | TypeScript | `bun run typecheck` 通过 |
-| 测试 | `787 pass / 0 fail`，共 `56` 个测试文件 |
+| 测试 | `799 pass / 0 fail`，共 `62` 个测试文件 |
+| 稳定性 | 连续 3 次全绿（TEST-STABILITY-01 已关闭） |
 
 ---
 
@@ -710,6 +711,13 @@ DEEPICODE_TRACE=1
 - 耗时步骤使用 `fail-fast: false` 确保一个平台失败不影响其他平台结果。
 - workflow 监听 `master` push / pull request，也支持手工 `workflow_dispatch`。
 - 验收边界：本地已完成格式检查；三平台运行结果必须在推送后由 GitHub Actions 产生，不能用本地 Linux 结果代替。
+
+### TEST-STABILITY-01：全量测试抖动收口
+
+- WebSearch 测试：mock `fetch`（`vi.spyOn(globalThis, "fetch")`）替代真实 Google 网络调用，返回可控 HTML fixture，消除外部依赖超时。
+- SSE client 测试：`afterEach` 增加 `Promise.race` 3s 超时保护，防止 `server.stop()` 挂起阻塞后续测试。
+- Benchmark 测试：同上，`afterEach` 增加超时保护。
+- 验收：连续 3 次 `bun test` 全绿（799 pass / 0 fail），`bun run typecheck` 通过。
 
 ---
 

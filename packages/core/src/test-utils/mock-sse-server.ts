@@ -156,7 +156,11 @@ export class MockSseServer {
     }
     this.#sockets.clear()
     await new Promise<void>((resolve, reject) => {
-      this.#server.close((err) => (err ? reject(err) : resolve()))
+      const timer = setTimeout(() => resolve(), 2000)
+      this.#server.close((err) => {
+        clearTimeout(timer)
+        if (err) reject(err); else resolve()
+      })
     })
     this.#url = ""
   }

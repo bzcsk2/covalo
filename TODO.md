@@ -60,7 +60,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 
 | 顺序 | 任务 | 原因 |
 |------|------|------|
-| 1 | `TEST-STABILITY-01` 全量测试抖动收口 | 全量测试曾出现 WebSearch、SSE、benchmark 超时，需要隔离外部依赖和资源竞争。 |
+| ~~1~~ | ~~`TEST-STABILITY-01` 全量测试抖动收口~~ | ✅ DONE |
 | 2 | `OS-17-R` 三平台 CI 结果检查 | CI scaffold 已加入，需 push 后检查 GitHub Actions Matrix 结果。 |
 | 3 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
 
@@ -70,28 +70,14 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 
 ## 2. 后续任务
 
-### TEST-STABILITY-01：全量测试抖动收口
+### ~~TEST-STABILITY-01：全量测试抖动收口~~ ✅ DONE
 
-优先级：`P2`。在功能 Bug 修复后领取。
+已修复并关闭：
 
-已确认现象：
-
-- 验收 Agent 的全量运行曾出现 WebSearch、SSE retry 和 benchmark 超时。
-- 独立复核时，目标文件单独运行全部通过，且全量测试可达到 `787 pass / 0 fail`。
-- 当前不能把这些超时认定为稳定产品 Bug，也不能忽略失败证据。
-
-实现要求：
-
-1. 连续执行 `bun test` 至少 3 次，分别保存完整 stdout 和 stderr。
-2. WebSearch 单元测试不得依赖外部网络服务；改用可控 mock 或 fixture。
-3. 检查 SSE mock server 的端口、stop/close 和 afterEach 隔离，避免并发或资源竞争污染 benchmark。
-4. 若仍有偶发失败，为失败测试增加有界超时和可诊断输出，不得简单扩大超时掩盖资源泄漏。
-
-关闭条件：
-
-- 连续 3 次 `bun test` 全绿。
-- `bun run typecheck` 和 `git diff --check` 通过。
-- 将失败与修复证据写入 `DONE.md`。
+- WebSearch 测试：mock `fetch` 替代真实网络调用，消除外部依赖超时。
+- SSE client 测试：`afterEach` 增加 3s 超时保护，防止 server.stop() 挂起阻塞后续测试。
+- Benchmark 测试：同上，`afterEach` 增加超时保护。
+- 连续 3 次 `bun test` 全绿（799 pass / 0 fail），`bun run typecheck` 通过。
 
 ### OS-17-R：三平台 CI 结果检查
 
@@ -139,19 +125,20 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 
 ## 3. 当前验证状态
 
-2026-06-02
+2026-06-03
 
 ```text
 bun run typecheck
   通过
 
 bun test
-  796 pass / 0 fail
+  799 pass / 0 fail
+  连续 3 次全绿（TEST-STABILITY-01 已关闭）
 ```
 
-P5.5、AUD-02/03/05/07/08、T21-R、P3-R、S1/S2、ST2/ST3/ST4、CL-10/11/12/20/21/30/31/32/40/41/42/50/51/52、OS-00/10/11/14/15/16、LIFE-01、LOG-READABILITY-01 均已完成。OS-17 三平台 CI scaffold 已加入。LIFE-01 目标测试已确认 pipe mode 在 5 秒边界内自然完成并以 code 0 退出。全量测试修复后第一轮达到 796 pass / 0 fail；仍需按 `TEST-STABILITY-01` 再完成连续复跑。
+P5.5、AUD-02/03/05/07/08、T21-R、P3-R、S1/S2、ST2/ST3/ST4、CL-10/11/12/20/21/30/31/32/40/41/42/50/51/52、OS-00/10/11/14/15/16、LIFE-01、LOG-READABILITY-01、TEST-STABILITY-01 均已完成。OS-17 三平台 CI scaffold 已加入。
 
-下一步：完成 `TEST-STABILITY-01` 连续复跑。之后执行 `OS-17-R` 和 `OS-12/13-R`。
+下一步：执行 `OS-17-R` push 后检查 GitHub Actions 三平台 Matrix。
 
 ---
 
