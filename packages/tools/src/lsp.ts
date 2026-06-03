@@ -35,19 +35,37 @@ type LspAction =
   | "rename_preview"
   | "server_status"
   | "restart_server"
+  | "goToDefinition"
+  | "findReferences"
+  | "goToImplementation"
+  | "documentSymbol"
+  | "workspaceSymbol"
 
 const ACTION_METHODS: Record<string, string> = {
   hover: "textDocument/hover",
   definition: "textDocument/definition",
+  goToDefinition: "textDocument/definition",
   declaration: "textDocument/declaration",
   type_definition: "textDocument/typeDefinition",
   implementation: "textDocument/implementation",
+  goToImplementation: "textDocument/implementation",
   references: "textDocument/references",
+  findReferences: "textDocument/references",
   document_symbols: "textDocument/documentSymbol",
+  documentSymbol: "textDocument/documentSymbol",
   workspace_symbols: "workspace/symbol",
+  workspaceSymbol: "workspace/symbol",
   completion: "textDocument/completion",
   signature_help: "textDocument/signatureHelp",
   rename_preview: "textDocument/rename",
+}
+
+const ALIAS_MAP: Record<string, LspAction> = {
+  goToDefinition: "definition",
+  findReferences: "references",
+  goToImplementation: "implementation",
+  documentSymbol: "document_symbols",
+  workspaceSymbol: "workspace_symbols",
 }
 
 const VALID_ACTIONS: LspAction[] = [
@@ -55,6 +73,8 @@ const VALID_ACTIONS: LspAction[] = [
   "implementation", "references", "document_symbols",
   "workspace_symbols", "diagnostics", "completion",
   "signature_help", "rename_preview", "server_status", "restart_server",
+  "goToDefinition", "findReferences", "goToImplementation",
+  "documentSymbol", "workspaceSymbol",
 ]
 
 export function createLspTool(): AgentTool {
@@ -90,7 +110,8 @@ export function createLspTool(): AgentTool {
       if (!VALID_ACTIONS.includes(args.action as LspAction)) {
         return { content: safeStringify({ error: `Unsupported LSP action: ${args.action}` }), isError: true }
       }
-      const action = args.action as LspAction
+      const rawAction = args.action as LspAction
+      const action = ALIAS_MAP[rawAction] ?? rawAction
 
       if (action === "server_status") {
         return { content: safeStringify({ status: "ok", action: "server_status", message: "LSP manager not yet implemented" }), isError: false }

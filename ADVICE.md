@@ -1,12 +1,13 @@
-# Deepicode LSP、Plugin 与 Status 专项实现设计
+# Deepicode LSP、Plugin、Status 与 Context 专项实现设计
 
 最后更新：2026-06-03
 
-本文记录两个下一阶段专项方案：
+本文记录四个下一阶段专项方案：
 
 1. **LSP**：从最小可用实现升级为完整工程能力。
 2. **Plugin**：增加与 opencode server plugin 形态兼容的扩展系统。
 3. **Status**：增加类似 Codex `/status` 的运行状态卡片。
+4. **Context**：保留现有裁剪能力，增加可选摘要压缩能力和 `/context` 配置菜单。
 
 当前项目总待办仍以 [TODO.md](TODO.md) 为准；已完成能力和历史结论见 [DONE.md](DONE.md)；验收步骤见 [TEST.md](TEST.md)。
 
@@ -542,6 +543,13 @@ textDocument/didChange {
 关闭条件：
 
 - 每个 action 至少一个成功测试和一个参数错误测试。
+
+**状态：✅ 已完成（2026-06-03）**
+
+实现内容：
+
+- `packages/tools/src/lsp.ts`：支持 14 个 actions + 5 个别名（goToDefinition、findReferences、goToImplementation、documentSymbol、workspaceSymbol）
+- `packages/tools/__tests__/lsp-actions.test.ts`：28 个单元测试覆盖所有 actions 和错误处理
 
 ### LSP-50：真实语言服务器验收
 
@@ -1639,5 +1647,711 @@ bun test packages/tui/__tests__/status-format.test.ts
 2. `STAT-20`：Slash command 接入。
 3. `STAT-30`：Codex 风格格式化。
 4. `STAT-40`：文档和验收。
+
+每次只领取一个阶段。完成后更新 `DONE.md` 和 `TODO.md`，并至少运行对应目标测试、`bun run typecheck`、`git diff --check`。
+
+---
+
+# Deepicode /context 上下文裁剪与压缩专项设计
+
+## 34. 当前结论
+
+Deepicode 现在已有上下文裁剪能力，但没有摘要式上下文压缩：
+
+- `ContextManager` 使用 `ImmutablePrefix + AppendOnlyLog + VolatileScratch`。
+- `truncateByRounds()` 按 user 轮次保留最近若干轮。
+- `truncateToBudget()` 在超过窗口时删除旧消息，防止请求超窗。
+- `getBudget()` 能计算 prefix/log/scratch/total/window/ratio。
+- loop 层已有 fold/status 信号，但没有真正把旧历史总结成 summary。
+
+用户目标是：
+
+1. 保留现有裁剪功能。
+2. 增加“压缩”功能：用模型把旧历史总结为摘要，替代被移除的旧消息。
+3. 用户可以选择策略：裁剪或压缩。
+4. 通过 `/context` 菜单配置。
+5. 二级菜单配置两个百分比参数：
+   - `70%`：达到上下文窗口 70% 时开始裁剪或压缩。
+   - `30%`：裁剪或压缩后目标降到上下文窗口 30%。
+
+核心设计：把“何时触发”和“触发后降到多少”从硬编码裁剪逻辑中抽出来，形成可配置的 ContextPolicy。
+
+## 35. 设计目标
+
+### 必须达到
+
+1. 保留当前裁剪行为作为默认安全 fallback。
+2. 新增策略：
+   - `trim`：只裁剪，不摘要。
+   - `compress`：优先摘要压缩，失败时裁剪。
+3. 新增 `/context` 菜单。
+4. `/context` 二级菜单支持配置：
+   - strategy：`trim` / `compress`
+   - triggerRatio：默认 `0.70`
+   - targetRatio：默认 `0.30`
+5. 配置变更立即作用于当前 session。
+6. 可持久化到 `.deepicode/context.json` 或主 config。
+7. 压缩摘要必须进入上下文，且明确标记为 summary，不伪装成用户/助手原始消息。
+8. 压缩不能破坏 tool_call / tool result 对应关系。
+9. 压缩失败不能阻塞主流程，必须 fallback 到裁剪。
+10. 提供测试覆盖，保证不会出现无限压缩、重复摘要、上下文越压越大。
+
+### 非目标
+
+- 不实现向量数据库长期记忆。
+- 不做跨 session 自动知识库。
+- 不把压缩摘要写回所有历史 JSONL 替代原始消息。
+- 不让压缩调用绕过用户选择。
+- 不在每轮都压缩；只在达到 triggerRatio 时触发。
+- 不压缩 `ImmutablePrefix` 和当前轮 `VolatileScratch`。
+
+## 36. 策略模型
+
+新增类型：
+
+```ts
+export type ContextPolicyMode = "trim" | "compress";
+
+export interface ContextPolicy {
+  mode: ContextPolicyMode;
+  triggerRatio: number; // default 0.70
+  targetRatio: number;  // default 0.30
+  enabled: boolean;     // default true
+}
+```
+
+默认配置：
+
+```json
+{
+  "enabled": true,
+  "mode": "trim",
+  "triggerRatio": 0.7,
+  "targetRatio": 0.3
+}
+```
+
+校验规则：
+
+- `0.10 <= targetRatio < triggerRatio <= 0.95`
+- 推荐 UI 只开放常用选项：
+  - trigger：`60%` / `70%` / `80%`
+  - target：`20%` / `30%` / `40%`
+- 初始默认使用用户指定的 `70% -> 30%`。
+- 如果用户设置非法值，保持旧配置并显示错误。
+
+## 37. Core 架构方案
+
+### 37.1 ContextManager 职责拆分
+
+当前 `prepareLog()` 直接执行：
+
+```ts
+truncateByRounds()
+truncateToBudget()
+```
+
+建议改成：
+
+```text
+ContextManager
+  ├─ buildMessages()
+  ├─ getBudget()
+  ├─ applyPolicy()
+  ├─ trimToTarget()
+  ├─ installSummary()
+  └─ getCompressionCandidate()
+```
+
+新增内部概念：
+
+```ts
+interface ContextCompressionState {
+  summaryMessages: ChatMessage[];
+  lastCompressedAtMessageIndex: number;
+  compressionCount: number;
+}
+```
+
+摘要消息建议使用 `system` 或 `assistant`？
+
+推荐使用 `system` 后缀消息，但必须放在 prefix 后、log 前，独立成 `summary` 区域更清晰：
+
+```text
+ImmutablePrefix
+ContextSummary
+AppendOnlyLog recent tail
+VolatileScratch
+```
+
+新增第四区：
+
+```text
+packages/core/src/context/summary.ts
+```
+
+```ts
+export class ContextSummary {
+  messages: ChatMessage[];
+  replace(summary: string, metadata: ContextSummaryMetadata): void;
+  clear(): void;
+}
+```
+
+消息形态：
+
+```ts
+{
+  role: "system",
+  content: [
+    "Previous conversation summary:",
+    summary,
+    "",
+    "This summary was generated to reduce context usage. Prefer recent messages when conflicts exist."
+  ].join("\n")
+}
+```
+
+原因：
+
+- summary 不是用户输入，也不是模型本轮输出。
+- 放在 system role 中更稳定提醒模型。
+- 与 immutable prefix 分开，避免改变 prefix fingerprint 和 tool schema cache。
+
+### 37.2 裁剪模式 trim
+
+`trim` 模式保留当前语义，但参数化：
+
+- 当 `budget.ratio < triggerRatio`：不处理。
+- 当 `budget.ratio >= triggerRatio`：裁剪旧 log，直到 `totalTokens <= targetRatio * window`。
+- 如果因 prefix/scratch 太大无法降到 targetRatio，只降到可达最小值，并记录 warning。
+
+新增方法：
+
+```ts
+trimToTarget(targetTokens: number): ContextReductionResult
+```
+
+返回：
+
+```ts
+interface ContextReductionResult {
+  mode: "trim" | "compress";
+  beforeTokens: number;
+  afterTokens: number;
+  removedMessages: number;
+  summaryTokens?: number;
+  fallback?: boolean;
+  warning?: string;
+}
+```
+
+### 37.3 压缩模式 compress
+
+触发条件：
+
+- 当前策略 `mode === "compress"`。
+- `budget.ratio >= triggerRatio`。
+- 当前没有正在执行 compression。
+- 有足够旧消息可压缩。
+- 不能压缩当前 user turn 和未完成 tool 组。
+
+候选范围：
+
+- 从 log 最旧消息开始。
+- 保留 recent tail，确保压缩后总量可降到 targetRatio。
+- 候选必须按完整 user round 切分。
+- 候选中如果包含 assistant tool_calls，必须包含对应 tool result；否则该边界不合法。
+
+算法建议：
+
+1. 计算 `targetTokens = window * targetRatio`。
+2. 计算 `protectedTokens = prefix + summary + scratch + recentTailMinTokens`。
+3. 从最旧轮开始选择 candidate，直到压缩后预计能接近 target。
+4. 调用 summarizer 生成 summary。
+5. 将原有 summary + candidate 一起总结成新 summary，避免 summary 越积越多。
+6. 从 log 删除 candidate。
+7. `ContextSummary.replace(newSummary)`。
+8. 再执行一次 `trimToTarget()` 作为兜底。
+
+### 37.4 Summarizer 设计
+
+不要把压缩逻辑写死在 `ContextManager` 里。新增接口：
+
+```ts
+export interface ContextSummarizer {
+  summarize(input: ContextSummarizeInput, signal?: AbortSignal): Promise<ContextSummarizeOutput>;
+}
+
+export interface ContextSummarizeInput {
+  previousSummary?: string;
+  messages: ChatMessage[];
+  targetTokens: number;
+  workspaceRoot: string;
+}
+
+export interface ContextSummarizeOutput {
+  summary: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+```
+
+实现位置：
+
+```text
+packages/core/src/context/summarizer.ts
+```
+
+第一版实现：
+
+- 使用当前 `DeepSeekClient`。
+- 使用低温度。
+- maxTokens 按 `targetTokens` 上限控制。
+- 不携带 tools。
+- 不写入普通 conversation log。
+- 不触发 tool execution。
+- 失败抛结构化错误，由 Engine fallback 到 trim。
+
+摘要 prompt 要求：
+
+```text
+Summarize the older conversation for future continuation.
+Keep:
+- user goals and constraints
+- files changed and reasons
+- decisions made
+- unresolved TODOs
+- bugs found and fixes attempted
+- commands/tests already run
+Drop:
+- repetitive logs
+- raw tool output unless essential
+- transient UI chatter
+When conflicts exist, newer messages override older summary.
+```
+
+### 37.5 Engine 集成点
+
+不要在 `buildMessages()` 内部发起模型压缩，因为 `buildMessages()` 当前是同步方法。推荐在 `ReasonixEngine.submit()` 开始前做 async policy：
+
+```ts
+await this.maybeReduceContext()
+```
+
+顺序：
+
+1. 用户提交前或刚 append user message 后？
+2. 推荐在 append 当前 user message 之前检查旧上下文。
+3. 如果压缩发生，压缩旧历史；然后 append 当前 user message。
+
+原因：当前用户输入应尽量保留原文，不参与刚触发的压缩。
+
+伪流程：
+
+```ts
+async *submit(userInput: string) {
+  await this.maybeReduceContext({ reason: "before_user_turn" });
+  this.ctx.startTurn();
+  this.ctx.log.append({ role: "user", content: userInput });
+  ...
+}
+```
+
+如果 append 后立刻超窗，再由现有 `truncateToBudget()` 兜底。
+
+新增 Engine API：
+
+```ts
+getContextPolicy(): ContextPolicy;
+setContextPolicy(policy: Partial<ContextPolicy>): void;
+getContextStatus(): Promise<ContextPolicyStatus>;
+runContextReduction(mode?: ContextPolicyMode): Promise<ContextReductionResult>;
+```
+
+`runContextReduction()` 供 `/context` 菜单里的“立即执行一次”使用，第一阶段可以不开放立即执行，只做配置。
+
+## 38. TUI `/context` 菜单设计
+
+### 38.1 Slash command
+
+修改：
+
+- `packages/tui/src/commands.ts`
+- `packages/tui/src/CommandRegistry.ts`
+- `packages/tui/src/App.tsx`
+
+新增：
+
+```ts
+| { name: "context" }
+```
+
+`/help` 增加：
+
+```text
+/context    — configure context trimming/compression
+```
+
+### 38.2 菜单组件
+
+新增：
+
+```text
+packages/tui/src/ContextMenu.tsx
+```
+
+交互要求：
+
+一级菜单：
+
+```text
+Context management
+❯ Mode: Trim only
+  Mode: Compress summary
+  Trigger at: 70%
+  Reduce to: 30%
+  Apply and close
+  Cancel
+```
+
+也可以设计为二级菜单：
+
+```text
+/context
+  Strategy
+    Trim
+    Compress
+  Thresholds
+    Trigger at 70%
+    Reduce to 30%
+```
+
+用户明确要求“二级菜单是两个参数”，推荐实现为：
+
+一级：
+
+```text
+Context
+❯ Strategy: trim/compress
+  Thresholds: 70% -> 30%
+  Close
+```
+
+进入 `Thresholds` 后：
+
+```text
+Thresholds
+❯ Start at: 70%
+  Target:   30%
+  Save
+```
+
+按键：
+
+- ↑↓ 移动。
+- Enter 进入或切换。
+- Esc 返回上级；顶层 Esc 关闭。
+- 左右键在百分比选项中切换。
+
+### 38.3 用户可见文案
+
+模式说明：
+
+```text
+Trim: remove oldest turns when context reaches 70%, down to 30%.
+Compress: summarize oldest turns when context reaches 70%, down to 30%; falls back to trim if summarization fails.
+```
+
+状态显示：
+
+```text
+Current usage: 42% (54K / 128K)
+Policy: compress at 70% -> 30%
+```
+
+配置成功后插入 assistant message：
+
+```text
+Context policy updated: compress at 70% -> 30%.
+```
+
+压缩发生时插入 warning/status 或 timeline event：
+
+```text
+Context compressed: 91K -> 38K, summarized 42 messages.
+```
+
+## 39. 配置持久化
+
+第一阶段建议使用独立文件：
+
+```text
+.deepicode/context.json
+```
+
+格式：
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "mode": "trim",
+  "triggerRatio": 0.7,
+  "targetRatio": 0.3
+}
+```
+
+理由：
+
+- 不扩大现有 `DeepicodeConfig` 的加载风险。
+- 方便单独测试。
+- 用户可手动编辑。
+
+后续可以合并进主 config。
+
+新增模块：
+
+```text
+packages/core/src/context/policy.ts
+packages/core/src/context/policy-store.ts
+```
+
+加载顺序：
+
+1. 默认值。
+2. `.deepicode/context.json`。
+3. 环境变量覆盖：
+   - `DEEPICODE_CONTEXT_MODE=trim|compress`
+   - `DEEPICODE_CONTEXT_TRIGGER=0.7`
+   - `DEEPICODE_CONTEXT_TARGET=0.3`
+
+TUI 保存时写 `.deepicode/context.json`。
+
+## 40. 事件与日志
+
+LoopEvent 增加或复用 `status`：
+
+```ts
+{
+  role: "status",
+  content: "context_compressed",
+  metadata: {
+    mode: "compress",
+    beforeTokens,
+    afterTokens,
+    removedMessages,
+    summaryTokens,
+    triggerRatio,
+    targetRatio
+  }
+}
+```
+
+RuntimeLogger 事件：
+
+- `context.policy.load`
+- `context.policy.update`
+- `context.reduction.check`
+- `context.trim.start`
+- `context.trim.done`
+- `context.compress.start`
+- `context.compress.done`
+- `context.compress.error`
+- `context.compress.fallback_trim`
+
+日志要求：
+
+- 不记录完整消息内容。
+- 可以记录 message count、token count、mode、durationMs。
+- summarizer 错误记录 errorClass，不记录 prompt 全文。
+
+## 41. 安全与正确性边界
+
+1. 不压缩 `ImmutablePrefix`。
+2. 不压缩当前用户输入。
+3. 不压缩未闭合 tool_call / tool result 组。
+4. 压缩摘要不能覆盖原始 session JSONL；原始历史仍保留在磁盘。
+5. 压缩产生的 summary 写入当前上下文和后续 messages snapshot，但要能被识别为 summary。
+6. summarizer 不带 tools，避免压缩过程触发工具调用。
+7. summarizer 请求失败、超时或返回空摘要时 fallback trim。
+8. 如果 targetRatio 低于 prefix+scratch 最小可达比例，显示 warning，不要死循环。
+9. 多次压缩应合并旧 summary，而不是堆叠多个 summary。
+10. 用户切回 trim 后，已有 summary 保留；可后续增加 “clear summary” 功能。
+
+## 42. 实施阶段
+
+### CTX-10：策略类型、配置加载和菜单解析
+
+目标：
+
+- 新增 `ContextPolicy` 类型和默认值。
+- 新增 `.deepicode/context.json` loader/saver。
+- 支持 env override。
+- 校验 `targetRatio < triggerRatio`。
+- `/context` 命令解析和 autocomplete 注册。
+
+测试：
+
+- 默认是 `trim 70% -> 30%`。
+- 非法配置 fallback 默认值并给出错误。
+- env override 生效。
+- `/context` 被正确解析。
+
+目标测试：
+
+```bash
+bun test packages/core/__tests__/context-policy.test.ts
+bun test packages/tui/__tests__/commands.test.ts
+bun run typecheck
+```
+
+### CTX-20：ContextManager 参数化裁剪
+
+目标：
+
+- 将 `truncateToBudget()` 改造为可按 targetRatio 裁剪。
+- 新增 `trimToTarget(targetTokens)`。
+- 保持当前默认行为不回归。
+- 处理 prefix/scratch 不可达 target 的情况。
+
+测试：
+
+- 超过 70% 时可裁到 30%。
+- 未超过 trigger 不裁剪。
+- tool 组不被切坏。
+- 无 user message 极端情况仍不死循环。
+- prefix 超窗仍抛配置错误。
+
+目标测试：
+
+```bash
+bun test packages/core/__tests__/context-manager.test.ts
+bun run typecheck
+```
+
+### CTX-30：摘要区和 summarizer 接口
+
+目标：
+
+- 新增 `ContextSummary` 区域。
+- `buildMessages()` 顺序变为 prefix + summary + log + scratch。
+- 新增 `ContextSummarizer` 接口。
+- 实现 fake summarizer 用于测试。
+- 暂不接真实 LLM。
+
+测试：
+
+- summary 位于 prefix 后、log 前。
+- replace summary 不改变 immutable prefix fingerprint。
+- 多次 replace 只保留一个 summary。
+- summary tokens 计入 budget。
+
+目标测试：
+
+```bash
+bun test packages/core/__tests__/context-summary.test.ts
+```
+
+### CTX-40：Engine 自动 trim/compress 触发
+
+目标：
+
+- `ReasonixEngine` 增加 `getContextPolicy()`、`setContextPolicy()`、`getContextStatus()`。
+- `submit()` 前检查 budget。
+- mode=`trim` 时自动裁剪。
+- mode=`compress` 时使用 summarizer；失败 fallback trim。
+- 产生 status event 和 runtime logs。
+
+测试：
+
+- 低于 70% 不触发。
+- 高于 70% 触发 trim。
+- compress 成功后安装 summary 并删除旧轮次。
+- compress 失败 fallback trim。
+- 当前用户输入不被压缩。
+- 不调用工具。
+
+目标测试：
+
+```bash
+bun test packages/core/__tests__/engine-context-policy.test.ts
+```
+
+### CTX-50：真实 LLM summarizer
+
+目标：
+
+- 用当前 provider client 实现真实 summarizer。
+- maxTokens 受 targetRatio 约束。
+- timeout 和 AbortSignal 生效。
+- summarizer 不带 tools。
+- 记录 usage，但不污染普通 stats 或明确单独统计。
+
+测试：
+
+- fake SSE summary 路径。
+- summarizer HTTP 错误 fallback trim。
+- abort 时停止 summarizer。
+- 空摘要 fallback trim。
+
+目标测试：
+
+```bash
+bun test packages/core/__tests__/context-summarizer.test.ts
+```
+
+### CTX-60：TUI `/context` 菜单
+
+目标：
+
+- 新增 `ContextMenu.tsx`。
+- `/context` 打开菜单。
+- 支持 strategy 和 thresholds 二级菜单。
+- 保存后调用 engine/set policy，并写入 `.deepicode/context.json`。
+- 菜单不影响输入历史和 slash autocomplete。
+
+测试：
+
+- 菜单打开/关闭。
+- strategy 切换。
+- trigger/target 切换。
+- 保存后调用 setter。
+- Esc 返回/关闭。
+
+目标测试：
+
+```bash
+bun test packages/tui/__tests__/context-menu.test.ts
+bun test packages/tui/__tests__/commands.test.ts
+```
+
+### CTX-70：文档和验收
+
+目标：
+
+- README 或 TEST.md 增加 `/context` 说明。
+- TODO 增加当前 CTX 阶段，DONE 记录已完成阶段。
+- 手工验收 70% -> 30% 的 trim 和 compress。
+
+手工验收：
+
+1. 启动 TUI。
+2. 输入 `/context`。
+3. 选择 `trim`，设置 `70% -> 30%`，保存。
+4. 用测试 fixture 或长会话制造上下文超过 70%，确认自动裁剪到约 30%。
+5. 切换 `compress`，重复长会话，确认出现 summary。
+6. 模拟 summarizer 失败，确认 fallback trim。
+7. 退出并重启，确认 `.deepicode/context.json` 配置仍生效。
+
+## 43. 建议领取顺序
+
+1. `CTX-10`：策略类型、配置加载和 `/context` 命令入口。
+2. `CTX-20`：参数化裁剪。
+3. `CTX-30`：summary 区域和 summarizer 接口。
+4. `CTX-40`：Engine 自动触发与 fallback。
+5. `CTX-50`：真实 LLM summarizer。
+6. `CTX-60`：TUI `/context` 菜单。
+7. `CTX-70`：文档和验收。
 
 每次只领取一个阶段。完成后更新 `DONE.md` 和 `TODO.md`，并至少运行对应目标测试、`bun run typecheck`、`git diff --check`。
