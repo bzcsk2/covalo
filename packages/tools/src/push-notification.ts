@@ -97,10 +97,22 @@ function osAEscape(s: string): string {
 }
 
 function sendPowerShell(title: string, message: string): Promise<boolean> {
-  // Use WScript COM popup for Windows notifications (no extra dependencies)
+  // Use BurntToast or BalloonTip for non-blocking notification
+  // Fallback: use [System.Windows.Forms] which doesn't block
   const escapedMessage = message.replace(/["\\]/g, "\\$&")
   const escapedTitle = title.replace(/["\\]/g, "\\$&")
-  const script = `(New-Object -ComObject WScript.Shell).Popup("${escapedMessage}", 0, "${escapedTitle}", 64)`
+  // BalloonTip is non-blocking and auto-hides
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+$notify = New-Object System.Windows.Forms.NotifyIcon
+$notify.Icon = [System.Drawing.SystemIcons]::Information
+$notify.BalloonTipTitle = "${escapedTitle}"
+$notify.BalloonTipText = "${escapedMessage}"
+$notify.Visible = $true
+$notify.ShowBalloonTip(3000)
+Start-Sleep -Milliseconds 500
+$notify.Dispose()
+`
 
   return new Promise((resolve) => {
     const proc = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { timeout: 5000 })
