@@ -9,3 +9,6 @@ export type { PluginTool, PluginToolError, PluginToolResult } from "./tool-adapt
 
 export { PluginHookRegistry } from "./hook-adapter.js"
 export type { PluginHookAdapter, HookAdapterError } from "./hook-adapter.js"
+
+export { PluginRuntime, createPluginRuntime } from "./runtime.js"
+export type { PluginRuntimeOptions, PluginRuntimeStatus } from "./runtime.js"

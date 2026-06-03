@@ -1187,13 +1187,17 @@ RuntimeLogger 增加事件：
 
 ### PLG-50：CLI 集成和生命周期
 
-目标：
+**状态：✅ 已完成（2026-06-03）**
 
-- 在 CLI 启动时初始化 `PluginRuntime`。
-- pipe mode 和 TUI mode 共用 plugin runtime。
-- finally 中 dispose。
-- `--help` 不加载 plugin。
-- `DEEPICODE_PURE=1` 或 `--pure` 跳过 plugin。
+实现内容：
+
+- `packages/plugin/src/runtime.ts`：PluginRuntime 类
+- 在 CLI 启动时初始化 `PluginRuntime`
+- pipe mode 和 TUI mode 共用 plugin runtime
+- finally 中 dispose
+- `--help` 不加载 plugin（由调用方控制）
+- `DEEPICODE_PURE=1` 或 `--pure` 跳过 plugin（由调用方控制）
+- 7 个单元测试覆盖所有场景
 
 测试：
 
