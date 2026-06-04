@@ -124,6 +124,8 @@ function Row({ label, value }: { label: string; value: React.ReactNode }): React
 export function WelcomeScreen({ model, provider, agent, thinkingMode }: WelcomeScreenProps): React.ReactElement {
   // 推理模式显示：off 显示为 "自动"
   const thinking = thinkingMode === 'off' ? '自动' : thinkingMode;
+  // 只显示 agent 名称，去掉 " Agent" 后缀
+  const agentShort = agent?.replace(/\s+Agent$/i, '') ?? agent;
 
   return (
     <Box flexDirection="column" width="100%" justifyContent="center" alignItems="center">
@@ -146,7 +148,7 @@ export function WelcomeScreen({ model, provider, agent, thinkingMode }: WelcomeS
         <Panel title="Agent设置">
           <Row label="推理档 " value={<CheckValue>{thinking}</CheckValue>} />
           <Row label="上下文 " value={<CheckValue>压缩</CheckValue>} />
-          <Row label="子代理 " value={<CheckValue>{agent}</CheckValue>} />
+          <Row label="子代理 " value={<CheckValue>{agentShort}</CheckValue>} />
         </Panel>
 
         {/* 列间距：1 字符 */}

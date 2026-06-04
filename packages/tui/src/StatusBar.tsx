@@ -63,6 +63,12 @@ function cacheRate(hit: number, miss: number): string {
 export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, tier, cwd }: StatusBarProps) {
   // 计算缓存命中率
   const rate = cacheRate(cacheHitTokens, cacheMissTokens);
+  // 只显示 agent 名称，去掉 " Agent" 后缀
+  const agentShort = agent?.replace(/\s+Agent$/i, '') ?? agent;
+  // 只显示当前文件夹名
+  const cwdShort = cwd ? cwd.split('/').filter(Boolean).pop() ?? cwd : '';
+  // thinkingMode: off 不显示，其他显示 auto/open/high
+  const showThinking = thinkingMode && thinkingMode !== 'off';
   return (
     <Box width="100%" flexDirection="column">
       {/* 状态警告信息（如 ⚠ 提示），仅在 statusMessage 有值时显示 */}
@@ -77,25 +83,18 @@ export function StatusBar({ model, provider, agent, inputTokens, outputTokens, c
           <Text color={TONE.ok}>{` \u{1F4E5} ${t().pendingTasks}${pendingInstructionCount} `}</Text>
         </Box>
       ) : null}
-      {/* 思考模式（非 "off" 时显示 🧠 Thinking 徽标） */}
-      {thinkingMode && thinkingMode !== 'off' ? (
-        <Box>
-          <Text color={TONE.accent}>{` \u{1F9E0} Thinking: ${thinkingMode} `}</Text>
-        </Box>
-      ) : null}
-      {/* 主信息栏：背景色 bgCode，水平内边距 paddingX=1 */}
-      <Box width="100%" flexDirection="row" backgroundColor={SURFACE.bgCode} paddingX={1}>
-        <Text color={FG.meta}>{`${provider} ${model}`}</Text>
-        <Text color={TONE.accent}>{` [${agent}]`}</Text>
-        {tier ? <Text color={FG.sub}>{` [${tier}]`}</Text> : null}
+      {/* 主信息栏：背景色透明，水平内边距 paddingX=1 */}
+      <Box width="100%" flexDirection="row" paddingX={1}>
+        <Text color={FG.meta}>{`${agentShort} ${model}`}</Text>
+        {showThinking ? <Text color={TONE.accent}>{` [${thinkingMode}]`}</Text> : null}
         {/* flexGrow=1 将后面元素推到右侧 */}
         <Box flexGrow={1} />
-        <Text color={FG.faint}>{`${t().inputTokens}${fmt(inputTokens)} `}</Text>
-        <Text color={FG.faint}>{`${t().cacheHit}${rate} `}</Text>
-        <Text color={FG.faint}>{`${t().outputTokens}${fmt(outputTokens)} `}</Text>
+        <Text color={FG.faint}>{`${fmt(inputTokens)} ${t().inputTokens} `}</Text>
+        <Text color={FG.faint}>{`${rate} ${t().cacheHit} `}</Text>
+        <Text color={FG.faint}>{`${fmt(outputTokens)} ${t().outputTokens} `}</Text>
         {/* contextUsed/contextTotal：上下文使用量 */}
         <Text color={FG.sub}>{`${fmt(contextUsed)}/${fmt(contextTotal)}`}</Text>
-        {cwd ? <Text color={TONE.ok}>{`  ${cwd}`}</Text> : null}
+        {cwdShort ? <Text color={TONE.ok}>{`  ${cwdShort}`}</Text> : null}
       </Box>
     </Box>
   );
