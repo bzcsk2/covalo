@@ -1,18 +1,21 @@
 # Deepicode 后续开发建议
 
-最后更新：2026-06-04
+最后更新：2026-06-04（AGENT-90 P0 ✅）
 
 本文只保留后续 Agent 仍需要执行的专项指导。已完成能力以 [DONE.md](DONE.md) 为准；待办入口以 [TODO.md](TODO.md) 为准；CI 与平台兼容性排查按 [CI-Compatibility-Fix-Guide.md](CI-Compatibility-Fix-Guide.md) 执行。
 
-当前包含三个专项：
+当前包含专项：
 
-- `AGENT-90`：主 Agent Plan/Build 状态与临时 Subagent 架构重构。
+- `AGENT-90`：✅ P0 已完成（详见 [DONE.md 第 10 节](DONE.md#-10-subagent-系统agent-90-p0)），本文保留 P1/P2 参考规划。
 - `CTX-70`：Context 文档和验收。
 - `FG-*`：基于 `Find_ground_Report.md` 的隐性兜底治理剩余项。
 
 ---
 
 ## 1. AGENT-90：Plan/Build 主状态与临时 Subagent 架构
+
+> ✅ **P0 第一阶段已完成**，详见 [DONE.md 第 10 节](DONE.md#-10-subagent-系统agent-90-p0)。
+> 以下保留 P1（Fork）/ P2（Background）规划参考，以及已验证的测试计划和关闭条件。
 
 优先级：`P0`
 

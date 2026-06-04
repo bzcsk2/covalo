@@ -1,6 +1,6 @@
 # Deepicode 完成记录
 
-最后更新：2026-06-04
+最后更新：2026-06-04（AGENT-90）
 
 本文只记录当前代码中仍然成立的已完成功能和已验证修复。
 未完成、待验收、明确暂缓和已驳回方案统一见 [TODO.md](TODO.md)。当前后续专项交接见 [ADVICE.md](ADVICE.md)。
@@ -62,7 +62,8 @@ ReasonixEngine.submit()
 | 会话持久化 | `.deepicode/sessions/*.jsonl`，best-effort append |
 | 上下文 | ImmutablePrefix + AppendOnlyLog + VolatileScratch |
 | 权限 | `PermissionEngine` 的 deny → allow → ask 判定 |
-| Agent | Build Agent + Plan Agent |
+| MainMode | `plan`（只读）+ `build`（完整工具集），`PlanMode` 工具切换 |
+| Subagent | 三种内置角色：`general-purpose` / `Explore` / `Plan`，独立 child engine + 工具过滤 + 四级权限 |
 
 ---
 
@@ -1005,7 +1006,80 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 
 ---
 
-## 10. 文档维护规则
+## 10. Subagent 系统（AGENT-90 P0）
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| AGENT-90 | ✅ 已完成 | Plan/Build 主状态 + 临时 Subagent 第一阶段 |
+
+**实现边界：**
+
+### 10.1 MainMode 主状态
+
+- 新增 `packages/core/src/main-mode.ts`：`MainMode` 类型（`"plan" | "build"`），`MainModeDefinition` 接口包含 `name / label / systemPrompt / toolNames / permissionProfile`。
+- `agent.ts` 收敛为主状态定义，`AGENTS` 与 `MAIN_MODES` 同步，保持 `getAgent()` / `agentConfigFor()` 兼容。
+- `Plan` 的 `permissionProfile: "readonly"`，`toolNames` 仅包含读取工具；`Build` 的 `permissionProfile: "build"`，包含完整工具集。
+- 主状态通过 `switchAgent()` 切换，Plan 写/exec 工具在 permission 层 fail-closed。
+
+### 10.2 Subagent 系统
+
+- 新增 `packages/core/src/subagent/`，包含 5 个模块：
+
+| 模块 | 职责 |
+|------|------|
+| `types.ts` | `SubagentDefinition`、`SubagentRun`、`SubagentRunOptions`、`SubagentRunResult` 等类型 |
+| `definition.ts` | 三个内置子代理：`general-purpose` / `Explore` / `Plan` |
+| `registry.ts` | `SubagentRegistry`：注册、解析、工具过滤 |
+| `permission.ts` | 四级权限：`readonly` / `denyExec` / `acceptEdits` / `bubble` |
+| `run.ts` | `SubagentRunner`：基于子定义创建 child engine 并执行 |
+
+- 所有内置子代理 `disallowedTools` 包含 `AgentTool`，防止嵌套调用。
+
+### 10.3 AgentTool 重构
+
+- AgentTool 支持新参数：`description`、`prompt`、`subagent_type`（`Explore` / `Plan` / `general-purpose`）。
+- 兼容旧参数：`task` → `prompt`，`agent_type` → `subagent_type`。
+- 优先使用 `ctx.spawnSubagent()` 新路径，回退 `ctx.delegateTask()` 旧路径。
+- 返回结构化 JSON：`{ status, id, subagent_type, description, result, files, usage, warnings }`。
+
+### 10.4 engine.spawnSubagent()
+
+- `engine.spawnSubagent(options)` 创建子 `ReasonixEngine`，共享 API client。
+- 注册父级工具（排除 `AgentTool`），按子代理定义过滤 `toolNames` / `disallowedTools`。
+- 按 `permissionMode` 在 permission 层添加 deny rule（fail-closed）。
+- 注入子代理 `systemPrompt`，使用独立 `agentConfig` 运行。
+- 结构化返回结果，子引擎在 `finally` 中始终 shutdown。
+
+### 10.5 测试覆盖
+
+- 3 个新增测试文件：
+  - `packages/core/__tests__/subagent-registry.test.ts`（9 个测试）
+  - `packages/core/__tests__/subagent-permission.test.ts`（16 个测试）
+  - `packages/core/__tests__/subagent-run.test.ts`（9 个测试）
+- 更新 `agent.test.ts` 增加 `getMainMode` 测试。
+- 更新 `workflow-agent-send-lsp.test.ts` 增加新参数测试 + `spawnSubagent` 测试。
+- 所有测试通过，typecheck 通过。
+
+**验收命令：**
+
+```bash
+bun test packages/core/__tests__/agent.test.ts
+bun test packages/core/__tests__/subagent-registry.test.ts
+bun test packages/core/__tests__/subagent-permission.test.ts
+bun test packages/core/__tests__/subagent-run.test.ts
+bun test packages/tools/__tests__/workflow-agent-send-lsp.test.ts
+bun run typecheck
+```
+
+**保留限制：**
+
+- Fork 子代理（上下文继承）为第二阶段，未实现。
+- `run_in_background` 为第三阶段，未实现。
+- `/agent` 命令别名 `/mode` 和 Plan→Build 切换确认尚未更新文案。
+
+---
+
+## 11. 文档维护规则
 
 1. `DONE.md` 只记录已存在且仍然成立的能力。
 2. 未完成事项移入 `TODO.md`，不要在 DONE 中维护第二套待办列表。
