@@ -213,4 +213,86 @@ describe("saveLastConfig / loadConfig 持久化", () => {
     const cfg = loadConfig()
     expect(cfg.provider).toBe("zen")
   })
+
+  describe("kilo", () => {
+    it("should have correct config", () => {
+      const kilo = PROVIDERS.kilo
+      expect(kilo).toBeDefined()
+      expect(kilo.label).toBe("Kilo (Free)")
+      expect(kilo.baseUrl).toBe("https://api.kilo.ai/api/gateway/v1")
+      expect(kilo.requiresKey).toBe(false)
+      expect(kilo.keyless).toBe(true)
+      expect(kilo.models).toHaveLength(2)
+      expect(kilo.models[0]!.model).toBe("nvidia/nemotron-3-super-120b-a12b:free")
+      expect(kilo.models[1]!.model).toBe("poolside/laguna-xs.2:free")
+    })
+  })
+
+  describe("nvidia", () => {
+    it("should have correct config", () => {
+      const nv = PROVIDERS.nvidia
+      expect(nv).toBeDefined()
+      expect(nv.label).toBe("NVIDIA NIM")
+      expect(nv.baseUrl).toBe("https://integrate.api.nvidia.com/v1")
+      expect(nv.requiresKey).toBe(true)
+      expect(nv.models).toHaveLength(6)
+      expect(nv.models[0]!.model).toBe("nvidia/nemotron-3-super-120b-a12b")
+    })
+  })
+
+  describe("free-auto", () => {
+    it("should be virtual and keyless", () => {
+      const fa = PROVIDERS["free-auto"]
+      expect(fa).toBeDefined()
+      expect(fa.label).toBe("Free Auto")
+      expect(fa.virtual).toBe(true)
+      expect(fa.keyless).toBe(true)
+      expect(fa.baseUrl).toBe("")
+      expect(fa.requiresKey).toBe(false)
+    })
+  })
+
+  describe("openai-compatible", () => {
+    it("should have correct config", () => {
+      const oac = PROVIDERS["openai-compatible"]
+      expect(oac).toBeDefined()
+      expect(oac.label).toBe("OpenAI Compatible (Local)")
+      expect(oac.keyless).toBe(true)
+      expect(oac.requiresKey).toBe(false)
+      expect(oac.models).toHaveLength(0)
+    })
+
+    it("should allow any model name", () => {
+      process.env.DEEPICODE_PROVIDER = "openai-compatible"
+      process.env.OPENAI_COMPATIBLE_MODEL = "my-custom-model"
+      process.env.OPENAI_COMPATIBLE_BASE_URL = "http://localhost:8080/v1"
+      const cfg = loadConfig()
+      expect(cfg.provider).toBe("openai-compatible")
+      expect(cfg.model).toBe("my-custom-model")
+      expect(cfg.apiKey).toBe("")
+      expect(cfg.baseUrl).toBe("http://localhost:8080/v1")
+      delete process.env.DEEPICODE_PROVIDER
+      delete process.env.OPENAI_COMPATIBLE_MODEL
+      delete process.env.OPENAI_COMPATIBLE_BASE_URL
+    })
+  })
+
+  describe("loadConfig with keyless providers", () => {
+    it("should handle kilo without API key", () => {
+      process.env.DEEPICODE_PROVIDER = "kilo"
+      const cfg = loadConfig()
+      expect(cfg.provider).toBe("kilo")
+      expect(cfg.apiKey).toBe("")
+      delete process.env.DEEPICODE_PROVIDER
+    })
+
+    it("should handle free-auto as virtual provider", () => {
+      process.env.DEEPICODE_PROVIDER = "free-auto"
+      const cfg = loadConfig()
+      expect(cfg.provider).toBe("free-auto")
+      expect(cfg.apiKey).toBe("")
+      expect(cfg.baseUrl).toBe("")
+      delete process.env.DEEPICODE_PROVIDER
+    })
+  })
 })

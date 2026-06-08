@@ -27,6 +27,10 @@ export interface ProviderInfo {
   models: ProviderModel[]
   defaultKey?: string
   contextWindow?: number
+  /** Keyless providers (Kilo anonymous free tier) must send NO Authorization header */
+  keyless?: boolean
+  /** Virtual providers (Free Auto) do not have a real base URL — routing is handled internally */
+  virtual?: boolean
 }
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000
@@ -67,6 +71,52 @@ export const PROVIDERS: Record<string, ProviderInfo> = {
       { label: "mimo-v2.5", model: "mimo-v2.5", contextWindow: MILLION_TOKEN_CONTEXT_WINDOW },
     ],
   },
+  kilo: {
+    baseUrl: "https://api.kilo.ai/api/gateway/v1",
+    model: "nvidia/nemotron-3-super-120b-a12b:free",
+    requiresKey: false,
+    keyless: true,
+    label: "Kilo (Free)",
+    models: [
+      { label: "Nemotron-3 Super 120B", model: "nvidia/nemotron-3-super-120b-a12b:free", contextWindow: 128_000 },
+      { label: "Laguna XS 2", model: "poolside/laguna-xs.2:free", contextWindow: 128_000 },
+    ],
+  },
+  "free-auto": {
+    baseUrl: "",
+    model: "free-auto",
+    requiresKey: false,
+    keyless: true,
+    virtual: true,
+    label: "Free Auto",
+    models: [
+      { label: "Free Auto", model: "free-auto" },
+    ],
+  },
+  "openai-compatible": {
+    baseUrl: "",
+    model: "",
+    requiresKey: false,
+    keyless: true,
+    label: "OpenAI Compatible (Local)",
+    contextWindow: 128_000,
+    models: [],
+  },
+  nvidia: {
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    model: "nvidia/nemotron-3-super-120b-a12b",
+    requiresKey: true,
+    label: "NVIDIA NIM",
+    contextWindow: 128_000,
+    models: [
+      { label: "Nemotron-3 Super 120B", model: "nvidia/nemotron-3-super-120b-a12b", contextWindow: 128_000 },
+      { label: "Nemotron-3 Nano 30B", model: "nvidia/nemotron-3-nano-30b-a3b", contextWindow: 128_000 },
+      { label: "Nemotron-3 Nano Omni Reasoning", model: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", contextWindow: 128_000 },
+      { label: "Llama 3.1 Nemotron 70B", model: "nvidia/llama-3.1-nemotron-70b-instruct", contextWindow: 128_000 },
+      { label: "Llama 3.3 Nemotron Super 49B", model: "nvidia/llama-3.3-nemotron-super-49b-v1", contextWindow: 128_000 },
+      { label: "Llama 3.1 Nemotron Ultra 253B", model: "nvidia/llama-3.1-nemotron-ultra-253b-v1", contextWindow: 128_000 },
+    ],
+  },
 }
 
 export function getModelContextWindow(provider: string | undefined, model: string | undefined): number {
@@ -75,16 +125,20 @@ export function getModelContextWindow(provider: string | undefined, model: strin
   return modelCfg?.contextWindow ?? providerCfg?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
 }
 
+function envKey(provider: string, suffix: string): string {
+  return `${provider.toUpperCase().replace(/-/g, "_")}_${suffix}`
+}
+
 export function getApiKeyEnvVar(provider: string): string {
-  return `${provider.toUpperCase()}_API_KEY`
+  return envKey(provider, "API_KEY")
 }
 
 function getBaseUrlEnvVar(provider: string): string {
-  return `${provider.toUpperCase()}_BASE_URL`
+  return envKey(provider, "BASE_URL")
 }
 
 function getModelEnvVar(provider: string): string {
-  return `${provider.toUpperCase()}_MODEL`
+  return envKey(provider, "MODEL")
 }
 
 const LAST_CONFIG_FILE = ".deepicode/last-config.json"
@@ -112,7 +166,7 @@ function loadApiKeyFromProjectFile(provider?: string): string | undefined {
     const raw = readFileSync(p, "utf-8")
 
     // Try provider-specific env var (e.g. DEEPSEEK_API_KEY, ZEN_API_KEY, MIMO_API_KEY)
-    const providers = provider ? [provider.toUpperCase()] : ["DEEPSEEK", "ZEN", "MIMO"]
+    const providers = provider ? [provider.toUpperCase().replace(/-/g, "_")] : ["DEEPSEEK", "ZEN", "MIMO", "KILO", "NVIDIA"]
     for (const pv of providers) {
       const envName = `${pv}_API_KEY`
       const match =
@@ -145,18 +199,29 @@ export function loadConfig(): DeepicodeConfig {
 
   const providerBaseUrlEnv = process.env[getBaseUrlEnvVar(provider)]
   const legacyDeepSeekBaseUrlEnv = provider === "deepseek" ? process.env.DEEPSEEK_BASE_URL : undefined
-  const baseUrl = providerBaseUrlEnv ?? legacyDeepSeekBaseUrlEnv ?? lastForProvider?.baseUrl ?? providerCfg?.baseUrl ?? DEEPSEEK_BASE_URL
+  const baseUrl = (providerCfg?.virtual)
+    ? ""
+    : (providerBaseUrlEnv ?? legacyDeepSeekBaseUrlEnv ?? lastForProvider?.baseUrl ?? providerCfg?.baseUrl ?? DEEPSEEK_BASE_URL)
 
   const providerModelEnv = process.env[getModelEnvVar(provider)]
   const legacyDeepSeekModelEnv = provider === "deepseek" ? process.env.DEEPSEEK_MODEL : undefined
   const rawModel = providerModelEnv ?? legacyDeepSeekModelEnv ?? lastForProvider?.model ?? providerCfg?.model ?? DEEPSEEK_MODEL
-  const model = normalizeModelForProvider(providerCfg, rawModel)
+  // OpenAI Compatible: allow any model name (no normalization), others validated against provider's model list
+  const model = provider === "openai-compatible"
+    ? (rawModel || "")
+    : normalizeModelForProvider(providerCfg, rawModel)
   const contextWindow = getModelContextWindow(provider, model)
 
-  const apiKeyEnvVar = getApiKeyEnvVar(provider)
-  let apiKey = process.env[apiKeyEnvVar] ?? providerCfg?.defaultKey ?? ""
-  if (!apiKey) {
-    apiKey = loadApiKeyFromProjectFile(provider) ?? ""
+  // Keyless providers (Kilo/LLM7/Free Auto/OpenAI Compatible) always use empty API key
+  let apiKey = ""
+  if (providerCfg?.keyless) {
+    apiKey = ""
+  } else {
+    const apiKeyEnvVar = getApiKeyEnvVar(provider)
+    apiKey = process.env[apiKeyEnvVar] ?? providerCfg?.defaultKey ?? ""
+    if (!apiKey) {
+      apiKey = loadApiKeyFromProjectFile(provider) ?? ""
+    }
   }
 
   return {

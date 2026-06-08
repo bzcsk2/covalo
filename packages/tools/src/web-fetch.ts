@@ -1,13 +1,32 @@
+/**
+ * WebFetch tool — fetches URL content with HTML→Markdown/Text conversion.
+ *
+ * Adapted from opencode's webfetch tool:
+ * - Uses TurndownService for proper HTML→Markdown conversion
+ * - Uses htmlparser2 for clean HTML→text extraction
+ * - Retains deepicode's SSRF protection and approval model
+ */
 import type { AgentTool } from "@deepicode/core"
 import { safeStringify } from "./safe-stringify.js"
 import { isIP } from "node:net"
 import { promises as dns } from "node:dns"
+import { Parser } from "htmlparser2"
+import TurndownService from "turndown"
 
 const FETCH_TIMEOUT = 30_000
 const MAX_CONTENT_LENGTH = 10 * 1024 * 1024
 const MAX_OUTPUT_LENGTH = 100_000
 
-const BLOCKED_NETS = ["0.", "10.", "100.", "127.", "169.254.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.", "192.0.0.", "192.0.2.", "192.168.", "198.18.", "198.19.", "198.51.100.", "203.0.113.", "224.", "240.", "fc", "fd", "fe80", "::1", "::"]
+const BLOCKED_NETS = [
+  "0.", "10.", "100.", "127.", "169.254.",
+  "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
+  "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+  "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+  "192.0.0.", "192.0.2.", "192.168.",
+  "198.18.", "198.19.", "198.51.100.", "203.0.113.",
+  "224.", "240.",
+  "fc", "fd", "fe80", "::1", "::",
+]
 
 export function hasPrivateIP(host: string): boolean {
   if (isIP(host)) return BLOCKED_NETS.some(p => host.startsWith(p))
@@ -23,14 +42,21 @@ export async function isPrivateHostname(host: string): Promise<boolean> {
   }
 }
 
+type FetchFormat = "text" | "markdown" | "html"
+
 export function createWebFetchTool(): AgentTool {
   return {
     name: "WebFetch",
-    description: "Fetches content from a URL and returns it as text/markdown. Supports HTML and text content types. HTTP URLs are automatically upgraded to HTTPS.",
+    description: "Fetches content from a URL and returns it as markdown, text, or raw HTML. Supports HTML, text, and common web content types. HTTP URLs are automatically upgraded to HTTPS.",
     parameters: {
       type: "object",
       properties: {
         url: { type: "string", description: "The URL to fetch content from." },
+        format: {
+          type: "string",
+          enum: ["markdown", "text", "html"],
+          description: "Output format. 'markdown' converts HTML to Markdown (default), 'text' extracts plain text, 'html' returns raw HTML.",
+        },
         max_length: { type: "number", description: "Maximum characters to return (default 100000)." },
       },
       required: ["url"],
@@ -41,6 +67,11 @@ export function createWebFetchTool(): AgentTool {
       if (typeof args.url !== "string" || !args.url) {
         return { content: safeStringify({ error: "url is required" }), isError: true }
       }
+
+      const format: FetchFormat =
+        args.format === "markdown" || args.format === "text" || args.format === "html"
+          ? args.format
+          : "markdown"
 
       let url = args.url
       try {
@@ -75,7 +106,14 @@ export function createWebFetchTool(): AgentTool {
         const t0 = Date.now()
         let resp: Response
         try {
-          resp = await fetch(url, { signal, redirect: "follow" })
+          resp = await fetch(url, {
+            signal,
+            redirect: "follow",
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; Deepicode/1.0; +https://deepicode.dev)",
+              Accept: acceptHeader(format),
+            },
+          })
         } finally {
           clearTimeout(timer)
           cleanup()
@@ -96,7 +134,7 @@ export function createWebFetchTool(): AgentTool {
         }
 
         const contentType = resp.headers.get("content-type") ?? ""
-        const isHtml = contentType.includes("text/html") || contentType.includes("text/markdown")
+        const isHtml = contentType.includes("text/html")
 
         const buf = await resp.arrayBuffer()
         const bytes = buf.byteLength
@@ -108,8 +146,15 @@ export function createWebFetchTool(): AgentTool {
         let result: string
 
         if (isHtml) {
-          result = htmlToText(text)
+          if (format === "markdown") {
+            result = convertHTMLToMarkdown(text)
+          } else if (format === "text") {
+            result = extractTextFromHTML(text)
+          } else {
+            result = text // raw HTML
+          }
         } else {
+          // Non-HTML content: return as-is regardless of format
           result = text
         }
 
@@ -121,6 +166,7 @@ export function createWebFetchTool(): AgentTool {
         return {
           content: safeStringify({
             content: result,
+            format,
             bytes,
             code: resp.status,
             durationMs: elapsed,
@@ -138,6 +184,17 @@ export function createWebFetchTool(): AgentTool {
   }
 }
 
+function acceptHeader(format: FetchFormat): string {
+  switch (format) {
+    case "markdown":
+      return "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"
+    case "text":
+      return "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1"
+    case "html":
+      return "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, */*;q=0.1"
+  }
+}
+
 function anySignal(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController()
   const handlers: Array<() => void> = []
@@ -150,23 +207,44 @@ function anySignal(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: (
   return { signal: controller.signal, cleanup: () => handlers.forEach(h => h()) }
 }
 
-function htmlToText(html: string): string {
-  let text = html
-  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-  text = text.replace(/<br\s*\/?>/gi, "\n")
-  text = text.replace(/<\/p>/gi, "\n\n")
-  text = text.replace(/<\/div>/gi, "\n")
-  text = text.replace(/<\/h[1-6]>/gi, "\n")
-  text = text.replace(/<\/li>/gi, "\n")
-  text = text.replace(/<[^>]+>/g, "")
-  text = text.replace(/&amp;/g, "&")
-  text = text.replace(/&lt;/g, "<")
-  text = text.replace(/&gt;/g, ">")
-  text = text.replace(/&quot;/g, '"')
-  text = text.replace(/&#39;/g, "'")
-  text = text.replace(/&nbsp;/g, " ")
-  text = text.replace(/\n{3,}/g, "\n\n")
-  text = text.trim()
-  return text
+/**
+ * Convert HTML to Markdown using TurndownService.
+ * Adapted from opencode's convertHTMLToMarkdown().
+ */
+function convertHTMLToMarkdown(html: string): string {
+  const turndown = new TurndownService({
+    headingStyle: "atx",
+    hr: "---",
+    bulletListMarker: "-",
+    codeBlockStyle: "fenced",
+    emDelimiter: "*",
+  })
+  turndown.remove(["script", "style", "meta", "link", "noscript", "iframe", "object", "embed"])
+  return turndown.turndown(html)
+}
+
+/**
+ * Extract plain text from HTML using htmlparser2.
+ * Skips script, style, noscript, iframe, object, embed content.
+ * Adapted from opencode's extractTextFromHTML().
+ */
+function extractTextFromHTML(html: string): string {
+  let text = ""
+  let skipDepth = 0
+  const parser = new Parser({
+    onopentag(name) {
+      if (skipDepth > 0 || ["script", "style", "noscript", "iframe", "object", "embed"].includes(name)) {
+        skipDepth++
+      }
+    },
+    ontext(input) {
+      if (skipDepth === 0) text += input
+    },
+    onclosetag() {
+      if (skipDepth > 0) skipDepth--
+    },
+  })
+  parser.write(html)
+  parser.end()
+  return text.trim()
 }

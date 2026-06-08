@@ -3,8 +3,9 @@ import { resolve } from "node:path"
 import type { DeepicodeConfig } from "./config.js"
 import { ContextManager } from "./context/manager.js"
 import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
-import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult } from "./interface.js"
+import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult, ChatClient } from "./interface.js"
 import { DeepSeekClient } from "./client.js"
+import { FreeAutoClient } from "./free-auto/client.js"
 import { StreamingToolExecutor } from "./streaming-executor.js"
 import { AsyncSessionWriter, SessionLoader } from "./session.js"
 import { runLoop } from "./loop.js"
@@ -55,8 +56,10 @@ export class ReasonixEngine implements CoreEngine {
   private ctx: ContextManager
   /** 注册的工具集合，key 为工具名 */
   private tools: Map<string, AgentTool> = new Map()
-  /** DeepSeek API 客户端 */
-  private client: DeepSeekClient
+  /** LLM 客户端（普通 provider 用 DeepSeekClient，free-auto 用 FreeAutoClient） */
+  private client: ChatClient
+  /** Free Auto 客户端实例（需要 reset sticky 状态） */
+  private freeAutoClient?: FreeAutoClient
   /** 流式工具执行器，负责并发执行工具调用并流式返回结果 */
   private toolExecutor: StreamingToolExecutor
   /** 中断标记，由外部调用 interrupt() 设置 */
@@ -175,12 +178,13 @@ export class ReasonixEngine implements CoreEngine {
     return { status: "queued", queueLength: this.pendingInstructionQueue.length }
   }
 
-  constructor(config: DeepicodeConfig, onStart?: () => void, sessionId?: string, customClient?: DeepSeekClient, runtimeLogger?: RuntimeLogger) {
+  constructor(config: DeepicodeConfig, onStart?: () => void, sessionId?: string, customClient?: ChatClient, runtimeLogger?: RuntimeLogger) {
     this.config = config
     this.ctx = new ContextManager(config.maxContextRounds, config.contextWindow)
     this.sessionId = sessionId ?? randomUUID()
     this.logger = runtimeLogger ?? createRuntimeLoggerFromEnv({ sessionId: this.sessionId })
-    this.client = customClient ?? new DeepSeekClient(this.logger)
+    this.freeAutoClient = undefined
+    this.client = this.resolveClient(customClient)
     this.currentAgent = "build"
     this.permissionEngine = new PermissionEngine()
     this.hookManager = new HookManager()
@@ -421,11 +425,29 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
+  /** Resolve the appropriate client for the current provider */
+  private resolveClient(customClient?: ChatClient): ChatClient {
+    if (customClient) return customClient
+    const baseClient = new DeepSeekClient(this.logger)
+    if (this.config.provider === "free-auto") {
+      const fa = new FreeAutoClient(baseClient)
+      this.freeAutoClient = fa
+      return fa
+    }
+    return baseClient
+  }
+
   /** 运行时更新引擎配置（用于 /model 命令切换 Provider） */
   updateConfig(partial: Partial<DeepicodeConfig>): void {
+    const providerChanged = partial.provider !== undefined && partial.provider !== this.config.provider
     Object.assign(this.config, partial)
     if (partial.contextWindow !== undefined) {
       this.ctx.updateContextWindow(partial.contextWindow)
+    }
+    // Re-resolve client when provider changes (e.g. switching to/from free-auto)
+    if (providerChanged) {
+      this.freeAutoClient = undefined
+      this.client = this.resolveClient()
     }
   }
 

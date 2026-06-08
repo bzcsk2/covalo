@@ -1,6 +1,6 @@
 import { Box, Text } from '@deepicode/ink';
 import { t } from './i18n/index.js';
-import { FG, SURFACE, TONE } from './reasonix/tokens.js';
+import { FG, TONE } from './reasonix/tokens.js';
 
 /**
  * StatusBar - 底部状态栏组件
@@ -13,7 +13,9 @@ import { FG, SURFACE, TONE } from './reasonix/tokens.js';
  * - cacheHitTokens/cacheMissTokens: 用于计算缓存命中率
  * - contextUsed/contextTotal: 上下文窗口使用量（已用/总量）
  * - pendingInstructionCount: >0 时显示待处理指令通知
- * - thinkingMode: 始终显示当前思考模式（auto/off/open/high）
+ * - thinkingMode: 用户选择的思考模式（auto/off/open/high）
+ * - effectiveThinkingMode: auto 策略当前内部生效档位（off/open/high）
+ * - reasoningActive: 当前流中是否正在收到 reasoning 输出
  * - tier: 服务层级标签（如 free/pro）
  * - cwd: 当前工作目录路径
  * - statusMessage: 有值时显示 ⚠ 警告信息
@@ -31,6 +33,8 @@ interface StatusBarProps {
   pendingInstructionCount?: number;
   statusMessage?: string | null;
   thinkingMode?: string;
+  effectiveThinkingMode?: string;
+  reasoningActive?: boolean;
   tier?: string;
   cwd?: string;
 }
@@ -60,14 +64,17 @@ function cacheRate(hit: number, miss: number): string {
   return `${Math.round((hit / total) * 100)}%`;
 }
 
-export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, tier, cwd }: StatusBarProps) {
+export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, effectiveThinkingMode, reasoningActive, tier, cwd }: StatusBarProps) {
   // 计算缓存命中率
   const rate = cacheRate(cacheHitTokens, cacheMissTokens);
   // 只显示 agent 名称，去掉 " Agent" 后缀
-  const agentShort = agent?.replace(/\s+Agent$/i, '') ?? agent;
+  const agentShort = agent?.replace(/\s+(Agent|Mode)$/i, '') ?? agent;
   // 只显示当前文件夹名
   const cwdShort = cwd ? cwd.split('/').filter(Boolean).pop() ?? cwd : '';
-  const thinkingLabel = thinkingMode ?? 'off';
+  const configuredThinking = thinkingMode ?? 'off';
+  const thinkingLabel = configuredThinking === 'auto'
+    ? (reasoningActive ? 'auto:on' : effectiveThinkingMode ? `auto:${effectiveThinkingMode}` : 'auto')
+    : configuredThinking;
   return (
     <Box width="100%" flexDirection="column">
       {/* 状态警告信息（如 ⚠ 提示），仅在 statusMessage 有值时显示 */}
@@ -84,7 +91,8 @@ export function StatusBar({ model, provider, agent, inputTokens, outputTokens, c
       ) : null}
       {/* 主信息栏：背景色透明，水平内边距 paddingX=1 */}
       <Box width="100%" flexDirection="row" paddingX={1}>
-        <Text color={FG.meta}>{`${agentShort} ${model}`}</Text>
+        <Text color={TONE.warn}>{agentShort}</Text>
+        <Text color={FG.meta}>{` ${model}`}</Text>
         <Text color={TONE.accent}>{` [${thinkingLabel}]`}</Text>
         {/* flexGrow=1 将后面元素推到右侧 */}
         <Box flexGrow={1} />

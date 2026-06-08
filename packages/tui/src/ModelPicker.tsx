@@ -22,11 +22,11 @@ interface ModelPickerProps {
   onCancel: () => void;
 }
 
-/** 当前所处的选择步骤：'provider' 选择提供商，'key' 输入 API Key，'model' 选择具体模型 */
-type Step = 'provider' | 'key' | 'model';
+/** 当前所处的选择步骤：'provider' 选择提供商，'key' 输入 API Key，'model' 选择具体模型，'custom' 自定义 URL/模型 */
+type Step = 'provider' | 'key' | 'model' | 'custom';
 
 /** 提供商列表的显示顺序，数组索引同时也决定了键盘上下键的选中顺序 */
-const PROVIDER_ORDER = ['zen', 'deepseek', 'mimo'];
+const PROVIDER_ORDER = ['zen', 'deepseek', 'mimo', 'kilo', 'free-auto', 'openai-compatible', 'nvidia'];
 
 /**
  * tryReadClipboard — 尝试从系统剪贴板读取文本
@@ -58,8 +58,11 @@ async function tryReadClipboard(): Promise<string | null> {
   return null;
 }
 
+/** Default baseURL for openai-compatible provider */
+const DEFAULT_LOCAL_URL = 'http://localhost:8000/v1';
+
 export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel }: ModelPickerProps) {
-  /** 当前步骤：提供商选择 → 输入 Key → 模型选择 */
+  /** 当前步骤：提供商选择 → 输入 Key → 选择模型 */
   const [step, setStep] = useState<Step>('provider');
   /** 当前选中的列表项索引，用于上下键导航 */
   const [selIdx, setSelIdx] = useState(Math.max(0, PROVIDER_ORDER.indexOf(currentProvider)));
@@ -71,6 +74,12 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
   const [apiKey, setApiKey] = useState('');
   /** 输入缓存区，用于收集键盘字符输入（也支持终端的 bracketed paste 多字符粘贴） */
   const [inputBuf, setInputBuf] = useState('');
+  /** openai-compatible: 当前编辑的字段索引 (0=URL, 1=模型名) */
+  const [editField, setEditField] = useState(0);
+  /** openai-compatible: 自定义 baseURL */
+  const [customUrl, setCustomUrl] = useState(DEFAULT_LOCAL_URL);
+  /** openai-compatible: 自定义模型名 */
+  const [customModel, setCustomModel] = useState('');
 
   /**
    * confirmSelection — 确认并提交选择结果
@@ -82,6 +91,16 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
   const confirmSelection = useCallback((modelOverride?: string) => {
     const cfg = PROVIDERS[selProvider];
     if (!cfg) return;
+    // openai-compatible: use custom URL and model name from user input
+    if (selProvider === 'openai-compatible') {
+      onSelect({
+        provider: selProvider,
+        model: customModel || 'gpt-3.5-turbo',
+        apiKey: '',
+        baseUrl: customUrl || DEFAULT_LOCAL_URL,
+      });
+      return;
+    }
     const envKey = process.env[getApiKeyEnvVar(selProvider)] ?? '';
     onSelect({
       provider: selProvider,
@@ -89,7 +108,7 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
       apiKey: apiKey || envKey || (cfg.defaultKey ?? ''),
       baseUrl: cfg.baseUrl,
     });
-  }, [selProvider, selModel, apiKey, onSelect]);
+  }, [selProvider, selModel, customModel, customUrl, apiKey, onSelect]);
 
   /**
    * goBack — 返回上一步
@@ -103,10 +122,14 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
     } else if (step === 'key') {
       setInputBuf('');
       setStep('provider');
+    } else if (step === 'custom') {
+      setInputBuf('');
+      setEditField(0);
+      setStep('provider');
     } else {
       const p = PROVIDERS[selProvider];
-      // 若提供商需要 Key、无默认 Key 且环境变量中也没有，则退回 key 输入步骤让用户输入
-      if (p && p.requiresKey && !p.defaultKey && !process.env[getApiKeyEnvVar(selProvider)]) {
+      // 若提供商需要 Key、无默认 Key 且环境变量中也没有，且不是 keyless provider，则退回 key 步骤
+      if (p && !p.keyless && p.requiresKey && !p.defaultKey && !process.env[getApiKeyEnvVar(selProvider)]) {
         setSelIdx(0);
         setStep('key');
       } else {
@@ -140,11 +163,19 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
         setSelProvider(p);
         setSelModel(PROVIDERS[p].models[0]?.model ?? '');
         setInputBuf('');
-        // 如果该提供商要求 Key、没有默认 Key 且环境变量未设置 → 跳到 key 输入页面；否则直接进入模型选择
-        if (PROVIDERS[p].requiresKey && !PROVIDERS[p].defaultKey && !process.env[getApiKeyEnvVar(p)]) {
-          setStep('key');
-        } else {
+        if (p === 'openai-compatible') {
+          // openai-compatible: go directly to custom config step
+          setEditField(0);
+          setInputBuf(customUrl || DEFAULT_LOCAL_URL);
+          setStep('custom');
+          return;
+        }
+        const cfg = PROVIDERS[p];
+        // Keyless providers skip API key entry; requiresKey providers without default/env key show key input
+        if (cfg.keyless || !cfg.requiresKey || cfg.defaultKey || process.env[getApiKeyEnvVar(p)]) {
           setStep('model');
+        } else {
+          setStep('key');
         }
         return;
       }
@@ -170,7 +201,38 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
         return;
       }
       if (_input) {
-        // Multi-character input = bracketed paste from 
+        setInputBuf(prev => prev + _input);
+      }
+      return;
+    }
+
+    if (step === 'custom') {
+      if (key.return && inputBuf.length > 0) {
+        if (editField === 0) {
+          // Save URL, move to model name input
+          setCustomUrl(inputBuf);
+          setEditField(1);
+          setInputBuf(customModel);
+          return;
+        } else {
+          // Save model and confirm
+          setCustomModel(inputBuf);
+          setEditField(0);
+          confirmSelection();
+          return;
+        }
+      }
+      if (key.backspace || key.delete) {
+        setInputBuf(prev => prev.slice(0, -1));
+        return;
+      }
+      if (key.ctrl && (_input === 'v' || _input === 'V')) {
+        void tryReadClipboard().then(clip => {
+          if (clip) setInputBuf(prev => prev + clip);
+        });
+        return;
+      }
+      if (_input) {
         setInputBuf(prev => prev + _input);
       }
       return;
@@ -234,6 +296,25 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
           {/* inputBuf 显示当前输入内容，▊ 为光标指示符；无输入时不显示光标 */}
           <Text>  {inputBuf}{inputBuf.length > 0 ? '▊' : ''}</Text>
           <Text dimColor>{t().escToGoBack}</Text>
+        </Box>
+      )}
+
+      {step === 'custom' && (
+        <Box flexDirection="column">
+          <Text dimColor>Configure OpenAI Compatible Provider:</Text>
+          <Box marginTop={1}>
+            <Text bold={editField === 0}>❯ </Text>
+            <Text dimColor>Base URL: </Text>
+            <Text>{editField === 0 ? `${inputBuf}${inputBuf.length > 0 ? '▊' : ''}` : customUrl}</Text>
+          </Box>
+          <Box>
+            <Text bold={editField === 1}>❯ </Text>
+            <Text dimColor>Model:    </Text>
+            <Text>{editField === 1 ? `${inputBuf}${inputBuf.length > 0 ? '▊' : ''}` : customModel || '(type model name)'}</Text>
+          </Box>
+          <Box marginTop={1}>
+            <Text dimColor>{t().escToGoBack}</Text>
+          </Box>
         </Box>
       )}
 

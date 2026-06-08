@@ -457,6 +457,18 @@ Issue 和 PR 都欢迎。Fork → Feature Branch → Commit → PR。
 
 ---
 
+## 免费 Provider
+
+deepicode 支持以下免费 provider（无需 API Key）：
+
+| Provider | 说明 | 限速 |
+|---|---|---|
+| **Kilo (Free)** | 匿名免费，通过 `api.kilo.ai` 网关访问 Nemotron-3 Super 120B | ~200 req/hr/IP |
+| **LLM7 (Free)** | 匿名免费聚合 API，提供 Qwen3 235B、Codestral、Mistral Small | ~100 req/hr |
+| **Free Auto** | 在已验证的免费模型间智能路由，遇到限速自动串行故障转移 | 由上游决定 |
+
+使用 `/model` 命令或在终端中直接选择。匿名免费模型的提示/输出可能被上游服务商记录，请勿输入敏感信息。
+
 ## 许可证
 
 MIT · [`LICENSE`](./LICENSE)

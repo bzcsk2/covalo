@@ -1,6 +1,5 @@
 import type { ToolCall, ToolSpec } from "./types.js"
-import type { LoopEvent, SessionStats, ToolResult } from "./interface.js"
-import type { DeepSeekClient } from "./client.js"
+import type { LoopEvent, SessionStats, ToolResult, ChatClient } from "./interface.js"
 import { isToolUseFinishReason } from "./client.js"
 import type { ContextManager } from "./context/manager.js"
 import type { StreamingToolExecutor } from "./streaming-executor.js"
@@ -29,7 +28,7 @@ export interface PendingInstruction {
 
 export interface LoopOptions {
   ctx: ContextManager
-  client: DeepSeekClient
+  client: ChatClient
   toolExecutor: StreamingToolExecutor
   toolSpecs: ToolSpec[]
   config: {
@@ -117,6 +116,10 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     let streamError: LoopEvent | null = null
     let finishedWithToolUse = false
 
+    const provider = config.provider ?? ""
+    const isKeyless = provider === "kilo" || provider === "free-auto" || provider === "openai-compatible"
+    const useMaxTokens = provider === "kilo" || provider === "free-auto" || provider === "openai-compatible"
+    const supportsThinking = provider === "deepseek" || provider === "zen" || provider === "mimo"
     for await (const event of client.chatCompletionsStream(ctx.buildMessages(), {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -124,8 +127,10 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       maxTokens: config.maxTokens,
       temperature: config.temperature,
       signal,
+      keyless: isKeyless,
+      useMaxCompletionTokens: !useMaxTokens,
       tools: toolSpecs.length > 0 ? toolSpecs : undefined,
-      ...createDeepSeekCapabilities(config.provider).mapMode(currentMode),
+      ...(supportsThinking ? createDeepSeekCapabilities(provider).mapMode(currentMode) : {}),
       traceContext: diagnosticsEnabled ? { submitId, turnCount } : undefined,
     })) {
       if (isInterrupted()) {
@@ -138,6 +143,10 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           fullContent += event.delta
           yield { role: "assistant_delta", content: event.delta }
           sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "assistant_delta", content: event.delta } })
+          break
+
+        case "status":
+          yield { role: "status", content: event.content, metadata: event.metadata }
           break
 
         case "reasoning_delta":
@@ -274,7 +283,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         }
 
         case "error":
-          streamError = { role: "error", content: event.message, severity: "error" as const, metadata: event.status ? { status: event.status } : undefined }
+          streamError = { role: "error", content: event.message, severity: "error" as const, metadata: { ...(event.status ? { status: event.status } : {}), responseBody: event.body } }
           yield streamError
           sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: streamError })
           break

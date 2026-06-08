@@ -115,7 +115,7 @@ describe("M12: WebFetch full flow", () => {
     expect(r.isError).toBe(false)
   })
 
-  it("should convert HTML to text", async () => {
+  it("should convert HTML to markdown", async () => {
     fetchMock.mockResolvedValue({
       ok: true, status: 200, statusText: "OK",
       headers: new Map([["content-type", "text/html"]]),
@@ -126,7 +126,8 @@ describe("M12: WebFetch full flow", () => {
     const r = await tool.execute({ url: "https://example.com" }, ctx)
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
-    expect(p.content).toContain("Hello world")
+    expect(p.format).toBe("markdown")
+    expect(p.content).toContain("Hello **world**")
   })
 
   it("should reject content >10MB", async () => {

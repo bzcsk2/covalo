@@ -23,7 +23,7 @@ export { QueryEngine } from "./query-engine.js"
 export type { AgentDefinition } from "./agent.js"
 export type { DeepicodeConfig, ProviderInfo, ProviderModel } from "./config.js"
 export type { ChatMessage, ToolCall, ToolSpec, Usage, Role } from "./types.js"
-export type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult, LoopEventRole, ToolTier, ToolConcurrency, ToolProgressUpdate } from "./interface.js"
+export type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult, LoopEventRole, ToolTier, ToolConcurrency, ToolProgressUpdate, ChatClient } from "./interface.js"
 export { SessionLoader } from "./session.js"
 export type { SessionSummary } from "./session.js"
 export { getTier, STRATEGY_TIERS, TIER_ORDER, DEFAULT_TIER } from "./strategy/tiers.js"
@@ -45,3 +45,13 @@ export type {
   SubagentRunResult,
   SubagentPermissionCheck,
 } from "./subagent/index.js"
+export { FreeAutoClient } from "./free-auto/client.js"
+export type { FreeAutoRouteEvent } from "./free-auto/client.js"
+export { FREE_AUTO_CANDIDATES } from "./free-auto/catalog.js"
+export type { FreeAutoCandidate } from "./free-auto/catalog.js"
+export {
+  isRetryableError,
+  isOnCooldown,
+  isProviderOnCooldown,
+  applyCooldown,
+} from "./free-auto/router.js"

@@ -1079,10 +1079,147 @@ bun run typecheck
 
 ---
 
-## 11. 文档维护规则
+## 11. Kilo/LLM7 Free Auto 匿名免费 Provider
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 免费 Provider 支持 | ✅ 已完成 | Kilo (Free)、NVIDIA NIM (Free)、Free Auto 路由 |
+
+### 11.1 新 Provider 注册
+
+- `packages/core/src/config.ts`：新增 4 个 provider：
+  - **kilo**：`api.kilo.ai`，2 个免费模型（Nemotron-3 Super 120B / Laguna XS 2），`keyless: true`
+  - **free-auto**：`virtual: true`，`baseUrl: ""`，无实际 API，由内部路由处理
+  - **openai-compatible**：通用本地 Provider（vLLM/Ollama/llama.cpp），`keyless: true`，自定义 URL 和模型
+  - **nvidia**：`integrate.api.nvidia.com/v1`，6 个模型（Nemotron-3 Super 120B / Nano 30B / Nano Omni / Llama 70B / Llama 49B / Ultra 253B），`requiresKey: true`
+- `ProviderInfo` 新增 `keyless?: boolean` 和 `virtual?: boolean` 字段。
+- `loadConfig()` 对 `keyless` provider 跳过 API Key 加载；对 `virtual` provider 不设 baseUrl。
+- `ModelPicker.tsx`：新增 `kilo`、`free-auto`、`openai-compatible`、`nvidia` 到提供商选择列表；`keyless` provider 跳过 Key 输入步骤。
+- 新增配置测试（Kilo / Free Auto / OpenAI Compatible / NVIDIA）。
+
+### 11.2 Free Auto 智能路由（`packages/core/src/free-auto/`）
+
+| 文件 | 定位 |
+|------|------|
+| `catalog.ts` | 候选列表：LLM7 Codestral (priority 1)、LLM7 Qwen3 235B (priority 2)、LLM7 Mistral (priority 3)、Kilo Nemotron (priority 10) |
+| `router.ts` | 429 惩罚衰减、cooldown 管理、retryable 错误分类、task 分类策略 |
+| `client.ts` | `FreeAutoClient` 实现 `ChatClient` 接口，串行 failover 路由 |
+
+**路由逻辑：**
+- **Sticky**：同一 submit 内持续使用同一候选；跨 submit 保持 5 分钟（避免每次轮询），失败后自动 cooldown 切换。
+- **Task 分类**：coding（有 tools）→ 优先 Codestral；complex（>4K 或 >10 轮）→ 优先 Qwen3；simple → 最小惩罚候选。
+- **Failover**：串行尝试候选队列，429/provider 级短 cooldown（60s）、402/401/403 模型级长 cooldown（24h）、5xx/timeout 指数退避。
+- **Penalty**：429 每次 +3，cap 10，120s 衰减 1；success 每次 -1。
+- 通过 `status` 类型 LoopEvent 向 TUI 上报 route 状态（provider/model/reason/attempt）。
+
+### 11.3 ChatClient 接口抽象
+
+- `packages/core/src/interface.ts`：新增 `ChatClient` 接口，定义 `chatCompletionsStream()` 方法。
+- `DeepSeekClient` 和 `FreeAutoClient` 分别实现该接口。
+- `engine.ts` 的 client 类型从 `DeepSeekClient` 改为 `ChatClient`；`resolveClient()` 根据 provider 选择实现。
+- `loop.ts` 的 `LoopOptions.client` 类型从 `DeepSeekClient` 改为 `ChatClient`。
+- `loop.ts` 新增 `status` 事件传递。
+
+### 11.4 Client 层改进
+
+| 改进 | 说明 |
+|------|------|
+| Keyless 支持 | `keyless` 标志跳过 Authorization header |
+| Per-request timeout | 通过 `AbortController` + `combineAbortSignals` 实现 |
+| SSE stall 检测 | `Promise.race` 替代旧 watchdog，timeout 抛出 Error |
+| 异常 EOF 检测 | stream 结束无 `[DONE]` 且无 finish_reason 时 yield error |
+| `max_tokens` vs `max_completion_tokens` | 通过 `useMaxCompletionTokens` 区分 Kilo/LLM7（用 max_tokens）和 DeepSeek（用 max_completion_tokens） |
+
+### 11.5 TUI 适配
+
+- `bridge.tsx`：
+  - 新增 `routedModel` / `routedModelDetail` 状态，处理 `free_auto_route` 事件。
+  - 新增 `effectiveThinkingMode` 状态，处理 `thinking_mode_switch` 事件。
+  - 新增 `reasoningActive` 状态。
+- `StatusBar.tsx`：
+  - Auto 模式下显示 `auto:on` / `auto:open` / `auto:high`。
+  - Agent 名称加 `TONE.warn` 高亮。
+  - routedModel 优先显示自由自动路由模型。
+- `WelcomeScreen.tsx`：引入 figlet ASCII 大标题。
+
+### 11.6 WebFetch / WebSearch 工具重写
+
+**WebFetch：**
+- 从正则 HTML→text 改为 `turndown`（HTML→Markdown） + `htmlparser2`（HTML→plain text）。
+- 新增 `format` 参数（`markdown` / `text` / `html`），默认 `markdown`。
+- 新增 `User-Agent` header。
+- 新增依赖：`turndown`、`htmlparser2`、`@types/turndown`。
+
+**WebSearch：**
+- 从 Google HTML scraping 改为 MCP 协议调用（Exa / Parallel 双 provider）。
+- 新增参数：`livecrawl`、`type`。
+- Provider 选择：`OPENCODE_WEBSEARCH_PROVIDER` 环境变量，或自动检测 `EXA_API_KEY` / `PARALLEL_API_KEY`。
+- MCP 响应处理：支持 direct JSON 和 SSE-streamed 两种格式。
+- 搜索结果解析：结构化 URL/title/snippet 提取 + fallback 文本提取。
+
+### 11.7 测试覆盖
+
+| 文件 | 测试数 | 说明 |
+|------|--------|------|
+| `free-auto-router.test.ts` | 新文件 14 个 | 429 惩罚、cooldown、health tracking、retryable 分类、task 分类 |
+| `config.test.ts` | 新增 7 个 | Kilo/Free-Auto/OpenAI-Comaptible/NVIDIA 配置验证 + loadConfig keyless 行为 |
+
+### 11.8 修复轮询、Kilo 模型清理与 LLM7 8000 字符限制
+
+#### 问题诊断
+
+LLM7 匿名用户有 **8000 字符总数限制**（所有 messages 的 content 长度之和）。system prompt 中嵌入了 `frontend-design` 等技能的完整文档（>5000 字符），导致第一句话就超限，所有模型返回 HTTP 400：
+```json
+{"detail":"Total content length of messages exceeds limit of 8000 characters for anonymous users. Get a free token at https://token.llm7.io to get access to higher limits."}
+```
+
+Kilo 的 `nemotron-3-nano-omni-reasoning:free` 本身不是有效模型 ID，返回 400 "not a valid model ID"。之前 `thinking` 参数也被怀疑，但实测 LLM7 所有模型通过 curl 均正常返回 200（streaming、tools、中文、长 max_tokens 均无误）。
+
+#### 修复清单
+
+| 修复 | 文件 | 说明 |
+|------|------|------|
+| Kilo 无效模型清理 | `config.ts:80-84` | 移除 `nemotron-3-nano-omni-reasoning:free`。Kilo free tier 确认可用模型：`nvidia/nemotron-3-super-120b-a12b:free`、`poolside/laguna-xs.2:free` |
+| LLM7 精简系统提示词 | `engine.ts:325-338` | `buildActiveSkillsPrompt(brief=true)` — LLM7/Free Auto 时只保留技能名称和描述，不嵌入完整 content，节省 >5000 字符 |
+| 8000 字符友好错误提示 | `loop.ts:286` | 检测响应体中包含 `"8000 characters"` + `"token.llm7"` 时，显示 actionable 的提示信息并引导用户申请 token |
+| 错误元数据增强 | `loop.ts:286`、`client.ts:172-177` | `streamError.metadata.responseBody` 附带原始错误详情；`api.request.http_error` 日志中记录请求体前 5000 字符和响应体前 2000 字符 |
+| Free Auto 跨 submit sticky | `free-auto/client.ts` + `engine.ts` | 移除 `engine.ts` 中每次 submit 调用的 `resetSticky()`，改为 5 分钟时间过期；成功候选持续复用 |
+| 非 DeepSeek 提供商移除 thinking 参数 | `loop.ts:122` | `supportsThinking` 仅对 `deepseek/zen/mimo` 为 true |
+
+**验收命令：**
+```bash
+bun run typecheck
+bun test packages/core/__tests__/config.test.ts
+```
+
+### 11.9 openai-compatible：通用本地 Provider 支持
+
+用户可以使用 TUI Model Picker、环境变量或 `last-config.json` 连接任意 OpenAI 兼容的本地推理服务。
+
+**支持范围：** vLLM、Ollama、llama.cpp、LM Studio、LocalAI、Text Generation Web UI 等。
+
+**使用方式：**
+- **TUI**：`/model` → 选中 `OpenAI Compatible (Local)` → 输入 Base URL（默认 `http://localhost:8000/v1`）→ Enter → 输入模型名 → Enter 确认
+- **环境变量**：`OPENAI_COMPATIBLE_BASE_URL`、`OPENAI_COMPATIBLE_MODEL`
+- **`last-config.json`**：`baseUrl` 和 `model` 字段自动持久化
+
+**关键特性：**
+- `keyless: true`：跳过 API Key 步骤
+- `models: []`：不限制模型名，用户自由输入
+- `loadConfig()` 中跳过 `normalizeModelForProvider`，保留用户输入的原样模型名
+- `loop.ts`：标记为 `isKeyless` 和 `useMaxTokens`，不发送 `Authorization` 头，使用 `max_tokens`（非 `max_completion_tokens`）
+- 成本计算返回 0（`MODEL_PRICING` 无匹配项 → `calculateCost()` 返回 0）
+
+**环境变量命名规范：** 包含连字符的 provider ID（如 `openai-compatible`）在 env var 中自动转换为下划线：`OPENAI_COMPATIBLE_*`。
+
+**验收：** `bun run typecheck` 通过；27 个 config 测试全部通过（含 2 个 `openai-compatible` 专项测试）。
+
+---
+
+## 12. 文档维护规则
 
 1. `DONE.md` 只记录已存在且仍然成立的能力。
 2. 未完成事项移入 `TODO.md`，不要在 DONE 中维护第二套待办列表。
 3. 每次更新基线必须实际运行 `bun run typecheck` 和 `bun test`。
 4. 已驳回方案和低风险暂缓项写入 `TODO.md` 对应章节。
-5. 不再追加重复的“第 N 轮修复”流水账；后续按专项编号记录结果。
+5. 不再追加重复的"第 N 轮修复"流水账；后续按专项编号记录结果。

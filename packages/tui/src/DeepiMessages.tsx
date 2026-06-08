@@ -197,7 +197,10 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
   }
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
-      <Text color={TONE.warn} bold>{'\u2234'} {t().thinking}</Text>
+      <Box flexDirection="row">
+        <Text color={TONE.warn} bold>{'\u2234'} {t().thinking}</Text>
+        <Text dimColor>{t().ctrlO}</Text>
+      </Box>
       <Box paddingLeft={2}>
         <Markdown text={text} />
       </Box>

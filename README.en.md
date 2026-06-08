@@ -385,6 +385,18 @@ Issues and PRs welcome. Fork → Feature Branch → Commit → PR.
 
 ---
 
+## Free Providers
+
+deepicode supports these free providers (no API key required):
+
+| Provider | Description | Rate Limit |
+|---|---|---|
+| **Kilo (Free)** | Anonymous free tier via `api.kilo.ai`, Nemotron-3 Super 120B | ~200 req/hr/IP |
+| **LLM7 (Free)** | Anonymous free aggregator, offers Qwen3 235B, Codestral, Mistral Small | ~100 req/hr |
+| **Free Auto** | Smart routing across verified free models with serial failover on rate limits | Upstream-dependent |
+
+Use `/model` command or select from the terminal. Anonymous free tier prompts/outputs may be logged by upstream providers — do not send sensitive information.
+
 ## License
 
 MIT · [`LICENSE`](./LICENSE)

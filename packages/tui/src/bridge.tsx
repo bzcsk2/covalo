@@ -29,6 +29,12 @@ export interface BridgeState {
   error: string | null;
   permissionPrompt: { toolName: string; args: Record<string, unknown> } | null;
   thinkingMode: string;
+  effectiveThinkingMode: string | undefined;
+  reasoningActive: boolean;
+  /** Free Auto routing: actual provider:model selected for current request */
+  routedModel?: string;
+  /** Free Auto routing: failover info */
+  routedModelDetail?: string;
 }
 
 function historyRoundId(index: number): string {
@@ -338,6 +344,7 @@ export function createBridge(
 
           case 'reasoning_delta': {
             reasoningText += event.content ?? '';
+            setState(prev => ({ ...prev, reasoningActive: true }));
             upsertItem({
               id: ensureReasoning(),
               kind: 'reasoning',
@@ -445,10 +452,20 @@ export function createBridge(
               setState(prev => ({ ...prev, pendingInstructionCount: queueLen }));
             } else if (event.content === 'thinking_mode_switch') {
               const to = event.metadata?.to as string;
-              if (to) setState(prev => ({ ...prev, thinkingMode: to }));
+              if (to) setState(prev => ({ ...prev, effectiveThinkingMode: to }));
             } else if (event.content === 'tools_completed') {
               finalizeRound();
               startRound();
+            } else if (event.content === 'free_auto_route' && event.metadata) {
+              const provider = event.metadata.provider as string;
+              const model = event.metadata.model as string;
+              const reason = event.metadata.reason as string;
+              const attempt = event.metadata.attempt as number;
+              setState(prev => ({
+                ...prev,
+                routedModel: `${provider}/${model}`,
+                routedModelDetail: reason ? `(${reason})` : undefined,
+              }));
             } else if (event.content && event.content !== 'interrupted') {
               setState(prev => ({ ...prev, warnings: [...prev.warnings, event.content!] }));
             }
@@ -485,7 +502,7 @@ export function createBridge(
       if (requestId === activeRequest) {
         finalizeRound();
         setTUIState('idle');
-        setState(prev => ({ ...prev, isLoading: false, permissionPrompt: null }));
+        setState(prev => ({ ...prev, isLoading: false, permissionPrompt: null, reasoningActive: false }));
       }
       running = false;
       processQueue();

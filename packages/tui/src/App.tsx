@@ -120,6 +120,8 @@ const initialState: BridgeState = {
   error: null,
   permissionPrompt: null,
   thinkingMode: 'off',
+  effectiveThinkingMode: undefined,
+  reasoningActive: false,
 };
 
 const MAX_INPUT_HISTORY = 100;
@@ -366,7 +368,7 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
         }
         engineRef.current.setThinkingMode(command.mode as any);
         saveTuiSettings({ thinkingMode: command.mode });
-        setBridgeState(prev => ({ ...prev, thinkingMode: command.mode }));
+        setBridgeState(prev => ({ ...prev, thinkingMode: command.mode, effectiveThinkingMode: undefined, reasoningActive: false }));
         appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${command.mode}` });
         return;
       }
@@ -424,7 +426,7 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
     }
     engineRef.current.setThinkingMode(mode as any);
     saveTuiSettings({ thinkingMode: mode });
-    setBridgeState(prev => ({ ...prev, thinkingMode: mode }));
+    setBridgeState(prev => ({ ...prev, thinkingMode: mode, effectiveThinkingMode: undefined, reasoningActive: false }));
     setShowThinkingMenu(false);
     appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${mode}` });
   }, [appendMessage, bridgeState.thinkingMode]);
@@ -672,7 +674,7 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
         suppressSubmit={showAutocomplete}
       />
       <StatusBar
-        model={activeModel}
+        model={bridgeState.routedModel ?? activeModel}
         provider={providerLabel}
         agent={AGENTS[activeAgent]?.label ?? activeAgent}
         inputTokens={bridgeState.tokens.input}
@@ -682,8 +684,10 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
         contextUsed={bridgeState.contextUsage}
         contextTotal={contextTotal}
         pendingInstructionCount={bridgeState.pendingInstructionCount}
-        statusMessage={statusMessage}
+        statusMessage={bridgeState.routedModelDetail ? `${bridgeState.routedModel} ${bridgeState.routedModelDetail}` : statusMessage}
         thinkingMode={bridgeState.thinkingMode}
+        effectiveThinkingMode={bridgeState.effectiveThinkingMode}
+        reasoningActive={bridgeState.reasoningActive}
         tier={engine.getTier?.()?.label}
         cwd={process.cwd()}
       />

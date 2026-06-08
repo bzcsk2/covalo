@@ -408,13 +408,13 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     : `${input.slice(0, cursor)}▊${input.slice(cursor)}${queueHint}${loadingHint}`;
 
   return (
-    <Box flexDirection="column" width="100%">
+    <Box flexDirection="column" width="100%" justifyContent="center" alignItems="center">
       {/* 输入内容区域 */}
       <Box
         flexDirection="column"
-        width="200%"
+        width="100%"
         backgroundColor={SURFACE.bgInput}
-        paddingX={1}
+        paddingX={2}
         paddingY={0}
       >
         <Text backgroundColor={SURFACE.bgInput}> </Text>
