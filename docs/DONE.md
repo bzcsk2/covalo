@@ -1,6 +1,6 @@
 # Deepreef 完成记录
 
-最后更新：2026-06-08（AgentMemory 原生集成 Phase A~F 完成）
+最后更新：2026-06-09（AgentMemory 原生集成修订）
 
 本文只记录当前代码中仍然成立的已完成功能和已验证修复。
 未完成、待验收、明确暂缓和已驳回方案统一见 [TODO.md](TODO.md)。当前后续专项交接见 [ADVICE.md](ADVICE.md)。
@@ -1528,9 +1528,9 @@ bun test             # 185 pass, 0 fail
 |------|------|------|
 | MemoryService 启动/停止 | ✅ 已完成 | `tui.ts` 中 `engine` 创建后 start，`finally` 中 stop |
 | HookManager tool 后钩子 | ✅ 已完成 | `afterToolCall` → `bridge.onPostToolUse/onPostToolFailure` |
-| Loop 事件钩子 | ✅ 已完成 | `onLoopEvent` 检测 assistant_delta → `bridge.onPromptSubmit` |
-| mem::context 注入 system prompt | ✅ 已完成 | 启动时调用 `mem::context`，内容注入 `<deepreef-memory-context>` 标记 |
-| Session 生命周期 | ✅ 已完成 | `bridge.onSessionStart/onSessionEnd` |
+| Loop 事件钩子 | ⚠️ 已修复 | `onLoopEvent` 已从 `assistant_delta` 改为用户输入真实入口 |
+| mem::context 注入 system prompt | ⚠️ 已修复 | 启动时调用 `mem::context`，内容追加后重新调用 `engine.setSystemPrompt()` |
+| Session 生命周期 | ⚠️ 部分完成 | `onSessionEnd` 已接线；`onSessionStart` 已修复接入；`onGenerationComplete` 未接线；`onPreToolUse` 明确不接入（DONE 已列为限制） |
 | 故障隔离 | ✅ 已完成 | 所有 bridge 调用 try/catch，初始化失败不阻断启动 |
 | 开关控制 | ✅ 已完成 | `DEEPREEF_MEMORY=false` 环境变量禁用 |
 | hooks/ 死代码清理 | ✅ 已完成 | 独立脚本添加 `@ts-nocheck`，被 bridge 替代 |
@@ -1541,11 +1541,13 @@ bun test             # 185 pass, 0 fail
 tui.ts (CLI)
   ├─ new MemoryService({ autoObserve, injectContext })
   ├─ await memoryService.start()
+  ├─ bridge.onSessionStart(sessionId)
   ├─ engine.hookManager.addHooks({
   │     afterToolCall → bridge.onPostToolUse / onPostToolFailure
-  │     onLoopEvent   → bridge.onPromptSubmit
+  │     onLoopEvent   → (不再用于 prompt 观察)
   │   })
-  ├─ mem::context → system prompt injection
+  ├─ App.onUserInput → bridge.onPromptSubmit (用户输入真实入口)
+  ├─ mem::context → system prompt injection → engine.setSystemPrompt()
   └─ finally:
        ├─ bridge.onSessionEnd
        ├─ memoryService.stop()
@@ -1554,7 +1556,8 @@ tui.ts (CLI)
 
 ### 16.2 保留限制
 
-- `pre_tool_use` 钩子尚未接入（bridge.onPreToolUse 已实现但未从 HookManager 调用）
+- `pre_tool_use` 钩子明确不接入（bridge.onPreToolUse 已实现但未从 HookManager 调用，DONE 已将其列为限制）
+- `onGenerationComplete` 尚未接入（bridge 已实现，CLI 未接线）
 - Subagent start/stop 观察尚未接入
 - 关闭记忆功能后已确认不阻断引擎流程
 
@@ -1569,8 +1572,8 @@ tui.ts (CLI)
 | `memory_smart_search` 工具 | ✅ 已完成 | 调用 `mem::smart-search`，混合 BM25+向量 |
 | `memory_forget` 工具 | ✅ 已完成 | 调用 `mem::evict`，按 ID 删除 |
 | `memory_timeline` 工具 | ✅ 已完成 | 调用 `mem::timeline`，时间线分组 |
-| `memory_status` 工具 | ✅ 已完成 | 调用 `mem::diagnostics`，系统健康 |
-| CLI 接线 | ✅ 已完成 | `tui.ts` 中启用记忆时自动注册 6 个工具 |
+| `memory_status` 工具 | ⚠️ 已修复 | 调用 ID 从 `mem::diagnostics` 修正为 `mem::diagnose` |
+| CLI 接线 | ✅ 已完成 | `tui.ts` 中启用记忆时自动注册 7 个工具（含 memory_migrate） |
 | typecheck | ✅ 已完成 | 0 错误 |
 | 无回归 | ✅ 已完成 | 基线测试 965 pass / 1 fail（预置 AS2） |
 
@@ -1585,10 +1588,10 @@ tui.ts (CLI)
 
 | 子项 | 状态 | 说明 |
 |------|------|------|
-| `MemoryServiceConfig` 高级开关 | ✅ 已完成 | `advancedTools/enableGraph/enableConsolidation/enableReflect/enableSlots` |
+| `MemoryServiceConfig` 高级开关 | ⚠️ 已修复 | 构造函数现在保存并消费完整 config，不再丢弃 |
 | 环境变量门控 | ✅ 已完成 | `DEEPREEF_MEMORY_ADVANCED/GRAPH/CONSOLIDATE/REFLECT/SLOTS` |
 | `~/.agentmemory` 迁移 | ✅ 已完成 | `migrateFromAgentMemory()` 复制 state 目录，跳过已存在的文件 |
-| `memory_migrate` 工具 | ✅ 已完成 | 可从 CLI 触发的迁移工具 |
+| `memory_migrate` 工具 | ⚠️ 已修复 | 已导出并注册到 CLI，已移除无用 store 参数 |
 | typecheck | ✅ 已完成 | 0 错误 |
 
 ---
@@ -1597,12 +1600,12 @@ tui.ts (CLI)
 
 | 子项 | 状态 | 说明 |
 |------|------|------|
-| 全量测试（核心包） | ✅ 已完成 | 1180 pass / 5 fail（预置 mode-selector + bridge，无新增） |
+| 全量测试（核心包） | ⚠️ 部分完成 | 1180 pass / 5 fail（预置 mode-selector + bridge，无新增） |
 | typecheck | ✅ 已完成 | 0 错误 |
 | 无 iii-engine 依赖 | ✅ 已完成 | 无 `iii-sdk`、`iii-engine` 引用 |
 | 启动故障隔离 | ✅ 已验证 | Memory init 失败不阻断 CLI 启动 |
 | 关闭清理 | ✅ 已完成 | `finally` 中 `memoryService.stop()` 清理所有 timer |
-| 记忆开关 `DEEPREEF_MEMORY=false` | ✅ 已完成 | 禁用后完全不加载 memory 包 |
+| 记忆开关 `DEEPREEF_MEMORY=false` | ✅ 已完成 | 禁用后不加载 `@deepreef/memory` 模块（动态 import）、不初始化 MemoryService、不注册工具、不读写数据 |
 
 ### 19.1 最终架构总结
 
@@ -1614,12 +1617,14 @@ packages/memory/
     state/            索引、搜索、schema
     providers/        LLM provider 适配层
     bridge/           DeepreefMemoryBridge（生命周期桥梁）
-    tools.ts          AgentTool 工厂（6 个记忆工具）
+    tools.ts          AgentTool 工厂（6 个记忆工具 + memory_migrate）
     migrate.ts        ~/.agentmemory 迁移
-    memory-service.ts 统一入口（start/stop/trigger）
+    memory-service.ts 统一入口（start/stop/trigger），完整消费 config
     hooks/            死代码（被 bridge 替代，@ts-nocheck 保留）
 
-packages/cli/src/tui.ts  — MemoryService init + HookManager 接线 + 工具注册
+packages/cli/src/tui.ts  — MemoryService init + HookManager 接线 + 工具注册 + 动态 import
+
+packages/tui/src/bridge.tsx  — createBridge 新增 onUserInput 回调
 
 依赖关系：@deepreef/memory → @deepreef/core（AgentTool 类型）
          @deepreef/cli → @deepreef/memory（创建 + 接线）
@@ -1636,5 +1641,72 @@ packages/cli/src/tui.ts  — MemoryService init + HookManager 接线 + 工具注
 | 上下文注入 | 独立 hook 脚本写 stdout | `mem::context` 注入 system prompt |
 | BM25 索引 | iii-engine | `IndexPersistence` 文件持久化 |
 | 向量索引 | iii-engine | `VectorIndex` 内存 + 文件持久化 |
-| 工具暴露 | 53 个 MCP 工具 | 6 个原生 AgentTool（高级工具可配） |
+| 工具暴露 | 53 个 MCP 工具 | 7 个原生 AgentTool（含 memory_migrate，高级工具可配） |
 | AgentMemory 数据 | `~/.agentmemory` | `~/.deepreef/memory`（可迁移） |
+
+---
+
+## 20. AgentMemory 原生集成修复轮（2026-06-09）
+
+依据 `docs/agentmemory-native-integration-review-fixes.md` 审查文档完成全部 P0 和关键 P1 修复。
+
+### 20.1 修复清单
+
+| 编号 | 优先级 | 内容 | 修改文件 |
+|------|--------|------|----------|
+| P0-1 | P0 | memory context 注入后重新调用 `engine.setSystemPrompt()` | `tui.ts` |
+| P0-2 | P0 | prompt 观察从 `assistant_delta` 改为用户输入真实入口 | `tui.ts`, `bridge.tsx`, `App.tsx` |
+| P0-3 | P0 | `memory_status` 调用 ID 修正为 `mem::diagnose` | `tools.ts` |
+| P1-1 | P1 | 接入 `onSessionStart()`，hook adapter 引用已保存 | `tui.ts` |
+| P1-2 | P1 | `MemoryServiceConfig` 完整消费，开关实际控制函数注册和定时器 | `memory-service.ts` |
+| P1-3 | P1 | 导出并注册 `memory_migrate`，移除无用 store 参数 | `migrate.ts`, `index.ts`, `tui.ts` |
+| P1-4 | P1 | memory 改为动态 `import()`，`DEEPREEF_MEMORY=false` 时不加载模块 | `tui.ts` |
+| P1-5 | P1 | 日志前缀从 `[agentmemory]` 改为 `[deepreef:memory]` | `logger.ts` |
+
+### 20.2 关键变更说明
+
+**P0-2：prompt 观察路径**
+
+```text
+旧路径（错误）：
+  onLoopEvent → assistant_delta → onPromptSubmit()
+  问题：assistant_delta 是模型输出，不是用户输入；一个回复产生多个 delta
+
+新路径（正确）：
+  pipe mode:  直接调用 bridge.onPromptSubmit() before engine.submit()
+  TUI mode:   App.onUserInput → bridge.onPromptSubmit()
+  机制：bridge.tsx 的 createBridge 新增 onUserInput 回调参数
+        App.tsx 新增 onUserInput prop
+        tui.ts 传递 memoryBridge.onPromptSubmit 作为回调
+```
+
+**P1-4：动态 import**
+
+```text
+旧：文件顶部静态 import { MemoryService, ... } from "@deepreef/memory"
+新：if (enableMemory) { const memory = await import("@deepreef/memory") ... }
+效果：DEEPREEF_MEMORY=false 时完全不加载 memory 模块
+```
+
+**P1-2：配置优先级**
+
+```text
+旧：构造函数只读 dataDir，其余 config 字段全部丢弃
+新：this.userConfig = userConfig 完整保存
+    registerAllFunctions() 中 uc.enableGraph ?? isGraphExtractionEnabled()
+    显式构造参数 > 环境变量 > 默认值
+```
+
+### 20.3 验收
+
+```bash
+bun run typecheck                    # 通过
+bun run --cwd packages/memory typecheck  # 通过
+```
+
+### 20.4 仍需后续处理
+
+- `onGenerationComplete` 未接线（bridge 已实现，CLI 未接入）
+- `onPreToolUse` 明确不接入（DONE 已列为限制）
+- Subagent start/stop 观察未接入
+- 测试门禁待建立（详见 review 文档第 3 节）

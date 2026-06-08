@@ -1,7 +1,6 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs"
-import { MemoryStore } from "./runtime/memory-store.js"
 
 /**
  * Migrate data from ~/.agentmemory to ~/.deepreef/memory.
@@ -57,11 +56,13 @@ export async function migrateFromAgentMemory(targetDir?: string): Promise<Migrat
   return result
 }
 
-export function createMemoryMigrateTool(store: MemoryStore) {
+export function createMemoryMigrateTool() {
   return {
     name: "memory_migrate",
     description: "Migrate memory data from ~/.agentmemory to ~/.deepreef/memory",
-    parameters: { type: "object", properties: {} },
+    parameters: { type: "object" as const, properties: {} },
+    concurrency: "exclusive" as const,
+    approval: "write" as const,
     async execute() {
       const result = await migrateFromAgentMemory()
       return {

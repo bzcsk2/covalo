@@ -6,7 +6,7 @@ import { buildSystemPrompt } from "@deepreef/core"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend } from "@deepreef/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@deepreef/mcp"
 import { PluginRuntime, pluginToolsToAgentTools } from "@deepreef/plugin"
-import { MemoryService, DeepreefMemoryBridge, createMemoryRecallTool, createMemorySaveTool, createMemorySmartSearchTool, createMemoryForgetTool, createMemoryTimelineTool, createMemoryStatusTool } from "@deepreef/memory"
+// P1-4: Memory is dynamically imported when enabled to avoid loading when DEEPREEF_MEMORY=false
 import React from "react"
 import { wrappedRender as render } from "@deepreef/ink"
 import { App } from "@deepreef/tui"
@@ -75,12 +75,14 @@ async function main(): Promise<void> {
   engine.setSystemPrompt(baseSystemPrompt)
 
   // Phase C: Initialize memory subsystem (non-blocking, best-effort)
-  let memoryService: MemoryService | undefined
-  let memoryBridge: DeepreefMemoryBridge | undefined
+  // P1-4: Dynamic import — only load @deepreef/memory when enabled
+  let memoryService: import("@deepreef/memory").MemoryService | undefined
+  let memoryBridge: import("@deepreef/memory").DeepreefMemoryBridge | undefined
   const enableMemory = process.env.DEEPREEF_MEMORY !== "false"
   if (enableMemory) {
     try {
-      memoryService = new MemoryService({
+      const memory = await import("@deepreef/memory")
+      memoryService = new memory.MemoryService({
         autoObserve: true,
         injectContext: true,
         advancedTools: process.env.DEEPREEF_MEMORY_ADVANCED === "true",
@@ -90,39 +92,41 @@ async function main(): Promise<void> {
         enableSlots: process.env.DEEPREEF_MEMORY_SLOTS === "true",
       })
       await memoryService.start()
-      memoryBridge = new DeepreefMemoryBridge(memoryService, { autoObserve: true, injectContext: true })
+      memoryBridge = new memory.DeepreefMemoryBridge(memoryService, { autoObserve: true, injectContext: true })
 
-      // Inject initial memory context into system prompt
+      // P1-1: Session lifecycle — call onSessionStart after service is ready
+      await memoryBridge.onSessionStart(engine.getSessionId()).catch(() => {})
+
+      // P0-1: Inject initial memory context into system prompt, then re-set on engine
       const memContext = await memoryService.trigger("mem::context", { sessionId: engine.getSessionId(), maxChars: 2000 }).catch(() => null)
       if (memContext && typeof memContext === "object" && "context" in memContext) {
         const ctx = (memContext as { context: string }).context
         if (ctx) baseSystemPrompt += `\n\n<deepreef-memory-context>\n${ctx}\n</deepreef-memory-context>`
       }
+      // P0-1: Re-set system prompt after memory context is appended
+      engine.setSystemPrompt(baseSystemPrompt)
 
       // Wire bridge hooks into engine's HookManager
-      engine.hookManager.addHooks({
-        afterToolCall: async (toolName, result) => {
+      // P0-2: onLoopEvent no longer observes assistant_delta for prompt_submit
+      const hookAdapter = {
+        afterToolCall: async (toolName: string, result: { content: string; isError: boolean }) => {
           if (result.isError) {
             await memoryBridge?.onPostToolFailure(engine.getSessionId(), toolName, result.content).catch(() => {})
           } else {
             await memoryBridge?.onPostToolUse(engine.getSessionId(), toolName, result).catch(() => {})
           }
         },
-        onLoopEvent: async (event) => {
-          const ev = event as { role?: string; content?: string }
-          if (ev.role === "assistant_delta" && ev.content && ev.content.length > 10) {
-            await memoryBridge?.onPromptSubmit(engine.getSessionId(), ev.content).catch(() => {})
-          }
-        },
-      })
+      }
+      engine.hookManager.addHooks(hookAdapter)
 
-      // Register memory tools
-      engine.registerTool(createMemoryRecallTool(memoryService))
-      engine.registerTool(createMemorySaveTool(memoryService))
-      engine.registerTool(createMemorySmartSearchTool(memoryService))
-      engine.registerTool(createMemoryForgetTool(memoryService))
-      engine.registerTool(createMemoryTimelineTool(memoryService))
-      engine.registerTool(createMemoryStatusTool(memoryService))
+      // P1-3: Register memory_migrate tool + P0-3 fix via dynamic import
+      engine.registerTool(memory.createMemoryRecallTool(memoryService))
+      engine.registerTool(memory.createMemorySaveTool(memoryService))
+      engine.registerTool(memory.createMemorySmartSearchTool(memoryService))
+      engine.registerTool(memory.createMemoryForgetTool(memoryService))
+      engine.registerTool(memory.createMemoryTimelineTool(memoryService))
+      engine.registerTool(memory.createMemoryStatusTool(memoryService))
+      engine.registerTool(memory.createMemoryMigrateTool())
 
       process.stderr.write(`[deepreef] Memory initialized\n`)
     } catch (e) {
@@ -186,11 +190,11 @@ async function main(): Promise<void> {
 
   try {
     if (!input.isTTY) {
-      await runPipeMode(engine)
+      await runPipeMode(engine, memoryBridge)
       return
     }
 
-    await runTUIMode(engine, config, pluginRuntime, mcpConfigs.length)
+    await runTUIMode(engine, config, pluginRuntime, mcpConfigs.length, memoryBridge)
   } finally {
     // Phase C: Stop memory subsystem before engine (best-effort)
     await memoryBridge?.onSessionEnd(engine.getSessionId()).catch(() => {})
@@ -204,11 +208,15 @@ async function main(): Promise<void> {
   }
 }
 
-async function runPipeMode(engine: ReasonixEngine): Promise<void> {
+async function runPipeMode(engine: ReasonixEngine, memoryBridge?: import("@deepreef/memory").DeepreefMemoryBridge): Promise<void> {
   const chunks: Buffer[] = []
   for await (const chunk of input) chunks.push(Buffer.from(chunk))
   const prompt = Buffer.concat(chunks).toString("utf8").trim()
   if (!prompt) return
+  // P0-2: Observe user prompt at the real entry point (before engine.submit)
+  if (memoryBridge) {
+    await memoryBridge.onPromptSubmit(engine.getSessionId(), prompt).catch(() => {})
+  }
   for await (const event of engine.submit(prompt)) {
     switch (event.role) {
       case "assistant_delta":
@@ -249,7 +257,7 @@ async function runPipeMode(engine: ReasonixEngine): Promise<void> {
   }
 }
 
-async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof loadConfig>, pluginRuntime: PluginRuntime, mcpConfigCount: number = 0): Promise<void> {
+async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof loadConfig>, pluginRuntime: PluginRuntime, mcpConfigCount: number = 0, memoryBridge?: import("@deepreef/memory").DeepreefMemoryBridge): Promise<void> {
   const status = pluginRuntime.getStatus()
   const pluginCount = status.loadedPlugins.length
   const contentPackCount = status.contentPacks.length
@@ -259,9 +267,13 @@ async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof load
     errors: status.diagnostics.filter(d => d.startsWith("[error]")).length,
     warnings: status.diagnostics.filter(d => d.startsWith("[warn]")).length,
   }
+  // P0-2: Provide onUserInput callback so bridge can observe user prompts at the real entry point
+  const onUserInput = memoryBridge
+    ? (text: string) => { void memoryBridge!.onPromptSubmit(engine.getSessionId(), text).catch(() => {}) }
+    : undefined
   try {
     const { waitUntilExit } = await render(
-      React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts }),
+      React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts, onUserInput }),
       { exitOnCtrlC: false }
     );
     await waitUntilExit();

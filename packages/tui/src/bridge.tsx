@@ -92,7 +92,8 @@ function parseArgs(raw: string | undefined): Record<string, unknown> {
 
 export function createBridge(
   engine: ReasonixEngine,
-  setState: React.Dispatch<React.SetStateAction<BridgeState>>
+  setState: React.Dispatch<React.SetStateAction<BridgeState>>,
+  onUserInput?: (text: string) => void,
 ): {
   submit: (text: string) => Promise<void>;
   cancel: () => void;
@@ -155,6 +156,7 @@ export function createBridge(
   };
 
   const submit = async (text: string) => {
+    onUserInput?.(text);
     if (running) {
       const result = engine.enqueueInstruction(text);
       if (result.status === 'queued') {

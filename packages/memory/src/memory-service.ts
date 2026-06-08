@@ -111,6 +111,7 @@ export class MemoryService {
   private store: MemoryStore
   private kv!: StateKV
   private config = loadConfig()
+  private userConfig: MemoryServiceConfig
   private metricsStore!: MetricsStore
   private dedupMap = new DedupMap()
   private healthMonitor?: { stop: () => void }
@@ -121,6 +122,7 @@ export class MemoryService {
   private logLines: string[] = []
 
   constructor(userConfig: MemoryServiceConfig = {}) {
+    this.userConfig = userConfig
     this.store = new MemoryStore(userConfig.dataDir)
   }
 
@@ -218,11 +220,19 @@ export class MemoryService {
     const mp = provider as MemoryProvider
     const ep = embeddingProvider as EmbeddingProvider | null
     const iep = imageEmbeddingProvider as EmbeddingProvider | null
+
+    // P1-2: Config priority — explicit constructor args > env vars
+    const uc = this.userConfig
+    const shouldEnableGraph = uc.enableGraph ?? isGraphExtractionEnabled()
+    const shouldEnableSlots = uc.enableSlots ?? isSlotsEnabled()
+    const shouldEnableReflect = uc.enableReflect ?? isReflectEnabled()
+    const shouldEnableConsolidation = uc.enableConsolidation ?? isConsolidationEnabled()
+
     registerPrivacyFunction(sdk)
     registerObserveFunction(sdk, kv, this.dedupMap, this.config.maxObservationsPerSession)
     registerImageQuotaCleanup(sdk, kv)
     registerVisionSearchFunctions(sdk, kv, iep)
-    if (isSlotsEnabled()) registerSlotsFunctions(sdk, kv)
+    if (shouldEnableSlots) registerSlotsFunctions(sdk, kv)
     registerDiskSizeManager(sdk, kv)
     registerCompressFunction(sdk, kv, mp, this.metricsStore)
     registerSearchFunction(sdk, kv)
@@ -246,8 +256,8 @@ export class MemoryService {
       registerClaudeBridgeFunction(sdk, kv, claudeBridgeConfig)
     }
 
-    if (isGraphExtractionEnabled()) registerGraphFunction(sdk, kv, mp)
-    registerConsolidationPipelineFunction(sdk, kv, mp)
+    if (shouldEnableGraph) registerGraphFunction(sdk, kv, mp)
+    if (shouldEnableConsolidation) registerConsolidationPipelineFunction(sdk, kv, mp)
 
     const teamConfig = loadTeamConfig()
     if (teamConfig) registerTeamFunction(sdk, kv, teamConfig)
@@ -270,7 +280,7 @@ export class MemoryService {
     registerVerifyFunction(sdk, kv)
     registerLessonsFunctions(sdk, kv)
     registerObsidianExportFunction(sdk, kv)
-    registerReflectFunctions(sdk, kv, mp)
+    if (shouldEnableReflect) registerReflectFunctions(sdk, kv, mp)
     registerWorkingMemoryFunctions(sdk, kv, this.config.tokenBudget)
     registerSkillExtractFunctions(sdk, kv, mp)
     registerCascadeFunction(sdk, kv)
@@ -301,7 +311,9 @@ export class MemoryService {
       const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::insight-decay-sweep", payload: {} }).catch(() => {}) }, 86400000)
       t.unref(); this.timers.push(t)
     }
-    if (isConsolidationEnabled()) {
+    // P1-2: Use userConfig.enableConsolidation with env var fallback
+    const shouldConsolidate = this.userConfig.enableConsolidation ?? isConsolidationEnabled()
+    if (shouldConsolidate) {
       const consolidationMs = parseInt(process.env.CONSOLIDATION_INTERVAL_MS || "7200000", 10)
       const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::consolidate-pipeline", payload: {} }).catch(() => {}) }, consolidationMs)
       t.unref(); this.timers.push(t)

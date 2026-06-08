@@ -145,7 +145,7 @@ export function createMemoryStatusTool(memory: MemoryService): AgentTool {
     approval: "read",
     async execute(): Promise<ToolResult> {
       try {
-        const result = await memory.trigger("mem::diagnostics", {})
+        const result = await memory.trigger("mem::diagnose", {})
         return ok(result)
       } catch (e) { return err(String(e)) }
     },

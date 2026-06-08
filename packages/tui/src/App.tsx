@@ -185,6 +185,7 @@ interface AppProps {
   contentPackCount?: number;
   assetCounts?: { skills: number; agents: number; rules: number; commands: number; mcp: number; hooks: number };
   diagnosticCounts?: { errors: number; warnings: number };
+  onUserInput?: (text: string) => void;
 }
 
 /**
@@ -200,7 +201,7 @@ interface AppProps {
  * @param engine - ReasonixEngine 实例，驱动 LLM 通信
  * @param config - DeepreefConfig 配置对象（provider / model / contextWindow 等）
  */
-export function App({ engine, config, pluginCount = 0, contentPackCount = 0, assetCounts, diagnosticCounts }: AppProps) {
+export function App({ engine, config, pluginCount = 0, contentPackCount = 0, assetCounts, diagnosticCounts, onUserInput }: AppProps) {
   const persistedSettings = useMemo(() => loadTuiSettings(), []);
   const persistedThinkingMode = persistedSettings.thinkingMode && !validateThinkingMode(persistedSettings.thinkingMode)
     ? persistedSettings.thinkingMode
@@ -212,7 +213,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     ...initialState,
     thinkingMode: persistedThinkingMode ?? engine.getThinkingMode?.() ?? 'off',
   }));
-  const bridge = useMemo(() => createBridge(engine, setBridgeState), [engine]);
+  const bridge = useMemo(() => createBridge(engine, setBridgeState, onUserInput), [engine, onUserInput]);
   const bridgeRef = useRef(bridge);
   bridgeRef.current = bridge;
   const contextTotal = engine.getContextWindow?.() ?? config.contextWindow ?? 128_000;
