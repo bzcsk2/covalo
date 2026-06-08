@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run packages/cli/src/index.ts",
     "test": "bun test",
+    "test:memory-native": "bun test packages/memory/test/deepreef-*.test.ts packages/cli/src/__tests__/memory-integration.test.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   },
   "devDependencies": {

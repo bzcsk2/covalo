@@ -156,10 +156,6 @@ export function createBridge(
   };
 
   const submit = async (text: string, isQueueResubmit = false) => {
-    // P0-2: Only observe fresh user input, not queue re-submissions
-    if (!isQueueResubmit) {
-      onUserInput?.(text);
-    }
     if (running) {
       const result = engine.enqueueInstruction(text);
       if (result.status === 'queued') {
@@ -177,6 +173,12 @@ export function createBridge(
       if (result.status === 'ignored') return;
       setState(prev => ({ ...prev, messageQueue: [...prev.messageQueue, text] }));
       return;
+    }
+
+    // P0-2: Only observe fresh user input, not queue re-submissions
+    // Moved after enqueue check — ignored inputs should not be observed
+    if (!isQueueResubmit) {
+      onUserInput?.(text);
     }
 
     running = true;

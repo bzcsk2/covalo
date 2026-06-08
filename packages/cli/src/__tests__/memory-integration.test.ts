@@ -49,9 +49,4 @@ describe("CLI memory integration (Deepreef native)", () => {
     expect((svc as any).config).toBeDefined()
     await svc.stop()
   })
-
-  it("tui.ts module loads without error", async () => {
-    const mod = await import("../tui.js")
-    expect(mod).toBeDefined()
-  })
 })

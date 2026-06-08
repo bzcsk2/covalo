@@ -1647,7 +1647,7 @@ packages/tui/src/bridge.tsx  — createBridge 新增 onUserInput 回调
 
 ## 20. AgentMemory 原生集成修复轮（2026-06-09）
 
-依据 `docs/agentmemory-native-integration-review-fixes.md` 审查文档完成全部 P0 和关键 P1 修复，随后通过二轮审查修复剩余问题。
+依据 `docs/agentmemory-native-integration-review-fixes.md` 审查文档完成全部 P0 和关键 P1 修复，随后通过二、三轮审查修复剩余问题。
 
 ### 20.1 修复清单
 
@@ -1673,6 +1673,15 @@ packages/tui/src/bridge.tsx  — createBridge 新增 onUserInput 回调
 | FIX-3 | 中 | consolidation timer 增加 `advancedTools` 门控 | `memory-service.ts` |
 | FIX-4 | 中 | `injectContext=false` 时跳过 `mem::context` 调用 | `tui.ts` |
 | FIX-5 | 低 | DONE.md 移除 `onGenerationComplete 未接线` 过时描述 | `DONE.md` |
+
+**第三轮（本轮）**
+
+| 编号 | 优先级 | 内容 | 修改文件 |
+|------|--------|------|----------|
+| FIX-6 | 中 | ignored 输入不再写入 Memory：`onUserInput` 移到 `enqueueInstruction` 状态检查之后 | `bridge.tsx` |
+| FIX-7 | 中 | CLI 测试移除 tui.ts 导入（触发 `main()`/`process.exit()`） | `memory-integration.test.ts` |
+| FIX-8 | 中 | `onGenerationComplete` 竞态：追踪最后一个 hook promise，cleanup 前 await | `tui.ts` |
+| FIX-9 | 低 | `package.json` 添加 `test:memory-native` 脚本 | `package.json` |
 
 ### 20.2 关键变更说明
 
@@ -1735,26 +1744,49 @@ packages/tui/src/bridge.tsx  — createBridge 新增 onUserInput 回调
     → DEEPREEF_MEMORY_INJECT_CONTEXT=false 时不调用，不污染 system prompt
 ```
 
+**FIX-6：ignored 输入不再观察**
+
+```text
+旧：onUserInput() 在 enqueueInstruction() 之前调用
+    → 空白/ignored 输入也被记录为观察
+新：onUserInput() 移到 enqueueInstruction() 状态检查之后
+    → ignored 时直接 return，不调用 onUserInput
+```
+
+**FIX-8：onGenerationComplete 竞态**
+
+```text
+旧：engine 的 void runOnLoopEvent() 是 fire-and-forget
+    → CLI finally 可能在 generation observation 完成前执行 onSessionEnd/stop
+新：hookAdapter 包装为 trackedAdapter，存储 lastHookPromise
+    → finally 中 await lastHookPromise?.catch(() => {}) 后再清理
+```
+
 ### 20.3 验收
 
 ```bash
 bun run typecheck                          # 通过
 bun run --cwd packages/memory typecheck    # 通过
-bun test packages/memory/test/deepreef-*.test.ts packages/cli/src/__tests__/memory-integration.test.ts  # 33/33 通过
+bun run test:memory-native                 # 32/32 通过
 ```
 
 ### 20.4 测试门禁（已建立）
 
+```bash
+bun run test:memory-native   # 独立脚本，可接入 CI
+```
+
 | 测试文件 | 覆盖内容 | 状态 |
 |----------|----------|------|
-| `test/deepreef-memory-service.test.ts` | service start/stop/CRUD/evict | ✅ 12/12 |
-| `test/deepreef-memory-tools.test.ts` | agent tool shape/execute/full flow | ✅ 10/10 |
-| `test/deepreef-memory-bridge.test.ts` | bridge hook lifecycle/autoObserve | ✅ 10/10 |
+| `test/deepreef-memory-service.test.ts` | service start/stop/CRUD/evict | ✅ 5/5 |
+| `test/deepreef-memory-tools.test.ts` | agent tool shape/execute/full flow | ✅ 8/8 |
+| `test/deepreef-memory-bridge.test.ts` | bridge hook lifecycle/autoObserve | ✅ 11/11 |
 | `test/deepreef-memory-migration.test.ts` | migrate tool shape/schema/execute | ✅ 3/3 |
-| `packages/cli/src/__tests__/memory-integration.test.ts` | CLI import/tool registration/service lifecycle | ✅ 6/6 |
+| `packages/cli/src/__tests__/memory-integration.test.ts` | CLI import/tool registration/service lifecycle | ✅ 5/5 |
 
 ### 20.5 仍需后续处理
 
 - `onPreToolUse` 明确不接入（DONE 已列为限制）
 - Subagent start/stop 观察未接入
 - 测试断言强度待加强（advancedTools 注册验证、autoObserve 观察计数、forget 后 recall 验证）
+- CI 集成待完成（test:memory-native 脚本已就绪，需接入 CI pipeline）
