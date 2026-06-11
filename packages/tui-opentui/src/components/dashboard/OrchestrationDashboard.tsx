@@ -11,20 +11,19 @@
  * - 后续手动调整三栏比例时，只需修改 flex 或 layout.panelGap
  */
 
-import React from "react";
+import type { TuiState } from "../../store/types.js";
 import { colors } from "../../theme/colors.js";
 import { layout } from "../../theme/layout.js";
-import { tuiStore, selectors, useStore } from "../../store/index.js";
 
 export interface OrchestrationDashboardProps {
   terminalWidth: number;
+  state: TuiState;
 }
 
-export const OrchestrationDashboard: React.FC<OrchestrationDashboardProps> = () => {
-  // 使用细粒度 selector，只在对应数据变化时重绘该面板
-  const workers = useStore(tuiStore, selectors.workers);
-  const supervisors = useStore(tuiStore, selectors.supervisors);
-  const loop = useStore(tuiStore, selectors.loop);
+export function OrchestrationDashboard({ state }: OrchestrationDashboardProps) {
+  const workers = Object.values(state.workers);
+  const supervisors = Object.values(state.supervisors);
+  const loop = state.loop;
 
   return (
     <box style={{ flexDirection: "row", gap: layout.panelGap }}>
@@ -88,4 +87,4 @@ export const OrchestrationDashboard: React.FC<OrchestrationDashboardProps> = () 
       </box>
     </box>
   );
-};
+}

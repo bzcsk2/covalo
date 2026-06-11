@@ -1,25 +1,14 @@
 /**
- * React Hook：从 Store 订阅细粒度状态
+ * 状态订阅工具（非 React Hook 版本）
  *
  * 设计要点：
- * - 使用 selector 避免不必要重渲染（关键性能优化）
- * - 支持自定义 equalityFn（默认浅比较）
- * - 代码简洁，易于在任意组件中使用
+ * - 由于 @opentui/react 和本地 React 实例冲突，暂不使用 useSyncExternalStore
+ * - 使用传统的 subscribe + forceUpdate 模式，通过 createRoot 的 render 触发更新
+ * - 后续如需优化，可将整个 App 作为单一订阅者，而非每个组件单独订阅
  */
 
-import { useSyncExternalStore } from "react";
 import type { Store } from "./create-store.js";
 
-export function useStore<T, S>(
-  store: Store<T>,
-  selector: (state: T) => S,
-  equalityFn: (a: S, b: S) => boolean = Object.is
-): S {
-  const subscribe = (onStoreChange: () => void) => {
-    return store.subscribe(() => onStoreChange());
-  };
-
-  const getSnapshot = () => selector(store.getState());
-
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+export function subscribeStore<T>(store: Store<T>, callback: (state: T) => void): () => void {
+  return store.subscribe(callback);
 }
