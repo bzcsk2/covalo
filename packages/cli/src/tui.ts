@@ -12,6 +12,9 @@ import React from "react"
 import { wrappedRender as render } from "@deepreef/ink"
 import { App, createFrameMetricsHandler } from "@deepreef/tui"
 
+// TUI-OT-00: 显式 TUI 模式切换（默认 ink，不修改现有入口）
+const TUI_MODE = (process.env.DEEPREEF_TUI || "ink").toLowerCase() as "ink" | "opentui"
+
 function printHelp(): void {
   output.write(`deepreef
 
@@ -310,6 +313,14 @@ async function runTUIMode(
       getMemoryBridge?.()?.onPromptSubmit(engine.getSessionId(), text),
     ).catch(() => {})
   }
+
+  // TUI-OT-00: OpenTUI 分支（仅当 DEEPREEF_TUI=opentui 时激活）
+  if (TUI_MODE === "opentui") {
+    const { startOpenTUI } = await import("@deepreef/tui-opentui")
+    await startOpenTUI({ engine, config })
+    return
+  }
+
   try {
     const { waitUntilExit } = await render(
       React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts, onUserInput, beforeSubmit }),
