@@ -3092,3 +3092,78 @@ const ProjectHarnessConfigSchema = z.object({
 - `bun test packages/core/__tests__/engine-tools.test.ts` — **29 pass / 0 fail**
 - `bun test packages/core/__tests__/harness-strictness.test.ts` — **19 pass / 0 fail**
 - 合计 **48 pass / 0 fail**
+
+---
+
+## 44. TUI-STYLE：new_tui 配色与布局迁移（2026-06-12）
+
+将 Deepreef TUI 的配色和布局升级为 `/vol4/Agent/new_tui` 风格。
+
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| TUI-STYLE-01 | ✅ 已完成 | `reasonix/tokens.ts` — 全面替换配色为 new_tui 暗色调板 |
+| TUI-STYLE-02 | ✅ 已完成 | `FullscreenLayout.tsx` — 移除硬编码背景色（透明），保留 ─ 分隔线 |
+| TUI-STYLE-03 | ✅ 已完成 | `StatusBar.tsx` — 顶部 ─ 分隔线 + 紧凑信息排列 |
+| TUI-STYLE-04 | ✅ 已完成 | `DeepiMessages.tsx` — 用户前缀 > / 助手前缀 ●（紫） |
+| TUI-STYLE-05 | ✅ 已完成 | `StreamingCard.tsx` — 完成态前缀 ●（紫） |
+| TUI-STYLE-06 | ✅ 已完成 | `OrchestrationSummary.tsx` — 完整重写为 new_tui 卡片风格（左侧 accent 色条 + 大写 Badge 标签） |
+| TUI-STYLE-07 | ✅ 已完成 | `useMessageScroll.ts` — 禁用 PageUp/PageDown/鼠标滚轮，仅保留 Home/End |
+| TUI-STYLE-08 | ✅ 已完成 | `DeepiPromptInput.tsx` — 忽略鼠标滚轮事件，防止触发输入历史导航 |
+
+### 44.1 TUI-STYLE-01：配色令牌
+
+**修改文件：** `packages/tui/src/reasonix/tokens.ts`
+
+| 令牌 | 原值 | 新值（new_tui） |
+|------|------|-----------------|
+| `fg.strong` | `#ffffff` | `#e0e0e0` |
+| `fg.body` | `#E1D3DC` | `#85a9ff` |
+| `fg.sub` | `#8D7B88` | `#9ca3af` |
+| `fg.meta` | `#8D7B88` | `#6b7280` |
+| `fg.faint` | `#5D5159` | `#4b5563` |
+| `tone.brand` | `#00FF66` | `#3b82f6` |
+| `tone.accent` | `#4A90E2` | `#a855f7` |
+| `tone.ok` | `#00FF66` | `#00ff41` |
+| `tone.warn` | `#FFBD2E` | `#f59e0b` |
+| `tone.err` | `#FF5F56` | `#ef4444` |
+| `tone.info` | `#4A90E2` | `#3b82f6` |
+| `surface.bg` | `#000000` | `#050505` |
+| `surface.bgInput` | `#653a99be` | `#0c0c0c` |
+| `surface.bgCode` | `#0C0C0C` | `#0c0c0c` |
+| `surface.bgElev` | `#13283F` | `#0a0a0a` |
+
+### 44.2 TUI-STYLE-02~03：布局与状态栏
+
+**修改文件：**
+- `packages/tui/src/FullscreenLayout.tsx` — 移除所有 `backgroundColor` 硬编码（`#050505`/`#0a0a0a`），布局背景透明继承终端默认背景；保留顶部/底部 ─ 分隔线
+- `packages/tui/src/StatusBar.tsx` — 添加顶部 ─ 分隔线；信息排列：`agent(蓝) · provider/model(灰) · [thinking](紫) | tokens`
+
+### 44.3 TUI-STYLE-04~05：消息卡片
+
+**修改文件：**
+- `packages/tui/src/DeepiMessages.tsx` — 用户消息前缀改为 `> `（蓝）、助手消息前缀改为 `●`（紫）
+- `packages/tui/src/reasonix/StreamingCard.tsx` — 完成态前缀改为 `●`（紫）匹配助手消息
+
+### 44.4 TUI-STYLE-06：编排概览卡片
+
+**修改文件：** `packages/tui/src/components/orchestration/OrchestrationSummary.tsx`
+
+完整重写，核心变化：
+- 配色从 `getSemanticColors()` 切换为 `FG`/`TONE`/`SURFACE` 令牌体系
+- 每列使用左侧 accent 色条卡片（`AcctCard`），匹配 new_tui 的 `border-l` 风格
+- 状态标签改为大写 Badge 样式（`RUNNING`/`DONE`/`FAILED` 等）
+- 列标题改为元数据灰色大写（`WORKERS`/`SUPERVISOR`/`LOOP`）
+- 活动 Worker 显示 `active/total` 统计
+- 状态色映射：蓝（running/act）、紫（reviewing/verify）、绿（completed/done）、琥珀（waiting/cooldown）、红（failed/cancelled）
+
+### 44.5 TUI-STYLE-07~08：交互禁用
+
+**修改文件：**
+- `packages/tui/src/useMessageScroll.ts` — 删除 PageUp/PageDown/Ctrl+方向键 全部翻页滚动 + 鼠标滚轮绑定，仅保留 Home（跳到顶部）和 End（跳到底部）
+- `packages/tui/src/DeepiPromptInput.tsx` — `useInput` 回调顶部增加 `if (key.wheelUp \|\| key.wheelDown) return`，防止鼠标滚轮触发输入历史导航
+
+### 44.6 验收
+
+- `bun run typecheck` — 通过（0 错误）
+- `bun test packages/tui/__tests__/` — **86 pass / 0 fail**
+- 欢迎界面（`WelcomeScreen.tsx`）未做改动
