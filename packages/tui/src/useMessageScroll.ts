@@ -4,8 +4,9 @@ import type { ScrollBoxHandle } from '@deepreef/ink';
 import type React from 'react';
 
 /**
- * 绑定消息区 ScrollBox 的键盘/滚轮滚动。
- * 方向键留给输入框历史；此处用 PageUp/PageDown、Ctrl+方向键与滚轮。
+ * 绑定消息区 ScrollBox 的键盘滚动。
+ * PageUp/PageDown、Ctrl+方向键、Home/End。
+ * 鼠标滚轮已禁用。
  */
 export function useMessageScroll(
   scrollRef: React.RefObject<ScrollBoxHandle | null>,
@@ -28,14 +29,6 @@ export function useMessageScroll(
     }
     if (key.pageDown || (key.ctrl && key.downArrow)) {
       scrollByPage(1);
-      return;
-    }
-    if (key.wheelUp) {
-      scroll.scrollBy(-3);
-      return;
-    }
-    if (key.wheelDown) {
-      scroll.scrollBy(3);
       return;
     }
     if (key.home) {
