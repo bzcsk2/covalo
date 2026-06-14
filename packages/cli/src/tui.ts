@@ -6,7 +6,7 @@ import { buildSystemPrompt } from "@deepreef/core"
 import { DualAgentRuntime } from "@deepreef/core/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "@deepreef/core/workflow-coordinator/coordinator.js"
 import { QuestionService } from "@deepreef/core/question/service.js"
-import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend } from "@deepreef/tools"
+import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend, createAgentToolTool, createAskUserQuestionTool, createReadFileTool, createGrepTool, createListDirTool, createTodoWriteTool } from "@deepreef/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@deepreef/mcp"
 import { PluginRuntime, pluginToolsToAgentTools } from "@deepreef/plugin"
 import type { ToolCallHooks } from "@deepreef/security"
@@ -244,6 +244,19 @@ async function main(): Promise<void> {
       : config
     const supervisorEngine = new ReasonixEngine(supervisorConfig, clearReadTracker)
     supervisorEngine.setSystemPrompt(baseSystemPrompt)
+
+    // 给 supervisor 注册"监督规划"角色所需工具：派活（AgentTool）、求助（AskUser）、
+    // 读取证据（read_file/grep/list_dir）、任务清单（todowrite）。不注册写文件/exec
+    // 类工具 —— 执行应通过 AgentTool 派发给独立 worker 子 engine，避免 supervisor
+    // 自己动手偏离规划职责。这样 supervisor 在普通对话中可自主调度：分析→派活→
+    // 收结果→继续/修正/AskUser。/run 固定 Workflow 不受影响（它经
+    // WorkflowCoordinator 直接调 dual-runtime 两个 AgentRuntime，不走工具系统）。
+    supervisorEngine.registerTool(createAgentToolTool())
+    supervisorEngine.registerTool(createAskUserQuestionTool())
+    supervisorEngine.registerTool(createReadFileTool())
+    supervisorEngine.registerTool(createGrepTool())
+    supervisorEngine.registerTool(createListDirTool())
+    supervisorEngine.registerTool(createTodoWriteTool())
 
     // worker/supervisor 的 config 块：反映各自实际生效的 provider/model/baseUrl
     const workerEffectiveModel = workerRoleCfg?.model ?? config.model
