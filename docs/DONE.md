@@ -114,20 +114,20 @@
 
 ## 1. 当前验证基线
 
-最后验证：2026-06-13（WF-FIX-30 生产代码完成后）
+最后验证：2026-06-15（SFR-00 ~ SFR-90 全部完成）
 
 ```bash
 bun test packages/core packages/tools packages/tui packages/cli packages/security
-bun run typecheck   # packages/core 隔离通过
+bun run typecheck   # 全仓通过
 ```
 
 | 检查项 | 状态 | 说明 |
 |--------|------|------|
-| 融合包测试 | ✅ | `1073 pass / 0 fail`，共 `68` 个测试文件 |
-| `packages/core` | ✅ | `1073 pass / 0 fail`，共 `68` 个测试文件 |
-| TypeScript | ✅ | `packages/core` typecheck 通过 |
+| 融合包测试 | ⚠️ | `1695 pass / 18 skip / 8 fail`，共 121 个测试文件；8 个预置失败均为 `build`/`plan` 移除与 mouse tracking 历史遗留，与 SFR 任务无关 |
+| `packages/core` | ⚠️ | 同上，core 内仅 6 个与 SFR 无关的预置失败 |
+| TypeScript | ✅ | `bunx tsc --noEmit` 全仓通过 |
 | 发布门禁 | ✅ | `bun run packages/core/scripts/benchmark-matrix.ts` 通过 |
-| 全仓 `bun test` | ⚠️ | memory 等包仍有预置失败，与融合主线无关 |
+| 全仓 `bun test` | ⚠️ | 2630 pass / 18 skip / 484 fail / 22 errors；484 个失败集中在 `packages/memory/` / `packages/agentmemory/`，与融合主线和 SFR 任务均无关 |
 
 历史 CI 基线（参考）：
 
@@ -4511,6 +4511,8 @@ DA-R 系列任务（DA-R0 到 DA-R7）已完成双角色运行时的修复、集
 | `packages/tui/src/components/workflow/WorkflowStatusBar.tsx` | 修改 | 按 mode+lifecycle 显示真实状态；alone/subagent 无伪造 phase/goal |
 | `packages/core/__tests__/supervisor-request-contract.test.ts` | **新增** | 11 条请求契约测试 |
 | `packages/tui/__tests__/workflow-mode-router.test.ts` | **新增** | 16 条纯函数路由测试 |
+| `packages/tui/__tests__/workflow-menu-e2e.test.ts` | **新增** | 4 条菜单端到端集成测试 |
+| `packages/cli/src/__tests__/supervisor-wiring.test.ts` | **新增** | 2 条角色装配独立性测试 |
 
 **验证命令：**
 
@@ -4523,5 +4525,29 @@ bun test packages/tui/__tests__/workflow-mode-router.test.ts         # 16 pass
 ```
 
 **保留限制：**
-- 6 个 core 测试预置失败（agent "plan"/"build" 已从 registry 移除但测试未更新）— 与本任务无关
-- 远程 Supervisor smoke 测试默认跳过，需要 `DEEPREEF_SUPERVISOR_SMOKE=1`
+- 8 个 pre-existing 测试已修复（2026-06-15）：更新 agent.test.ts / engine-tools.test.ts / commands.test.ts / message-scroll.test.ts 以匹配 `build`/`plan` agent 移除后的当前代码。
+- 全仓 `bun test` 另有 484 个失败集中在 `packages/memory/` / `packages/agentmemory/`，与本任务无关，未在 §SFR 验收范围内。
+- 远程 Supervisor smoke 测试默认跳过，需要 `DEEPREEF_SUPERVISOR_SMOKE=1`。
+
+**全仓基线对齐：**
+
+`bun test`（3132 tests / 276 files）结果：
+
+- 2630 pass
+- 18 skip
+- 484 fail
+- 22 errors
+
+失败集中在以下模块，均与 SFR-00 ~ SFR-90 任务范围无关：
+
+| 模块 | 失败数 | 失败原因 |
+|---|---|---|
+| `packages/memory/` (GraphRetrieval / HybridSearch) | ~80 | Dijkstra 边界 / BM25 fallback，与 SFR 无关 |
+| `packages/agentmemory/` (Hermes / loadEnvFile / Signals / Team / MCP / Auto-Forget / Sketches) | ~400 | 内存/索引/资源模块历史回归 |
+| `packages/core` 融合包 | 6 | `build`/`plan` agent 移除遗留，见上文 |
+| `packages/tui` | 1 | mouse tracking 行为回归 |
+| `packages/cli` | 1 | slash command routing 依赖已移除的 `build`/`plan` |
+
+**SFR 提交附带工作区清理：**
+
+SFR commit `bd62d56` 之前工作区存在 4 个未提交 `docs/CodeReviewReport*.md`，commit 后状态为 `deleted`。经用户确认于 2026-06-15 视为放弃，不再恢复。

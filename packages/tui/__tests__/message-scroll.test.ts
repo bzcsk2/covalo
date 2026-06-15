@@ -25,13 +25,13 @@ function makeScroll(overrides: Partial<ScrollBoxHandle> = {}) {
 }
 
 afterEach(() => {
-  delete process.env.DEEPCODE_ENABLE_MOUSE
+  delete process.env.DEEPREEF_ENABLE_MOUSE
 })
 
 describe("message scrolling", () => {
   it("enables mouse tracking by default and supports explicit opt-out", () => {
     expect(isMouseTrackingEnabled()).toBe(true)
-    process.env.DEEPCODE_ENABLE_MOUSE = "0"
+    process.env.DEEPREEF_ENABLE_MOUSE = "0"
     expect(isMouseTrackingEnabled()).toBe(false)
   })
 

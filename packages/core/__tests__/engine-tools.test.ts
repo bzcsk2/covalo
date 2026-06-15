@@ -228,8 +228,8 @@ describe("ReasonixEngine tool loop regressions", () => {
   it("should reflect agent name in getAgentName after switchAgent", () => {
     const engine = makeEngine()
     expect(engine.getAgentName()).toBe("build")
-    engine.switchAgent("plan")
-    expect(engine.getAgentName()).toBe("plan")
+    engine.switchAgent("supervisor")
+    expect(engine.getAgentName()).toBe("supervisor")
   })
 
   it("should return engine state from getState", () => {

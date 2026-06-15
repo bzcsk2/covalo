@@ -2,35 +2,32 @@ import { describe, it, expect } from "vitest"
 import { getAgent, agentConfigFor, AGENTS, getMainMode, MAIN_MODES } from "../src/agent.js"
 
 describe("getAgent", () => {
-  it("should return Build Agent definition for 'build'", () => {
+  it("should return Worker agent definition as default for 'build'", () => {
     const agent = getAgent("build")
-    expect(agent.name).toBe("build")
-    expect(agent.label).toBe("Build Mode")
+    expect(agent.name).toBe("worker")
+    expect(agent.label).toBe("Worker")
   })
 
-  it("should return Plan Agent definition for 'plan'", () => {
+  it("should return Worker agent definition as default for 'plan'", () => {
     const agent = getAgent("plan")
-    expect(agent.name).toBe("plan")
-    expect(agent.label).toBe("Plan Mode")
+    expect(agent.name).toBe("worker")
+    expect(agent.label).toBe("Worker")
   })
 
-  it("should fallback to build for unknown agent", () => {
+  it("should fallback to worker for unknown agent", () => {
     const agent = getAgent("nonexistent")
-    expect(agent.name).toBe("build")
+    expect(agent.name).toBe("worker")
   })
 
-  it("should have at least 30 tools for build agent", () => {
-    const agent = getAgent("build")
-    expect(agent.toolNames!.length).toBeGreaterThanOrEqual(30)
+  it("should have tools for worker agent", () => {
+    const agent = getAgent("worker")
+    expect(agent.toolNames!.length).toBeGreaterThan(0)
   })
 
-  it("should have 4 tools for plan agent", () => {
-    const agent = getAgent("plan")
-    expect(agent.toolNames!).toHaveLength(4)
-    expect(agent.toolNames).toContain("read_file")
-    expect(agent.toolNames).toContain("list_dir")
-    expect(agent.toolNames).toContain("grep")
-    expect(agent.toolNames).toContain("todowrite")
+  it("should return Supervisor agent definition for 'supervisor'", () => {
+    const agent = getAgent("supervisor")
+    expect(agent.name).toBe("supervisor")
+    expect(agent.label).toBe("Supervisor")
   })
 })
 
@@ -49,14 +46,19 @@ describe("getMainMode", () => {
 })
 
 describe("agentConfigFor", () => {
-  it("should return default config for build agent", () => {
-    const cfg = agentConfigFor("build")
-    expect(cfg.name).toBe("build")
+  it("should return default config for worker agent", () => {
+    const cfg = agentConfigFor("worker")
+    expect(cfg.name).toBe("worker")
     expect(cfg.toolNames).toBeDefined()
   })
 
+  it("should return default config for supervisor", () => {
+    const cfg = agentConfigFor("supervisor")
+    expect(cfg.name).toBe("supervisor")
+  })
+
   it("should apply overrides", () => {
-    const cfg = agentConfigFor("build", { toolNames: ["bash"], systemPrompt: "custom" })
+    const cfg = agentConfigFor("worker", { toolNames: ["bash"], systemPrompt: "custom" })
     expect(cfg.toolNames).toEqual(["bash"])
     expect(cfg.systemPrompt).toBe("custom")
   })
