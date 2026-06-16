@@ -1,172 +1,262 @@
-
 # 🌊 DeepReef
 
-**让便宜模型也能稳定交付工程任务的终端原生 AI Loop Agent 。**
 <p align="center">
-  <img src="https://img.shields.io/badge/Bun-1.3+-orange" alt="Bun"/>
-  <img src="https://img.shields.io/badge/TypeScript-Ready-blue" alt="TypeScript"/>
-  <img src="https://img.shields.io/badge/核心已就绪-生产可用-brightgreen" alt="Status"/>
-  <img src="https://img.shields.io/badge/TUI-Ink%2FReact-blue" alt="TUI"/>
-  <img src="https://img.shields.io/badge/Schema-Zod_4-green" alt="Schema"/>
-  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"/>
+  <a href="./README.md">English</a> |
+  <strong>中文</strong>
 </p>
 
----
+<p align="center">
+  <img src="https://img.shields.io/badge/Bun-1.3+-orange" alt="Bun" />
+  <img src="https://img.shields.io/badge/TypeScript-Ready-blue" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Status-pre--1.0-yellow" alt="Status" />
+  <img src="https://img.shields.io/badge/TUI-Ink%2FReact-blue" alt="TUI" />
+  <img src="https://img.shields.io/badge/Schema-Zod_4-green" alt="Schema" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License" />
+</p>
 
-## **Deepreef 经济学
+**DeepReef 是一个终端原生 AI Loop Agent，目标是让便宜、免费、本地模型也能稳定交付工程任务。**
 
-**大部分 AI 编程工具都依赖昂贵的头部模型来保证工作质量，DeepReef 的哲学不同**：
+大部分 AI 编程工具默认依赖昂贵的头部模型来保证质量。DeepReef 的设计哲学不同：让更强的模型负责规划、监督、审查和纠偏，让便宜/免费/本地模型负责大量施工，再通过明确的执行闭环、证据汇报、失败恢复和权限边界把任务做完。
 
-> 不是靠昂贵模型一次性使用"金钱神力"，而是让高级模型规划监督，便宜/免费/本地模型下场施工，在针对性优化的监督闭环loop中持续可靠地把工程任务做完。
-
-## ⚔️ 双轨并行工作流
-
-我们摒弃了容易自我迷失的单体无限 Loop，采用**固定双角色 Workflow**：
-
-```
-Supervisor 分析 → Worker 执行 → Worker 汇报 → Supervisor 检查 → 继续/修正/求助人类
-```
-
-**👷 Worker (干活 Agent)**：token消耗者，配置本地或性价比高的模型，用户直接交互时为一个普通agent，进入workflow后听从Supervisor指挥，用户可根据模型能力选择harness档位，保证工作顺畅。
-
-**🕵️ Supervisor (监督 Agent)**：配置更智能的模型，用户直接交互时为一个普通agent，在Worflow中负责规划和审查， Worker 达到失败阈值或请求帮助时被主动唤醒，通过读取Worker汇报及不可变快照（EvidenceBundle）给出结构化建议并自动调用Worker进行下一步迭代，直到目标完成。
-
-- **会喊人**：判断Workflow真的无法推进时，Supervisor 会主动停止，ask_user求助。
+> DeepReef 不是要否定强模型，而是把强模型用在最有价值的位置，让弱模型也能持续工作。
 
 ---
 
-## 🚀 一句话快速开始
+## DeepReef 经济学
+
+DeepReef 关注的是 AI 编程进入长期工作流之后的真实成本：
+
+- 强模型负责关键判断，而不是每一步都亲自施工。
+- Worker 可以使用免费模型、低价 API 模型或本地 OpenAI-compatible 模型。
+- Supervisor 在规划、审查、失败恢复和最终判断时介入。
+- 通过缓存友好的上下文管理、工具调用修复、Session 恢复和 Verification Gate 减少重复消耗。
+
+这套思路适合独立开发者、小团队、长时间自动化工程任务，以及本地模型能力正在快速提升但仍不稳定的场景。
+
+---
+
+## ⚔️ 双 Agent Workflow
+
+DeepReef 摒弃容易自我迷失的单体无限 Loop，采用固定双角色 Workflow：
+
+```text
+Supervisor 分析
+  -> Worker 执行
+  -> Worker 汇报
+  -> Supervisor 检查证据
+  -> 继续 / 修正 / 停止 / 求助人类
+```
+
+### Worker：干活 Agent
+
+Worker 是主要 token 消耗者。它可以配置为本地模型、免费模型或性价比模型。普通对话时，Worker 可以像常规 coding agent 一样直接工作；进入 workflow 后，Worker 听从 Supervisor 指令，按 harness 强度执行小步任务，并定期汇报结果。
+
+### Supervisor：监督 Agent
+
+Supervisor 使用更强的模型，负责规划、审查、失败识别、恢复建议和最终验收。Worker 达到失败阈值、请求帮助或需要正式检查时，Supervisor 会读取 Worker 汇报和不可变证据包，然后给出下一步结构化指令。
+
+当 workflow 无法安全推进时，Supervisor 应停止自动执行并调用 `ask_user` 求助。
+
+---
+
+## 🚀 快速开始
+
+### 全局安装
 
 ```bash
-# 需要 Bun >= 1.3
-bun install -g @deepreef/latest
+npm install -g @deepreef/cli
+```
 
-# 在你的项目中启动
+也可以使用 Bun：
+
+```bash
+bun install -g @deepreef/cli
+```
+
+### 在项目中启动
+
+```bash
 cd your-project
 deepreef
-# 选择语言
-然后即可使用默认配置开始工作了
-# 更改配置
-/model 
-可呼唤出设置菜单
 ```
-> 💡 本agent的所有使用方法已浓缩为一个 `/help` +任何你想了解的问题，即可让agent为你解答
-> 
-### 常用命令
 
-| 命令          | 作用                 |
-| ----------- | ------------------ |
-| `/model`    | 无缝切换对话对象，状态不丢失     |
-| `/workflow` | 启动双 Agent 并行工作流    |
-| `/sessions` | 查看和恢复历史会话，即使上次意外崩溃 |
-| `/skill`    | 浏览 52 个内置专家级工程技能   |
-| `/status`   | 查看系统状态             |
-| `/context`  | 修改上下文策略            |
-| `/thinking` | 调整思考强度             |
-| `/harness`  | 调整约束强度             |
-|             |                    |
+进入 DeepReef 后，优先使用：
+
+```text
+/help
+/model
+/workflow
+```
+
+`/help` 是主要使用入口。你可以直接询问命令、模型配置、workflow、harness、provider、session 恢复等问题。
+
+### 从源码运行
+
+```bash
+git clone https://github.com/bzcsk2/DeepReef.git
+cd DeepReef
+bun install
+bun run dev
+```
+
+---
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `/model` | 切换对话对象与模型配置，状态不丢失。 |
+| `/workflow` | 启动 Supervisor / Worker 双 Agent 工作流。 |
+| `/sessions` | 查看和恢复历史会话，支持异常退出后的恢复。 |
+| `/skill` | 浏览和启用内置工程技能。 |
+| `/status` | 查看系统、模型、Provider、工具和 Session 状态。 |
+| `/context` | 修改上下文策略。 |
+| `/thinking` | 调整思考强度。 |
+| `/harness` | 根据模型能力调整执行约束强度。 |
+| `/help` | 查看帮助，也可以直接提问。 |
 
 ---
 
 ## ✨ 核心亮点
 
-### 💰 极致省钱
-- **ImmutablePrefix + SHA-256 cacheKey**：稳定缓存边界，最大化 prefix-cache 命中率
-- **3 阶段 Tool-call Repair**：自动修复 JSON 参数错误，避免失败后重复计费
-- **预设 Provider**：原生整合免费 Provider，开箱即用免费，原生支持本地 OpenAI-compatible 部署，针对Qwen3.6-35/27B及Gemma4系列做了优化。
+### 💰 更低成本
 
-### ⚡ 极速响应
-- 目标每轮响应时间减少 **30–50%**
-- Streaming Tool Executor（读操作并行 / 写操作串行）
-- 预测性上下文压缩（Fold），压缩不阻塞主流程
+- **ImmutablePrefix + SHA-256 cacheKey**：稳定缓存边界，提高 prefix-cache 命中率。
+- **Tool-call Repair**：自动修复 JSON 参数错误，减少失败后重复计费。
+- **多 Provider 路由**：支持免费模型、低价 API 模型和本地 OpenAI-compatible 模型。
+- **Supervisor / Worker 分工**：强模型负责关键判断，便宜模型负责大量施工。
 
-### 🛡️ 极强稳定
-- **harness 强度可调节**：根据模型能力自动/手动选择不同的容错档位
-- 针对小模型专项优化：失败恢复、上下文压缩、Session 持久化、Verification Gate
-- SSE 流式解析、429/5xx 指数退避、Session JSONL 恢复、工具异常隔离
+### 🧠 面向小模型优化
 
-### ✏️ 改得精准
-- **Hash-Anchored Edit**：SHA-256 校验 + 流式处理大文件
-- **9-Pass Fuzzy Edit**：渐进式兜底编辑
-- **Stale-read 校验**：防止基于过期内容覆盖文件
-- 轻松处理 10MB 级超大代码文件
+- **Harness 强度可调**：根据模型能力选择不同容错档位。
+- **小步执行**：限制 Worker 一次做太多不可靠操作。
+- **失败恢复**：重复失败后交给 Supervisor 分析和纠偏。
+- **Verification Gate**：把可验证结果作为 workflow 推进依据。
 
-### 🧩 生态完整
-- **30+** 内置工具（文件、Shell、搜索、编辑、Web、MCP、Cron、Workflow、Notebook、Task）
-- 原生支持各版本Skills
-- **原生 MCP 协议**：轻量级 JSON-RPC 2.0，极速接入海量外部工具
-- Plugin / content-pack 完整支持
-- **AgentMemory** 原生集成 + 7 个记忆工具
+### ✏️ 精准编辑
+
+- **Hash-Anchored Edit**：SHA-256 校验和大文件流式处理。
+- **Fuzzy Edit Fallback**：渐进式兜底匹配，提升编辑成功率。
+- **Stale-read 校验**：防止基于过期读取结果覆盖文件。
+- **FileSnapshot**：文件级快照，便于回滚。
+
+### 🧩 完整生态
+
+- 30+ 内置工具：文件、Shell、搜索、编辑、Web、MCP、Cron、Workflow、Notebook、Task 等。
+- Skills 系统：按任务自动注入领域知识。
+- MCP 支持：通过 JSON-RPC 2.0 / stdio 接入外部工具。
+- Plugin / content-pack 支持。
+- AgentMemory 集成和记忆工具。
 
 ---
 
 ## 🏗️ 软件架构
 
-DeepReef 采用"核壳分离"设计，方便自定义开发：
+DeepReef 采用核壳分离设计：
 
+```text
+packages/core      -> 推理循环、API 适配、上下文管理、缓存、工具修复、workflow 基础
+packages/tui       -> Ink/React 终端界面、状态栏、输入、模型选择、workflow 展示
+packages/tools     -> 文件、Shell、搜索、编辑、Web、MCP、Workflow、Task、Notebook 工具
+packages/plugin    -> Plugin/content-pack、Hook、Schema 工具验证
+packages/memory    -> AgentMemory 集成和 memory tools
+packages/security  -> Deny-first PermissionEngine、HookManager、FileSnapshot
+packages/cli       -> 命令行入口
 ```
-deepreef-core      → 推理循环、API 适配、上下文管理、缓存、工具修复
-deepreef-tui       → Ink/React 终端界面、状态栏、输入、模型选择
-deepreef-tools     → 文件、Shell、搜索、编辑、Web、MCP、Workflow 等 30+ 工具
-deepreef-plugin    → Plugin/content-pack、Hook、Zod Schema 工具验证
-deepreef-memory    → AgentMemory 原生记忆、7 个 memory tools
-deepreef-security  → Deny-first PermissionEngine、HookManager、FileSnapshot
-```
 
-| 模块 | 技术选型 |
-|------|----------|
-| 运行时 | Bun >= 1.3（原生 TS / Fetch / Streams） |
-| TUI | Ink（React 19 + Yoga flexbox），~27K 行 |
-| Schema 校验 | Zod 4 + Standard Schema V1 |
-| MCP | 自研 McpClient / McpHost（JSON-RPC 2.0 + stdio） |
-| 安全 | 自研 Deny-first PermissionEngine + HookManager + FileSnapshot |
-| 推理引擎 | AsyncGenerator 驱动的 CacheFirstLoop，Token 预算保护，指数退避恢复 |
-
-### 安全沙箱
-
-- **Deny-first 权限引擎**：所有 Shell 与代码修改操作均需授权
-- **单文件级 FileSnapshot**：随时可毫秒级回滚
-- **bash 危险命令拦截、Web 请求 SSRF 防护**
+核心引擎通过 `AsyncGenerator<LoopEvent>` 输出事件，CLI、TUI、测试和未来 IDE/Web 壳层都可以消费同一套事件流。
 
 ---
 
-## 📡 默认支持的模型 
+## 📡 模型与 Provider
 
-| Provider     | 默认模型                            | 用户                        |     |
-| ------------ | ------------------------------- | ------------------------- | --- |
-| **deepseek** | deepseek-v4-flash-free          | 可添加自己的API key             |     |
-| **mimo**     | mimo-v2.5-free                  | 可添加自己的API key             |     |
-| **Qwen**     | Qwen3.6-35B-A3B-MTP             | vLLM / Ollama / llama.cpp |     |
-| **Gemma**    | gemma-4-26B-A4B-it-NVFP4        | vLLM / Ollama / llama.cpp |     |
-| **Kimi**     | Kimi-k2.6                       | 可添加自己的API key             |     |
-| **GLM**      | GLM-5.1                         | 可添加自己的API key             |     |
-| **stepfun**  | step-3.7-flash-free             | 可添加自己的API key             |     |
-| **nvidia**   | nemotron-3-super-120b-a12b-free | 可添加自己的Nim API key         |     |
-|              | nemotron-3-Omni-free            |                           |     |
-|              | nemotron-3-Ultra-free           |                           |     |
-| **other**    | Laguna M.1/SX.2 - free          |                           |     |
-|              | Nex-N2-Pro                      |                           |     |
-|              | Owl Alpha                       |                           |     |
-| **openai**   | gpt-oss-120b                    | 可添加自己的API key             |     |
-| **自定义**      | 无                               | openai-compatible         |     |
+DeepReef 不绑定单一模型供应商。运行时真正关心的是：
 
-不喜欢Anthropic的嘴脸，所以没原生支持，有需要的可以自己vibe一下，很简单
+```ts
+{
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+}
+```
+
+常见模型类型：
+
+| 类型 | 用途 |
+| --- | --- |
+| 免费网关模型 | Worker 执行、探索、简单实现。 |
+| 本地 OpenAI-compatible 模型 | 私有化、长时间、低成本 Worker 执行。 |
+| 用户 API Key 模型 | Supervisor、审查、恢复、高质量执行。 |
+| 自定义 OpenAI-compatible Endpoint | vLLM、Ollama、llama.cpp、本地网关或内部路由。 |
+
+通过 `/model` 可以切换模型、配置 API Key、配置本地模型和自定义 endpoint。
 
 ---
 
-## 🗺️ 项目状态与理念
+## 🛡️ 安全边界
 
+DeepReef 可以读取文件、编辑文件、运行命令和调用工具。它是强大的本地工程助手，不是完全隔离的安全沙箱。
 
-核心引擎、30+ 工具、安全层、Plugin/Skills     ✅ 已实现
-AgentMemory+ codeGraph 原生配置             ✅ 已实现
-面向小模型的harness定制调整                          ✅ 已实现
-双 Agent  Workflow 编排                                🔶 部分实现
-TUI页面美化                                                     🔶 部分实现
+当前安全策略包括：
 
-### 我们的信念
+- Deny-first 权限引擎。
+- Shell 和文件写入操作需要授权。
+- 危险命令拦截。
+- Web 请求 SSRF 防护。
+- 文件快照与回滚。
+- Stale-read 编辑保护。
+- 子 Agent 权限隔离。
+- API Key 文件默认被 Git 忽略。
+
+不要在你不愿意审查 agent 修改结果的仓库中运行 DeepReef。
+
+---
+
+## 🗺️ 项目状态
+
+DeepReef 当前处于 **pre-1.0** 阶段。
+
+| 模块 | 状态 |
+| --- | --- |
+| 核心引擎、30+ 工具、安全层、Plugin/Skills | 已实现 |
+| AgentMemory 与 memory tools | 已实现 |
+| 小模型 harness 定制 | 已实现 |
+| MCP 基础接入 | 已实现 |
+| 双 Agent Workflow 编排 | 部分实现，持续打磨 |
+| TUI 页面体验 | 部分实现，持续打磨 |
+| 文档、发布流程、外部贡献入口 | 持续完善 |
+
+详细路线见 [ROADMAP.md](./ROADMAP.md)。
+
+---
+
+## 开发与验证
+
+```bash
+bun install
+bun run typecheck
+bun test
+bun run build
+npm pack --dry-run
+```
+
+发布包名是 `@deepreef/cli`，命令行入口是 `deepreef`。
+
+---
+
+## 贡献
+
+欢迎贡献本地模型预设、Provider 适配、MCP 示例、TUI 体验、workflow 可靠性测试、文档和安全加固。
+
+开始前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md) 和 [SECURITY.md](./SECURITY.md)。
+
+---
+
+## 信念
 
 > 真正有价值的 Agent，不是只在强模型上表现好，而是能把弱模型、便宜模型、本地模型组织起来，让它们稳定完成工程任务。
 
-AI Coding Agent 的下一阶段是成本控制与交付质量，是更可靠的 Loop。
+AI Coding Agent 的下一阶段是成本控制、交付质量和更可靠的 Loop。
 
-**欢迎一起来让"便宜好用"成为 AI 编程的标配。**
+**欢迎一起来让“便宜好用”成为 AI 编程的标配。**
