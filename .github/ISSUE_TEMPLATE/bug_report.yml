@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a reproducible DeepReef bug
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest sequence of commands or interactions that reproduces the issue.
+      placeholder: |
+        1. Run `deepreef`
+        2. Select ...
+        3. Execute ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DeepReef version or commit
+      placeholder: "0.1.1 or commit SHA"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and terminal
+      placeholder: "Windows Terminal on Windows 11, iTerm2 on macOS, etc."
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Node and Bun versions
+      placeholder: "node v22.x, bun 1.3.x"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      render: text
