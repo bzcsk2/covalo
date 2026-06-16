@@ -1,0 +1,49 @@
+name: Provider or model issue
+description: Report a model routing, endpoint, or provider setup problem
+title: "provider: "
+labels: [provider]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      placeholder: "deepseek, qwen, kimi, openai-compatible, etc."
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "model id shown in /model"
+    validations:
+      required: true
+  - type: dropdown
+    id: endpoint_type
+    attributes:
+      label: Endpoint type
+      options:
+        - Built-in provider
+        - Free gateway
+        - Local OpenAI-compatible
+        - Custom OpenAI-compatible
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What failed?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Redacted output
+      render: text
