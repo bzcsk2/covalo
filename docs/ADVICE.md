@@ -1,632 +1,665 @@
-请修改 Deepreef 项目的 TUI workflow/loop 显示逻辑，解决 worker/supervisor 的旧思考内容被新思考内容覆盖的问题。
+请修改 Deepreef 的 workflow 工具权限系统，解决 supervisor_analyse 阶段 Supervisor 自己反复规划/探索、不进入 worker_do 的问题。
 
-目标：
+核心目标：
 
-1. worker 和 supervisor 的每一段 thinking/reasoning 都必须作为历史记录保留。
-2. 同一个 workflow phase 内，如果模型经历“思考 → 工具调用 → 继续思考 → 再工具调用 → 再思考”，这些 reasoning 必须显示成多条独立历史项，不能共用同一个 timeline id。
-3. 不要改 `DeepiMessages.tsx` 的渲染逻辑。这个问题不是渲染组件导致的，而是 `bridge.tsx` 的 workflow timeline item id 生命周期错误。
-4. 不要删除 reasoning 显示，不要合并所有 reasoning，不要只保留最后一条。
-5. 普通 submit 路径已有 `finalizeRound/startRound` 机制，尽量让 workflow 路径向普通 submit 路径对齐。
+1. `resolveEffectiveTools()` 必须从 `role + mode` 过滤升级为 `role + mode + workflowPhase` 过滤。
+2. `supervisor_analyse` 阶段禁止 Supervisor 拿到会诱导深度探索/执行的工具，尤其禁止 `read_file`、`grep`、`bash`、`edit`、`write_file`、`apply_patch`、`AgentTool`、mailbox 工具。
+3. `supervisor_check` 阶段才允许 Supervisor 使用 `read_file` / `grep` 做验证。
+4. Worker 阶段工具权限保持原样，不要误伤 Worker 执行能力。
+5. 不要在 TUI bridge 层靠字符串判断绕过。这个问题属于 core 层工具权限模型，不是 TUI 渲染问题。
 
-需要重点修改文件：
+一、当前问题
 
-```text id="gcv3q9"
-packages/tui/src/bridge.tsx
+当前 `packages/core/src/resolve-effective-tools.ts` 里，Supervisor loop 工具是统一集合：
+
+```ts
+const SUPERVISOR_LOOP_TOOLS = new Set([
+  "get_goal",
+  "update_goal",
+  "list_dir",
+  "read_file",
+  "grep",
+])
 ```
 
-一、问题根因
+这意味着 Supervisor 在 `supervisor_analyse`、`supervisor_check`、`supervisor_intervene` 阶段拿到的是同一组工具。
 
-当前 `driveWorkflow()` 内部把一个 workflow phase 当成一个 timeline round：
+这会导致：
 
-```ts id="oycyjs"
-let wfRoundId = '';
-let wfRoundTs = 0;
-let assistantText = '';
-let reasoningText = '';
+```text
+supervisor_analyse
+  -> Supervisor 拿到 read_file / grep
+  -> Supervisor 自己开始搜索、读取、验证
+  -> runLoop 工具调用完成后继续下一轮 LLM turn
+  -> Supervisor 继续探索
+  -> runSupervisorAnalyse() 不返回
+  -> transition("worker_do") 不执行
+  -> Worker 不被调动
 ```
 
-然后 reasoning 固定写入：
+必须让 Supervisor 在不同 workflow phase 拿到不同工具。
 
-```ts id="m3w8xo"
-id: wfRoundId + '-reasoning'
+二、修改 Workflow phase 类型传递
+
+文件：
+
+```text
+packages/core/src/resolve-effective-tools.ts
 ```
 
-这会导致同一个 phase 内多次 LLM turn 的 reasoning 都写到同一个 id。后来的 reasoning 会通过 upsert 覆盖前面的 reasoning。
+新增类型导入：
 
-普通 submit 路径在收到：
-
-```ts id="rjp5ue"
-status === 'tools_completed'
+```ts
+import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 ```
 
-时会：
+把 `ResolveEffectiveToolsOpts` 改为：
 
-```ts id="xx71zg"
-finalizeRound();
-startRound();
-```
-
-但 workflow 路径现在 `case 'status'` 只是 `break`，没有在工具完成后创建新的 turn/round。
-
-所以整改方向是：
-
-```text id="ry7nzi"
-workflow phase ≠ timeline round
-workflow phase 下面应该有多个 LLM turn round
-```
-
-结构应变成：
-
-```text id="6ev581"
-workflow phase: supervisor_analyse / worker_do / worker_report / supervisor_check
-  ├─ turn 1: reasoning + assistant + tools
-  ├─ turn 2: reasoning + assistant + tools
-  └─ turn 3: reasoning + assistant
-```
-
-二、实现方案：在 driveWorkflow 内新增 workflow turn writer
-
-在 `driveWorkflow()` 内，替换当前单一 `wfRoundId` 状态。
-
-保留 phase 概念，但新增 turn 概念：
-
-```ts id="bvx7j3"
-let wfPhaseId = '';
-let wfPhaseTs = 0;
-let wfTurnSeq = 0;
-
-let wfTurnId = '';
-let wfTurnTs = 0;
-
-let wfAssistantId: string | null = null;
-let wfReasoningId: string | null = null;
-
-let assistantText = '';
-let reasoningText = '';
-```
-
-解释：
-
-* `wfPhaseId`：当前 workflow phase 的 id，例如 supervisor_analyse、worker_do 对应的阶段容器。
-* `wfTurnId`：真正用于 timeline item 的 roundId。每次工具完成后开启新 turn。
-* `wfAssistantId`：当前 turn 的 assistant text item id。
-* `wfReasoningId`：当前 turn 的 reasoning item id。
-* `assistantText` / `reasoningText`：只表示当前 turn 的文本，不再表示整个 phase 的累计文本。
-
-三、增加 helper：startWorkflowPhase
-
-在 `driveWorkflow()` 内增加：
-
-```ts id="ij3e8z"
-const startWorkflowPhase = () => {
-  wfPhaseId = `wf-phase-${crypto.randomUUID()}`;
-  wfPhaseTs = Date.now();
-  wfTurnSeq = 0;
-  startWorkflowTurn();
-};
-```
-
-四、增加 helper：startWorkflowTurn
-
-新增：
-
-```ts id="9p40n3"
-const startWorkflowTurn = () => {
-  wfTurnSeq += 1;
-  wfTurnId = `${wfPhaseId}-turn-${wfTurnSeq}-${crypto.randomUUID()}`;
-  wfTurnTs = Date.now();
-
-  wfAssistantId = null;
-  wfReasoningId = null;
-
-  assistantText = '';
-  reasoningText = '';
-
-  toolItemIds = new Map<string, string>();
-  toolCallArgs = new Map<number, string>();
-  toolOutputs = new Map<string, string>();
-
-  // 如果你前面已经为 workflow tool key 修过 activeWorkflowToolKeys / wfToolSequence，
-  // 也要在这里重置当前 turn 的工具状态。
-  if (typeof activeWorkflowToolKeys !== 'undefined') {
-    activeWorkflowToolKeys = new Map<number, string>();
-  }
-  if (typeof activeWorkflowToolKeysByBase !== 'undefined') {
-    activeWorkflowToolKeysByBase = new Map<string, string>();
-  }
-  if (typeof wfToolSequence !== 'undefined') {
-    wfToolSequence = 0;
-  }
-};
-```
-
-如果 TypeScript 不允许 `typeof` 检查 block-scoped 变量，就不要写这三个 `typeof`，而是直接把你项目中已有的 workflow tool key 状态变量放进 `startWorkflowTurn()` 里重置。
-
-五、增加 helper：ensureWorkflowTurn
-
-新增：
-
-```ts id="j2st3l"
-const ensureWorkflowTurn = () => {
-  if (!wfPhaseId) {
-    wfPhaseId = `wf-phase-${crypto.randomUUID()}`;
-    wfPhaseTs = Date.now();
-    wfTurnSeq = 0;
-  }
-
-  if (!wfTurnId) {
-    startWorkflowTurn();
-  }
-};
-```
-
-所有 `assistant_delta`、`assistant_final`、`reasoning_delta`、`tool_call_delta`、`tool_start`、`tool_progress`、`tool` 事件处理前，都应该先调用 `ensureWorkflowTurn()`，避免事件早于 phase_change 时丢失。
-
-六、增加 helper：ensureWorkflowAssistantId / ensureWorkflowReasoningId
-
-新增：
-
-```ts id="54wdk4"
-const ensureWorkflowAssistantId = () => {
-  ensureWorkflowTurn();
-  if (!wfAssistantId) {
-    wfAssistantId = `${wfTurnId}-assistant`;
-  }
-  return wfAssistantId;
-};
-
-const ensureWorkflowReasoningId = () => {
-  ensureWorkflowTurn();
-  if (!wfReasoningId) {
-    wfReasoningId = `${wfTurnId}-reasoning`;
-  }
-  return wfReasoningId;
-};
-```
-
-注意：reasoning id 必须基于 `wfTurnId`，不能再基于 `wfRoundId` 或 phase id。
-
-七、增加 store-aware 的 text upsert helper
-
-当前 workflow 的 `upsertWorkflowItem()` 只更新 `bridgeState.timeline`，在 transcriptStore 开启时不够稳。新增一个专门写 assistant_text / reasoning 的 helper：
-
-```ts id="wdcy2j"
-const upsertWorkflowTextItem = (
-  item: Extract<TimelineItem, { kind: 'assistant_text' | 'reasoning' }>,
-) => {
-  if (transcriptStore) {
-    if (item.kind === 'assistant_text') {
-      transcriptStore.upsertAssistantText(item);
-    } else {
-      transcriptStore.upsertReasoning(item);
-    }
-    publishTimeline();
-    return;
-  }
-
-  upsertWorkflowItem(item);
-};
-```
-
-如果 TypeScript 对 `Extract<TimelineItem, { kind: 'assistant_text' | 'reasoning' }>` 推断不理想，可以拆成两个函数：
-
-```ts id="flfyfm"
-const upsertWorkflowAssistantText = (item: Extract<TimelineItem, { kind: 'assistant_text' }>) => { ... };
-const upsertWorkflowReasoning = (item: Extract<TimelineItem, { kind: 'reasoning' }>) => { ... };
-```
-
-八、替换 finalizeWorkflowRound 为 finalizeWorkflowTurn
-
-把当前 `finalizeWorkflowRound()` 替换成 turn 级 finalize：
-
-```ts id="63b354"
-const finalizeWorkflowTurn = () => {
-  if (!wfTurnId) return;
-
-  if (wfAssistantId) {
-    if (assistantText) {
-      upsertWorkflowTextItem({
-        id: wfAssistantId,
-        kind: 'assistant_text',
-        roundId: wfTurnId,
-        text: assistantText,
-        isStreaming: false,
-        startTs: wfTurnTs,
-        role: activeRole,
-      });
-    } else if (transcriptStore) {
-      transcriptStore.finalizePart(wfAssistantId);
-      publishTimeline();
-    }
-  }
-
-  if (wfReasoningId) {
-    if (reasoningText) {
-      upsertWorkflowTextItem({
-        id: wfReasoningId,
-        kind: 'reasoning',
-        roundId: wfTurnId,
-        text: reasoningText,
-        isStreaming: false,
-        startTs: wfTurnTs,
-        role: activeRole,
-      });
-    } else if (transcriptStore) {
-      transcriptStore.finalizePart(wfReasoningId);
-      publishTimeline();
-    }
-  }
-};
-```
-
-如果你不想在同一 turn 被重复 finalize 后反复 upsert，可以增加：
-
-```ts id="jbg3r7"
-let wfTurnFinalized = false;
-```
-
-然后：
-
-```ts id="2lm8pu"
-const finalizeWorkflowTurn = () => {
-  if (!wfTurnId || wfTurnFinalized) return;
-  wfTurnFinalized = true;
-  ...
-};
-```
-
-并在 `startWorkflowTurn()` 里设置：
-
-```ts id="78suhl"
-wfTurnFinalized = false;
-```
-
-九、修改 phase_change 处理
-
-找到 workflow 的：
-
-```ts id="xkjkc3"
-if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
-  finalizeWorkflowRound();
-  activeRole = ...
-  ...
-  wfRoundId = `wf-round-${crypto.randomUUID()}`;
-  wfRoundTs = Date.now();
-  assistantText = '';
-  reasoningText = '';
-  toolItemIds = new Map<string, string>();
-  toolCallArgs = new Map<number, string>();
-  toolOutputs = new Map<string, string>();
+```ts
+export interface ResolveEffectiveToolsOpts {
+  registeredTools: Map<string, AgentTool>
+  role: AgentRole
+  mode: WorkflowMode
+  agentToolNames?: string[]
+  workflowPhase?: WorkflowPhase
 }
 ```
 
-改成：
+三、拆分 Supervisor loop 工具集合
 
-```ts id="lcqmmk"
-if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
-  finalizeWorkflowTurn();
+在 `resolve-effective-tools.ts` 中替换原来的 `SUPERVISOR_LOOP_TOOLS`。
 
-  activeRole = wfEvent.phase === 'worker_do' || wfEvent.phase === 'worker_report'
-    ? 'worker'
-    : 'supervisor';
+建议采用保守策略：
 
-  onPhaseChange?.(wfEvent.phase, wfEvent.iteration);
+```ts
+const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set([
+  "get_goal",
+  // 可选：如果确实需要看项目顶层结构，保留 list_dir。
+  // 如果仍然观察到 Supervisor 在 plan 阶段循环，把 list_dir 也移除。
+  "list_dir",
+])
 
-  if (orchestrationStore) {
-    orchestrationStore.apply({
-      kind: 'loop_transition',
-      transition: {
-        from: (orchestrationStore.getSnapshot().loop.phase as any) ?? 'observe',
-        to: wfEvent.phase as any,
-        attempt: wfEvent.iteration,
-        timestamp: Date.now(),
-      },
-    });
-  }
+const SUPERVISOR_LOOP_CHECK_TOOLS = new Set([
+  "get_goal",
+  "list_dir",
+  "read_file",
+  "grep",
+])
 
-  startWorkflowPhase();
-}
-```
+const SUPERVISOR_LOOP_INTERVENE_TOOLS = new Set([
+  "get_goal",
+])
 
-重点：
-
-* phase 切换时 finalize 上一个 turn。
-* 新 phase 开始时调用 `startWorkflowPhase()`。
-* 不要再用 `wfRoundId = ...`。
-* 不要再用 phase id 当 reasoning/assistant 的 item id 基础。
-
-十、修改 assistant_delta
-
-当前逻辑大概是：
-
-```ts id="5ab1vy"
-assistantText += loopEvent.content ?? '';
-transcriptStore.ensureTextPart(wfRoundId + '-text', ...)
-```
-
-改为：
-
-```ts id="1u9w9f"
-case 'assistant_delta': {
-  ensureWorkflowTurn();
-
-  const chunk = loopEvent.content ?? '';
-  assistantText += chunk;
-
-  const id = ensureWorkflowAssistantId();
-
-  if (transcriptStore) {
-    transcriptStore.ensureTextPart(id, 'assistant_text', wfTurnId, wfTurnTs, activeRole);
-    transcriptStore.appendPartDelta(id, chunk);
-    publishTimeline();
-  } else {
-    upsertWorkflowItem({
-      id,
-      kind: 'assistant_text',
-      roundId: wfTurnId,
-      text: assistantText,
-      isStreaming: true,
-      startTs: wfTurnTs,
-      role: activeRole,
-    });
-  }
-
-  break;
-}
-```
-
-十一、修改 reasoning_delta
-
-当前逻辑大概是：
-
-```ts id="rhjv9s"
-reasoningText += loopEvent.content ?? '';
-transcriptStore.ensureTextPart(wfRoundId + '-reasoning', ...)
-```
-
-改为：
-
-```ts id="s0lj8x"
-case 'reasoning_delta': {
-  ensureWorkflowTurn();
-
-  const chunk = loopEvent.content ?? '';
-  reasoningText += chunk;
-
-  const id = ensureWorkflowReasoningId();
-
-  if (transcriptStore) {
-    transcriptStore.ensureTextPart(id, 'reasoning', wfTurnId, wfTurnTs, activeRole);
-    transcriptStore.appendPartDelta(id, chunk);
-    publishTimeline();
-  } else {
-    upsertWorkflowItem({
-      id,
-      kind: 'reasoning',
-      roundId: wfTurnId,
-      text: reasoningText,
-      isStreaming: true,
-      startTs: wfTurnTs,
-      role: activeRole,
-    });
-  }
-
-  break;
-}
-```
-
-十二、修改 assistant_final
-
-当前 assistant_final 会把 metadata.reasoning 写回同一个 `wfRoundId + '-reasoning'`。必须改成当前 turn 的 reasoning id。
-
-建议写法：
-
-```ts id="zk9krx"
-case 'assistant_final': {
-  ensureWorkflowTurn();
-
-  if (loopEvent.content) {
-    assistantText = loopEvent.content;
-  }
-
-  const metadataReasoning = loopEvent.metadata?.reasoning;
-  if (typeof metadataReasoning === 'string' && metadataReasoning.length > 0) {
-    reasoningText = metadataReasoning;
-  }
-
-  if (assistantText) {
-    const id = ensureWorkflowAssistantId();
-
-    upsertWorkflowTextItem({
-      id,
-      kind: 'assistant_text',
-      roundId: wfTurnId,
-      text: assistantText,
-      isStreaming: false,
-      startTs: wfTurnTs,
-      role: activeRole,
-    });
-  }
-
-  if (reasoningText) {
-    const id = ensureWorkflowReasoningId();
-
-    upsertWorkflowTextItem({
-      id,
-      kind: 'reasoning',
-      roundId: wfTurnId,
-      text: reasoningText,
-      isStreaming: false,
-      startTs: wfTurnTs,
-      role: activeRole,
-    });
-  }
-
-  break;
-}
+const SUPERVISOR_LOOP_DEFAULT_TOOLS = new Set([
+  "get_goal",
+])
 ```
 
 注意：
 
-* `metadataReasoning` 可以覆盖当前 turn 的 reasoning，因为它通常是当前 turn 的 full reasoning。
-* 但它不能覆盖旧 turn 的 reasoning，因为当前 turn id 已经唯一。
-* 不要再使用 `wfRoundId + '-reasoning'`。
+* 不要把 `update_goal` 放进 `supervisor_analyse`。
+* 默认也不建议把 `update_goal` 放进 `supervisor_check`，因为 workflow coordinator 已经在解析 approve 后更新 goal 状态。
+* 如果项目中确实依赖模型主动调用 `update_goal`，也只能放到 `supervisor_check`，不要放到 `supervisor_analyse`。
 
-十三、修改 tool 相关事件的 roundId
+四、增加 phase-aware helper
 
-所有 workflow tool item 的 `roundId` 应该使用 `wfTurnId`，而不是旧 `wfRoundId`。
+在 `resolve-effective-tools.ts` 中新增：
 
-修改 `upsertWorkflowTool()` 内部：
-
-```ts id="bd39kq"
-transcriptStore.upsertTool(itemId, wfTurnId, tool, current => ({ ...current, ...patch }), activeRole);
-```
-
-以及非 store 路径：
-
-```ts id="924l8t"
-const item: TimelineItem = {
-  id: itemId,
-  kind: 'tool',
-  roundId: wfTurnId,
-  tool: merged,
-  role: activeRole,
-};
-```
-
-同时，在 `tool_call_delta`、`tool_start`、`tool_progress`、`tool` 分支开头调用：
-
-```ts id="v16bqw"
-ensureWorkflowTurn();
-```
-
-例如：
-
-```ts id="sseh3u"
-case 'tool_start': {
-  ensureWorkflowTurn();
-  ...
-}
-```
-
-十四、修改 status === tools_completed
-
-workflow 路径现在的 status 分支是空的。改为：
-
-```ts id="xmy513"
-case 'status': {
-  if (loopEvent.content === 'tools_completed') {
-    finalizeWorkflowTurn();
-    startWorkflowTurn();
+```ts
+function supervisorLoopToolsForPhase(phase: WorkflowPhase | undefined): Set<string> {
+  switch (phase) {
+    case "supervisor_analyse":
+      return SUPERVISOR_LOOP_ANALYSE_TOOLS
+    case "supervisor_check":
+      return SUPERVISOR_LOOP_CHECK_TOOLS
+    case "supervisor_intervene":
+      return SUPERVISOR_LOOP_INTERVENE_TOOLS
+    default:
+      return SUPERVISOR_LOOP_DEFAULT_TOOLS
   }
-  break;
 }
 ```
 
-这是最关键的修复点之一。
+五、修改 resolveEffectiveTools 的 supervisor loop 分支
 
-原因：
+找到当前逻辑：
 
-* core 的 runLoop 在工具调用完成后会继续下一轮 LLM turn。
-* 下一轮 LLM turn 的 reasoning 必须进入新的 timeline item。
-* 如果不在 `tools_completed` 后开新 turn，就会继续写入同一个 reasoning id。
+```ts
+if (role === "supervisor" && mode === "loop") {
+  if (SUPERVISOR_LOOP_TOOLS.has(name)) {
+    toolSpecs.push(toSpec(tool))
+    continue
+  }
+  filteredCount++
+  if (!filteredReason) filteredReason = "supervisor loop mode: governance tools only"
+  continue
+}
+```
 
-十五、修改 finally
+改为：
 
-当前 finally 应该调用旧的：
+```ts
+if (role === "supervisor" && mode === "loop") {
+  const allowedSupervisorTools = supervisorLoopToolsForPhase(workflowPhase)
 
-```ts id="fasv9j"
-finalizeWorkflowRound();
+  if (allowedSupervisorTools.has(name)) {
+    toolSpecs.push(toSpec(tool))
+    continue
+  }
+
+  filteredCount++
+  if (!filteredReason) {
+    filteredReason = workflowPhase
+      ? `supervisor loop phase ${workflowPhase}: phase-scoped tools only`
+      : "supervisor loop mode: default governance tools only"
+  }
+  continue
+}
+```
+
+六、把 workflowPhase 从 engine.submit 传到 resolveEffectiveTools
+
+文件：
+
+```text
+packages/core/src/engine.ts
+```
+
+新增导入：
+
+```ts
+import type { WorkflowPhase } from "./workflow-coordinator/types.js"
+```
+
+把 `submit` 签名从类似：
+
+```ts
+async *submit(
+  userInput: string,
+  agentConfig?: AgentConfig,
+  role?: "worker" | "supervisor",
+  mode?: WorkflowMode,
+): AsyncGenerator<LoopEvent> {
 ```
 
 改成：
 
-```ts id="y5zueq"
-finalizeWorkflowTurn();
+```ts
+async *submit(
+  userInput: string,
+  agentConfig?: AgentConfig,
+  role?: "worker" | "supervisor",
+  mode?: WorkflowMode,
+  workflowPhase?: WorkflowPhase,
+): AsyncGenerator<LoopEvent> {
 ```
 
-十六、清理旧变量和旧引用
+然后在 `resolveEffectiveTools()` 调用处补上：
 
-完成后，检查并删除或替换所有旧引用：
-
-```text id="3k7y32"
-wfRoundId
-wfRoundTs
-finalizeWorkflowRound
-wfRoundId + '-text'
-wfRoundId + '-reasoning'
+```ts
+const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
+  registeredTools: this.tools,
+  role: effectiveRole,
+  mode: effectiveMode,
+  agentToolNames: ac.toolNames,
+  workflowPhase,
+})
 ```
 
-它们不应该再出现在 `driveWorkflow()` 的事件处理里。
+七、把 workflowPhase 从 AgentRuntime 传到 Engine
 
-可以用：
+文件：
 
-```bash id="gqjshv"
-grep -n "wfRoundId\\|wfRoundTs\\|finalizeWorkflowRound" packages/tui/src/bridge.tsx
+```text
+packages/core/src/dual-agent-runtime/runtime.ts
 ```
 
-理想结果：这些旧名字在 workflow 逻辑中不再存在。如果为了兼容保留了变量名，也必须确认它已经表示 turn，而不是 phase。
+当前大概是：
 
-十七、验收标准
+```ts
+async *submit(input: string, mode?: WorkflowMode): AsyncGenerator<LoopEvent> {
+  ...
+  const ctx: SubmitContext = { role: this.role, mode: mode ?? "alone" }
+  for await (const event of this.engine.submit(input, undefined, ctx.role, ctx.mode)) {
+    yield event
+  }
+}
+```
 
-运行类型检查：
+改成：
 
-```bash id="vb5zmc"
+```ts
+import type { WorkflowPhase } from "../workflow-coordinator/types.js"
+```
+
+然后改签名：
+
+```ts
+async *submit(
+  input: string,
+  mode?: WorkflowMode,
+  workflowPhase?: WorkflowPhase,
+): AsyncGenerator<LoopEvent> {
+  if (this.status === "running") {
+    throw new Error(`Agent ${this.role} is already running`)
+  }
+
+  this.status = "running"
+  this.startTime = Date.now()
+  this.currentTask = input
+
+  try {
+    const ctx: SubmitContext = { role: this.role, mode: mode ?? "alone" }
+    for await (const event of this.engine.submit(input, undefined, ctx.role, ctx.mode, workflowPhase)) {
+      yield event
+    }
+    this.status = "completed"
+  } catch (error) {
+    this.status = "failed"
+    yield {
+      role: "error",
+      content: error instanceof Error ? error.message : String(error),
+    }
+  } finally {
+    this.currentTask = undefined
+  }
+}
+```
+
+八、在 WorkflowCoordinator 各阶段传入 phase
+
+文件：
+
+```text
+packages/core/src/workflow-coordinator/coordinator.ts
+```
+
+修改 `runSupervisorAnalyse()`：
+
+```ts
+for await (const event of this.runtime!.getSupervisor().submit(
+  supervisorInput,
+  "loop",
+  "supervisor_analyse",
+)) {
+  yield event as any
+  if (event.role === "error") errorMessage = event.content ?? "Supervisor analysis failed"
+}
+```
+
+修改 `runWorkerDo()`：
+
+```ts
+for await (const event of this.runtime!.getWorker().submit(
+  workerInput,
+  "loop",
+  "worker_do",
+)) {
+  yield event as any
+  if (event.role === "error") {
+    hasError = true
+    errorCount++
+  }
+}
+```
+
+修改 `runWorkerReport()`：
+
+```ts
+for await (const event of this.runtime!.getWorker().submit(
+  workerInput,
+  "loop",
+  "worker_report",
+)) {
+  yield event as any
+}
+```
+
+修改 `runSupervisorCheck()`：
+
+```ts
+for await (const event of this.runtime!.getSupervisor().submit(
+  supervisorInput,
+  "loop",
+  "supervisor_check",
+)) {
+  yield event as any
+}
+```
+
+修改 `runSupervisorIntervene()`：
+
+```ts
+for await (const event of this.runtime!.getSupervisor().submit(
+  supervisorInput,
+  "loop",
+  "supervisor_intervene",
+)) {
+  yield event as any
+}
+```
+
+九、同步调整 Supervisor loop system prompt
+
+文件：
+
+```text
+packages/core/src/engine.ts
+```
+
+当前 `role === "supervisor" && mode === "loop"` 的 system prompt 是统一的，里面同时写了 analyse 和 check 的规则。这会让模型在 plan 阶段仍然以为自己可以做很多事。
+
+把 supervisor loop prompt 拆成 phase-specific。
+
+新增 helper，放在 engine.ts 里合适位置：
+
+```ts
+function buildSupervisorLoopModePrompt(workflowPhase?: WorkflowPhase): string {
+  if (workflowPhase === "supervisor_analyse") {
+    return `## Loop Mode — Supervisor Analyse
+
+You are the Supervisor in the planning phase.
+
+The WorkflowCoordinator owns execution order:
+supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
+
+Your current job:
+- Create a concrete plan for the Worker.
+- Do not execute the plan yourself.
+- Do not inspect implementation files.
+- Do not verify code.
+- Do not perform Worker tasks.
+- Do not call read_file, grep, bash, edit, write, apply_patch, AgentTool, mailbox, or dispatch tools.
+- If tools are available, use at most get_goal and list_dir for shallow orientation.
+- After producing the plan, stop. The coordinator will pass your plan to the Worker.
+
+Return a structured plan with:
+- objective
+- concrete Worker steps
+- constraints
+- risks
+- expected evidence / verification criteria`
+  }
+
+  if (workflowPhase === "supervisor_check") {
+    return `## Loop Mode — Supervisor Check
+
+You are the Supervisor in the review phase.
+
+Your current job:
+- Review the Worker report.
+- Verify the Worker output against the plan and goal.
+- You may use read_file and grep to inspect evidence.
+- Do not perform Worker tasks yourself.
+- Do not edit files.
+- Do not run implementation steps.
+- Decide one of: continue, revise, approve, ask_user, or blocked.
+
+Do not approve unless you provide a requirement-by-requirement completion audit with concrete evidence.`
+  }
+
+  if (workflowPhase === "supervisor_intervene") {
+    return `## Loop Mode — Supervisor Intervention
+
+You are giving brief mid-workflow guidance to the Worker.
+
+Your current job:
+- Diagnose the Worker blocker.
+- Provide concise guidance.
+- Do not perform Worker tasks yourself.
+- Do not approve or complete the workflow.
+- Do not edit files.
+- Use no tools unless strictly necessary.`
+  }
+
+  return `## Loop Mode — Supervisor
+
+You are the Supervisor for the active loop goal.
+
+The WorkflowCoordinator owns execution order:
+supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
+
+Follow the current workflow phase. Do not perform Worker tasks yourself.`
+}
+```
+
+然后把原来的：
+
+```ts
+role === "supervisor" && mode === "loop"
+  ? `## Loop Mode — Supervisor ...`
+```
+
+替换为：
+
+```ts
+role === "supervisor" && mode === "loop"
+  ? buildSupervisorLoopModePrompt(workflowPhase)
+```
+
+十、可选但建议：plan 阶段进一步限制 maxTurns
+
+仅靠移除 `read_file/grep` 通常够用，但如果模型仍然反复 `list_dir`，建议给 `supervisor_analyse` 加硬限制。
+
+在 `engine.ts` 生成 `loopOpts` 前增加：
+
+```ts
+const phaseMaxTurns =
+  role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_analyse"
+    ? 2
+    : role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_intervene"
+      ? 1
+      : this.effectivePolicy?.maxTurns
+```
+
+然后把 loopOpts 里的：
+
+```ts
+maxTurns: this.effectivePolicy?.maxTurns,
+```
+
+改成：
+
+```ts
+maxTurns: phaseMaxTurns,
+```
+
+解释：
+
+* `supervisor_analyse` 如果允许 `list_dir`，最多 2 turns：第一轮可浅层看结构，第二轮必须输出 plan。
+* 如果你选择 analyse 阶段 no-tools，则可以把 `phaseMaxTurns` 改为 1。
+* `supervisor_check` 不建议限制太死，因为它可能需要 read_file / grep 验证。
+
+十一、如果想采用 no-tools plan 阶段
+
+如果你想让 plan 阶段完全不使用工具，把：
+
+```ts
+const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set([
+  "get_goal",
+  "list_dir",
+])
+```
+
+改成：
+
+```ts
+const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set<string>([])
+```
+
+同时把 analyse prompt 改成：
+
+```text
+No tools are available in this phase. Produce the Worker plan from the goal, previous report, previous review, and user instruction only.
+```
+
+我建议先用：
+
+```text
+get_goal + list_dir
+```
+
+如果还循环，再改成 no-tools。
+
+十二、不要这样修
+
+不要在 `runSupervisorAnalyse()` 里看到 `tools_completed` 就强行 `transition("worker_do")`。
+
+原因：
+
+* `tools_completed` 只表示当前工具批次完成，不表示 Supervisor 已经生成 plan。
+* 如果强行转 Worker，可能拿不到有效 plan。
+* 正确方式是限制 Supervisor 在 analyse 阶段能调用的工具，让它自然快速 stop 并返回 plan。
+
+不要在 TUI bridge 层过滤 Supervisor 工具事件。
+
+原因：
+
+* TUI 只负责显示。
+* 即使 TUI 不显示，core 仍然会执行工具循环。
+* 必须从 `resolveEffectiveTools()` 源头减少 Supervisor 可见工具。
+
+不要只改 prompt，不改工具过滤。
+
+原因：
+
+* 本地/小模型经常不稳定，prompt 禁止不等于工具不可用。
+* 工具权限必须由代码 enforce。
+
+十三、测试方案
+
+新增或修改测试，至少覆盖以下情况。
+
+测试 1：Supervisor analyse 工具过滤
+
+输入：
+
+```ts
+resolveEffectiveTools({
+  registeredTools,
+  role: "supervisor",
+  mode: "loop",
+  workflowPhase: "supervisor_analyse",
+})
+```
+
+断言：
+
+* 包含：`get_goal`
+* 包含或不包含：`list_dir`，取决于你采用 shallow-plan 还是 no-tools
+* 不包含：`read_file`
+* 不包含：`grep`
+* 不包含：`update_goal`
+* 不包含：`bash`
+* 不包含：`edit`
+* 不包含：`write_file`
+* 不包含：`AgentTool`
+* 不包含：`send_message`
+* 不包含：`followup_task`
+* 不包含：`read_mailbox`
+
+测试 2：Supervisor check 工具过滤
+
+输入：
+
+```ts
+resolveEffectiveTools({
+  registeredTools,
+  role: "supervisor",
+  mode: "loop",
+  workflowPhase: "supervisor_check",
+})
+```
+
+断言：
+
+* 包含：`get_goal`
+* 包含：`list_dir`
+* 包含：`read_file`
+* 包含：`grep`
+* 不包含：`bash`
+* 不包含：`edit`
+* 不包含：`write_file`
+* 不包含：`AgentTool`
+* 不包含：`send_message`
+* 不包含：`followup_task`
+* 不包含：`read_mailbox`
+
+测试 3：Worker loop 不受影响
+
+输入：
+
+```ts
+resolveEffectiveTools({
+  registeredTools,
+  role: "worker",
+  mode: "loop",
+  workflowPhase: "worker_do",
+  agentToolNames,
+})
+```
+
+断言：
+
+* Worker 的工程工具仍按 agent config 正常可用。
+* goal/mailbox orchestration 工具仍被过滤。
+
+测试 4：Coordinator phase 传递
+
+mock `AgentRuntime.submit`，断言调用参数：
+
+```text
+runSupervisorAnalyse -> submit(input, "loop", "supervisor_analyse")
+runWorkerDo -> submit(input, "loop", "worker_do")
+runWorkerReport -> submit(input, "loop", "worker_report")
+runSupervisorCheck -> submit(input, "loop", "supervisor_check")
+runSupervisorIntervene -> submit(input, "loop", "supervisor_intervene")
+```
+
+测试 5：Plan 阶段不会拿 read_file/grep
+
+构造一个 fake registeredTools，包含 `read_file` 和 `grep`，让 Supervisor analyse submit 走到 `resolveEffectiveTools()`，确认 toolSpecs 里没有它们。
+
+十四、验收标准
+
+运行：
+
+```bash
 bun run typecheck
 ```
 
-如果项目没有统一 typecheck 命令，则运行对应 package 的 build/typecheck。
+再运行相关测试：
+
+```bash
+bun test
+```
+
+如果没有完整测试命令，至少运行 core 包测试和类型检查。
 
 手工验证：
 
-1. 进入 loop 模式。
-2. 让 supervisor 先思考并生成计划。
-3. 让 worker 执行一个需要多次工具调用的任务，例如：
+1. 启动 loop workflow。
+2. 输入一个需要代码执行的目标。
+3. 观察 plan 阶段：
 
-   * 搜索文件
-   * 读取文件
-   * 再搜索
-   * 再总结
-4. 观察 TUI：
+   * Supervisor 应该快速产出 plan。
+   * Supervisor 不应反复 read_file / grep。
+   * Supervisor 不应自己执行 Worker 工作。
+4. 观察 phase：
 
-   * 工具调用前的 worker thinking 不应被工具调用后的 worker thinking 覆盖。
-   * supervisor_analyse 的 thinking 不应被 supervisor_check 的 thinking 覆盖。
-   * worker_do 的 thinking 不应被 worker_report 的 thinking 覆盖。
-   * 同一个 worker_do phase 内，工具前后的多段 thinking 应该显示为多条历史记录。
-5. 检查 timeline item id：
+   * plan 完成后应进入 worker_do。
+   * worker_do 中 Worker 开始实际读取/修改/验证。
+5. 观察 check 阶段：
 
-   * 每段 reasoning 的 id 应类似：
+   * Supervisor 可以 read_file / grep 验证 Worker 报告。
+   * Supervisor 不应 edit/write/bash。
+6. 若 plan 阶段仍反复 list_dir：
 
-     * `wf-phase-xxx-turn-1-xxx-reasoning`
-     * `wf-phase-xxx-turn-2-xxx-reasoning`
-     * `wf-phase-xxx-turn-3-xxx-reasoning`
-   * 不应该再看到多个 reasoning 共用同一个 `wfRoundId + '-reasoning'`。
-6. 普通 alone/subagent submit 路径不能回归：
+   * 把 `SUPERVISOR_LOOP_ANALYSE_TOOLS` 改成空集合。
+   * 把 analyse 阶段 `phaseMaxTurns` 改成 1。
 
-   * assistant streaming 正常。
-   * reasoning streaming 正常。
-   * tools_completed 后仍然开启新 round。
+十五、建议提交信息
 
-十八、不要做的事
-
-不要这样修：
-
-```ts id="fggs1q"
-id: `${wfRoundId}-reasoning-${crypto.randomUUID()}`
-```
-
-这种做法虽然能避免覆盖，但会导致同一段 streaming reasoning 的每个 update 都变成新 item，界面会疯狂追加重复内容。
-
-正确做法是：
-
-```text id="024m6l"
-同一个 LLM turn 内：固定一个 reasoning id，用于 streaming update。
-工具完成后进入下一个 LLM turn：创建新的 reasoning id。
-phase 切换后进入新 phase：创建新的 phase id 和 turn id。
-```
-
-十九、建议提交信息
-
-```text id="rv6t5c"
-fix(tui): preserve workflow reasoning across tool turns
+```text
+fix(core): scope supervisor loop tools by workflow phase
 ```

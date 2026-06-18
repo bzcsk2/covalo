@@ -398,8 +398,7 @@ export class WorkflowCoordinator {
     const supervisorInput = `Analyse the following goal and create a plan for iteration ${this.state!.iteration}:\n\nGoal: ${this.state!.goal}${previousRound}${resumeInstruction}${steering}\n\nProvide an updated structured plan with concrete next steps, constraints, and risks. Incorporate the previous Worker report, review, and user instruction when present.`
 
     let errorMessage = ""
-    // SFR-10: 使用 "loop" mode
-    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
+    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop", "supervisor_analyse")) {
       yield event as any
       if (event.role === "error") errorMessage = event.content ?? "Supervisor analysis failed"
     }
@@ -448,8 +447,7 @@ export class WorkflowCoordinator {
     let hasError = false
     let errorCount = 0
 
-    // SFR-10: 使用 "loop" mode
-    for await (const event of this.runtime!.getWorker().submit(workerInput, "loop")) {
+    for await (const event of this.runtime!.getWorker().submit(workerInput, "loop", "worker_do")) {
       yield event as any
       if (event.role === "error") {
         hasError = true
@@ -471,8 +469,7 @@ export class WorkflowCoordinator {
   private async *runWorkerReport(): AsyncGenerator<WorkflowEvent> {
     const workerInput = "Generate a summary report of what was accomplished."
 
-    // SFR-10: 使用 "loop" mode
-    for await (const event of this.runtime!.getWorker().submit(workerInput, "loop")) {
+    for await (const event of this.runtime!.getWorker().submit(workerInput, "loop", "worker_report")) {
       yield event as any
     }
 
@@ -506,8 +503,7 @@ export class WorkflowCoordinator {
     const steering = this.buildSteeringPrompt()
     const supervisorInput = `Review the following worker report and decide next action:\n\nPlan: ${this.state!.supervisorPlan ?? ""}\n\nReport: ${reportedContent}${steering}\n\nDecide: continue, revise, approve, ask_user, or blocked`
 
-    // SFR-10: 使用 "loop" mode
-    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
+    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop", "supervisor_check")) {
       yield event as any
     }
 
@@ -646,8 +642,7 @@ ${contextSummary}
 Provide brief guidance. Do NOT decide to approve or complete the workflow.
 Return your guidance as structured advice.`
 
-    // SFR-10: 使用 "loop" mode
-    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
+    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop", "supervisor_intervene")) {
       yield event as any
     }
 

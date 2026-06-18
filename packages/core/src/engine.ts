@@ -16,6 +16,7 @@ import { PermissionEngine, HookManager } from "@deepreef/security"
 import { getAgent, agentConfigFor, getMainMode } from "./agent.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import { resolveEffectiveTools } from "./resolve-effective-tools.js"
+import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
 import type { SubagentRunOptions, SubagentRunResult, SubagentDefinition } from "./subagent/index.js"
 import type { ThinkingMode } from "./provider-thinking.js"
@@ -650,7 +651,75 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
-  async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor", mode?: WorkflowMode): AsyncGenerator<LoopEvent> {
+  private buildSupervisorLoopModePrompt(workflowPhase?: WorkflowPhase): string {
+    if (workflowPhase === "supervisor_analyse") {
+      return `## Loop Mode — Supervisor Analyse
+
+You are the Supervisor in the planning phase.
+
+The WorkflowCoordinator owns execution order:
+supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
+
+Your current job:
+- Create a concrete plan for the Worker.
+- Do not execute the plan yourself.
+- Do not inspect implementation files.
+- Do not verify code.
+- Do not perform Worker tasks.
+- Do not call read_file, grep, bash, edit, write, apply_patch, AgentTool, mailbox, or dispatch tools.
+- If tools are available, use at most get_goal and list_dir for shallow orientation.
+- After producing the plan, stop. The coordinator will pass your plan to the Worker.
+
+Return a structured plan with:
+- objective
+- concrete Worker steps
+- constraints
+- risks
+- expected evidence / verification criteria`
+    }
+
+    if (workflowPhase === "supervisor_check") {
+      return `## Loop Mode — Supervisor Check
+
+You are the Supervisor in the review phase.
+
+Your current job:
+- Review the Worker report.
+- Verify the Worker output against the plan and goal.
+- You may use read_file and grep to inspect evidence.
+- Do not perform Worker tasks yourself.
+- Do not edit files.
+- Do not run implementation steps.
+- Decide one of: continue, revise, approve, ask_user, or blocked.
+
+Do not approve unless you provide a requirement-by-requirement completion audit with concrete evidence.`
+    }
+
+    if (workflowPhase === "supervisor_intervene") {
+      return `## Loop Mode — Supervisor Intervention
+
+You are giving brief mid-workflow guidance to the Worker.
+
+Your current job:
+- Diagnose the Worker blocker.
+- Provide concise guidance.
+- Do not perform Worker tasks yourself.
+- Do not approve or complete the workflow.
+- Do not edit files.
+- Use no tools unless strictly necessary.`
+    }
+
+    return `## Loop Mode — Supervisor
+
+You are the Supervisor for the active loop goal.
+
+The WorkflowCoordinator owns execution order:
+supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
+
+Follow the current workflow phase. Do not perform Worker tasks yourself.`
+  }
+
+  async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor", mode?: WorkflowMode, workflowPhase?: WorkflowPhase): AsyncGenerator<LoopEvent> {
     const diagnosticsEnabled = this.logger.isEnabled("error")
     const submitStartedAt = diagnosticsEnabled ? Date.now() : 0
     const submitId = diagnosticsEnabled ? randomUUID() : undefined
@@ -680,17 +749,7 @@ Proactively call AgentTool whenever the task requires codebase exploration, impl
 Do not wait for the user to explicitly ask you to delegate. Keep only planning, synthesis, review, and user communication for yourself.
 Give each Worker a complete, self-contained task with context, constraints, relevant files, and expected output.`
       : role === "supervisor" && mode === "loop"
-        ? `## Loop Mode — Supervisor
-You are the Supervisor for the active loop goal.
-The WorkflowCoordinator owns execution order: plan -> Worker execution -> Worker report -> Supervisor review.
-You may use governance tools: get_goal, update_goal, list_dir, read_file, grep.
-During analyse (planning), use list_dir to explore structure but do not read file content directly — delegate to Worker.
-During check (review), you may read files to verify Worker output.
-Do not use mailbox, dispatch, or engineering tools such as read_mailbox, send_message, followup_task, AgentTool, bash, edit, write, or apply_patch.
-Your job is to return the requested plan or review output for the current phase.
-The coordinator passes your plan to Worker after this turn; do not try to send or execute the task yourself.
-Do not perform Worker tasks yourself; delegate execution through the plan/review workflow.
-Do not complete without a requirement-by-requirement completion audit with evidence.`
+        ? this.buildSupervisorLoopModePrompt(workflowPhase)
         : role === "worker" && mode === "loop"
           ? `## Loop Mode — Worker
 You are the Worker for the active loop goal.
@@ -790,6 +849,7 @@ Do not change goal status.`
         role: effectiveRole,
         mode: effectiveMode,
         agentToolNames: ac.toolNames,
+        workflowPhase,
       })
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {
@@ -810,6 +870,13 @@ Do not change goal status.`
         this.ctx.prefix.build(systemPrompt, toolSpecs)
         this.prefixCacheKey = cacheKey
       }
+
+      const phaseMaxTurns =
+        role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_analyse"
+          ? 2
+          : role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_intervene"
+            ? 1
+            : this.effectivePolicy?.maxTurns
 
       const loopOpts: LoopOptions = {
         ctx: this.ctx,
@@ -840,7 +907,7 @@ Do not change goal status.`
         taskLedger: this.taskLedger,
         // ADV-HAR-02: 使用 effectivePolicy 而不是 harnessProfile 的字段
         effectivePolicy: this.effectivePolicy ?? undefined,
-        maxTurns: this.effectivePolicy?.maxTurns,
+        maxTurns: phaseMaxTurns,
         requireVerificationBeforeFinal: (this.effectivePolicy?.verification === "block"
           || this.effectivePolicy?.verification === "require-or-waive")
           ?? harnessProfile.requireVerificationBeforeFinal,

@@ -2,6 +2,7 @@ import type { AgentTool } from "./interface.js"
 import type { ToolSpec } from "./types.js"
 import type { AgentRole } from "./agent-profile/types.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
+import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 
 const SUPERVISOR_TOOLS_SUBAGENT = new Set([
   "AgentTool",
@@ -28,12 +29,24 @@ const LOOP_ORCHESTRATION_TOOLS = new Set([
   "read_mailbox",
 ])
 
-const SUPERVISOR_LOOP_TOOLS = new Set([
+const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set([
   "get_goal",
-  "update_goal",
+  "list_dir",
+])
+
+const SUPERVISOR_LOOP_CHECK_TOOLS = new Set([
+  "get_goal",
   "list_dir",
   "read_file",
   "grep",
+])
+
+const SUPERVISOR_LOOP_INTERVENE_TOOLS = new Set([
+  "get_goal",
+])
+
+const SUPERVISOR_LOOP_DEFAULT_TOOLS = new Set([
+  "get_goal",
 ])
 
 export interface ResolveEffectiveToolsOpts {
@@ -41,6 +54,7 @@ export interface ResolveEffectiveToolsOpts {
   role: AgentRole
   mode: WorkflowMode
   agentToolNames?: string[]
+  workflowPhase?: WorkflowPhase
 }
 
 export interface ResolveEffectiveToolsResult {
@@ -49,8 +63,21 @@ export interface ResolveEffectiveToolsResult {
   filteredReason?: string
 }
 
+function supervisorLoopToolsForPhase(phase: WorkflowPhase | undefined): Set<string> {
+  switch (phase) {
+    case "supervisor_analyse":
+      return SUPERVISOR_LOOP_ANALYSE_TOOLS
+    case "supervisor_check":
+      return SUPERVISOR_LOOP_CHECK_TOOLS
+    case "supervisor_intervene":
+      return SUPERVISOR_LOOP_INTERVENE_TOOLS
+    default:
+      return SUPERVISOR_LOOP_DEFAULT_TOOLS
+  }
+}
+
 export function resolveEffectiveTools(opts: ResolveEffectiveToolsOpts): ResolveEffectiveToolsResult {
-  const { registeredTools, role, mode, agentToolNames } = opts
+  const { registeredTools, role, mode, agentToolNames, workflowPhase } = opts
   const toolSpecs: ToolSpec[] = []
   let filteredCount = 0
   let filteredReason: string | undefined
@@ -58,15 +85,21 @@ export function resolveEffectiveTools(opts: ResolveEffectiveToolsOpts): ResolveE
   for (const tool of registeredTools.values()) {
     const name = tool.name
 
-    // Loop is coordinator-orchestrated: Supervisor keeps goal governance tools,
-    // but never receives mailbox or engineering tools.
+    // Loop is coordinator-orchestrated: Supervisor tools are scoped by
+    // workflow phase so analyse never gets read_file/grep (which would cause
+    // infinite self-exploration instead of transitioning to worker_do).
     if (role === "supervisor" && mode === "loop") {
-      if (SUPERVISOR_LOOP_TOOLS.has(name)) {
+      const allowedTools = supervisorLoopToolsForPhase(workflowPhase)
+      if (allowedTools.has(name)) {
         toolSpecs.push(toSpec(tool))
         continue
       }
       filteredCount++
-      if (!filteredReason) filteredReason = "supervisor loop mode: governance tools only"
+      if (!filteredReason) {
+        filteredReason = workflowPhase
+          ? `supervisor loop phase ${workflowPhase}: phase-scoped tools only`
+          : "supervisor loop mode: default governance tools only"
+      }
       continue
     }
 
