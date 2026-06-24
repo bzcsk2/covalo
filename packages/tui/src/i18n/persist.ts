@@ -16,12 +16,9 @@ export function loadLang(): Locale | null {
     const dir = getConfigDir();
     const raw = readFileSync(join(dir, 'lang.json'), 'utf8');
     const parsed = JSON.parse(raw);
-    const result = LangConfigSchema["~standard"].validate(parsed);
-    if (result && typeof result === 'object' && 'then' in result) {
-      return null
-    }
-    if ('value' in (result as { value: unknown })) {
-      return (result as { value: { lang: Locale } }).value.lang
+    const result = LangConfigSchema.safeParse(parsed);
+    if (result.success) {
+      return result.data.lang;
     }
     return null
   } catch {}

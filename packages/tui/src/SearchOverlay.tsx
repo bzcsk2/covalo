@@ -141,7 +141,7 @@ export function SearchOverlay({ timeline: timelineProp, isOpen, onClose }: Searc
         <Text color={FG.faint}>{'▊'}</Text>
         {query && (
           // 显示匹配进度 "当前/总数"，若无匹配则显示 "no match"
-          <Text dimColor>  {matchCount > 0 ? `${matchIdx + 1}/${matchCount}` : 'no match'}</Text>
+          <Text dimColor>  {matchCount > 0 ? `${matchIdx + 1}/${matchCount}` : t().searchNoMatch}</Text>
         )}
       </Box>
       <Box>

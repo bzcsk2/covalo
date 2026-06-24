@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Box, AlternateScreen, instances, SHOW_CURSOR, EXIT_ALT_SCREEN, useInput } from '@deepreef/ink';
 import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
@@ -30,7 +30,10 @@ import { ChoiceMenu } from './ChoiceMenu.js';
 import { SkillModal } from './SkillModal.js';
 import { ContextModal } from './ContextModal.js';
 import { formatStatus } from './status/format.js';
-import { t, setLocale } from './i18n/index.js';
+import { t, setLocale, getLocale, dicts } from './i18n/index.js';
+import { loadLang } from './i18n/persist.js';
+import type { Locale } from './i18n/strings.js';
+import { LocaleProvider } from './i18n/context.js';
 import { loadTuiSettings, saveTuiSettings, type WorkflowMode } from './settings.js';
 import { GoalStore, GoalRuntime } from '@deepreef/core/goal/index.js';
 import {
@@ -407,6 +410,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [showWorkerDetail, setShowWorkerDetail] = useState(false);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | undefined>();
 
+  // P0: 语言状态（React state，确保整棵 TUI 重渲染）
+  const [locale, setLocaleState] = useState<Locale>(() => loadLang() ?? 'zh-CN');
+
   // DA-R6: 双角色状态管理
   // AgentRole 原由 DualTabSystem 导出，组件移除后内联于此（底部 WorkflowStatusBar
   // 自行内联同名联合类型，不依赖此处）。
@@ -529,7 +535,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           appendMessage({ role: 'assistant' as const, content: formatStatus(snapshot) });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
-          appendMessage({ role: 'assistant' as const, content: `Failed to load status: ${msg}` });
+          appendMessage({ role: 'assistant' as const, content: `${t().failedLoadStatus}: ${msg}` });
         }
       })();
       return;
@@ -558,13 +564,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       if (command.mode) {
         const error = validateThinkingMode(command.mode);
         if (error) {
-          appendMessage({ role: 'assistant' as const, content: `${error}\nCurrent: ${thinkingMode}` });
+          appendMessage({ role: 'assistant' as const, content: `${error}\n${t().thinkingModeCurrent(thinkingMode)}` });
           return;
         }
         saveTuiSettings({ thinkingMode: command.mode });
         setThinkingMode(command.mode);
         setBridgeState(prev => ({ ...prev, reasoningActive: false }));
-        appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${command.mode}` });
+        appendMessage({ role: 'assistant' as const, content: t().thinkingModeSet(command.mode) });
         return;
       }
       setShowThinkingMenu(true);
@@ -578,7 +584,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       if (command.subcommand === 'status') {
         appendMessage({
           role: 'assistant' as const,
-          content: `Harness strictness: ${harnessStrictness}\nSource: ${harnessSource}`,
+          content: t().harnessStatus(harnessStrictness, harnessSource),
         });
         return;
       }
@@ -588,7 +594,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         engineRef.current.setHarnessStrictness(command.subcommand);
         appendMessage({
           role: 'assistant' as const,
-          content: `Harness strictness set to: ${command.subcommand} (session)\nApplies from: next submission`,
+          content: t().harnessSetSession(command.subcommand),
         });
         return;
       }
@@ -598,7 +604,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         if (!val || !valid.includes(val)) {
           appendMessage({
             role: 'assistant' as const,
-            content: 'Usage: /harness project <strict|normal|loose>',
+            content: t().harnessProjectUsage,
           });
           return;
         }
@@ -608,7 +614,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         engineRef.current.setHarnessStrictness(val);
         appendMessage({
           role: 'assistant' as const,
-          content: `Project default harness strictness set to: ${val}`,
+          content: t().harnessSetProject(val),
         });
         return;
       }
@@ -655,7 +661,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         setActiveRole(command.role);
         appendMessage({
           role: 'assistant' as const,
-          content: `Input target switched to: ${command.role}`,
+          content: t().inputTargetSwitched(command.role),
         });
       } else {
         // Toggle between worker and supervisor
@@ -663,7 +669,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         setActiveRole(newRole);
         appendMessage({
           role: 'assistant' as const,
-          content: `Input target switched to: ${newRole}`,
+          content: t().inputTargetSwitched(newRole),
         });
       }
       return;
@@ -671,7 +677,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     // /goal 命令 — 目标管理（仅 loop 模式有效）
     if (command?.name === 'goal') {
       if (workflowMode !== 'loop') {
-        appendMessage({ role: 'assistant' as const, content: '/goal is only available in loop mode.' });
+        appendMessage({ role: 'assistant' as const, content: t().goalOnlyLoop });
         return;
       }
       const sessionId = engineRef.current.getSessionId();
@@ -680,11 +686,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       if (command.objective) {
         try {
           goalStore.createGoal(sessionId, command.objective);
-          appendMessage({ role: 'assistant' as const, content: `Goal set: ${command.objective}` });
+          appendMessage({ role: 'assistant' as const, content: t().goalSet(command.objective) });
         } catch {
-          // If there's an active goal, replace it
           goalStore.replaceGoal(sessionId, command.objective);
-          appendMessage({ role: 'assistant' as const, content: `Goal replaced: ${command.objective}` });
+          appendMessage({ role: 'assistant' as const, content: t().goalReplaced(command.objective) });
         }
       } else if (command.subcommand === 'edit' && command.arg) {
         if (goal) {
@@ -694,37 +699,37 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             updated.objective = command.arg;
             goalStore.replaceGoal(sessionId, command.arg, goal.tokenBudget);
           }
-          appendMessage({ role: 'assistant' as const, content: `Goal objective updated: ${command.arg}` });
+          appendMessage({ role: 'assistant' as const, content: t().goalUpdated(command.arg) });
         } else {
-          appendMessage({ role: 'assistant' as const, content: 'No active goal to edit.' });
+          appendMessage({ role: 'assistant' as const, content: t().goalNoActiveToEdit });
         }
       } else if (command.subcommand === 'edit') {
-        appendMessage({ role: 'assistant' as const, content: 'Usage: /goal edit <new objective>' });
+        appendMessage({ role: 'assistant' as const, content: t().goalUsage });
       } else if (command.subcommand === 'pause') {
         if (goal) { goalStore.systemSetStatus(sessionId, 'paused'); }
-        appendMessage({ role: 'assistant' as const, content: goal ? 'Goal paused.' : 'No active goal.' });
+        appendMessage({ role: 'assistant' as const, content: goal ? t().goalPause : t().goalNoActive });
       } else if (command.subcommand === 'resume') {
         if (goal) { goalStore.systemSetStatus(sessionId, 'active'); }
-        appendMessage({ role: 'assistant' as const, content: goal ? 'Goal resumed.' : 'No active goal.' });
+        appendMessage({ role: 'assistant' as const, content: goal ? t().goalResume : t().goalNoActive });
       } else if (command.subcommand === 'clear') {
         if (goal) { goalStore.clearGoal(sessionId); }
-        appendMessage({ role: 'assistant' as const, content: goal ? 'Goal cleared.' : 'No active goal.' });
+        appendMessage({ role: 'assistant' as const, content: goal ? t().goalClear : t().goalNoActive });
       } else if (command.subcommand === 'budget' && command.arg) {
         const budget = parseInt(command.arg, 10);
         if (isNaN(budget) || budget <= 0) {
-          appendMessage({ role: 'assistant' as const, content: 'Invalid budget. Usage: /goal budget <number>' });
+          appendMessage({ role: 'assistant' as const, content: t().goalInvalidBudget });
         } else if (goal) {
           goalStore.setTokenBudget(sessionId, budget);
-          appendMessage({ role: 'assistant' as const, content: `Token budget set to: ${budget}` });
+          appendMessage({ role: 'assistant' as const, content: t().goalBudgetSet(budget) });
         } else {
-          appendMessage({ role: 'assistant' as const, content: 'No active goal. Create one first with /goal <objective>.' });
+          appendMessage({ role: 'assistant' as const, content: t().goalNoBudgetSet });
         }
       } else if (command.subcommand === 'no-budget') {
         if (goal) {
           goalStore.setTokenBudget(sessionId, undefined);
-          appendMessage({ role: 'assistant' as const, content: 'Token budget removed (unlimited).' });
+          appendMessage({ role: 'assistant' as const, content: t().goalBudgetRemoved });
         } else {
-          appendMessage({ role: 'assistant' as const, content: 'No active goal.' });
+          appendMessage({ role: 'assistant' as const, content: t().goalNoActive });
         }
       } else {
         // /goal — show current goal status
@@ -732,15 +737,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           const budgetInfo = goal.tokenBudget ? ` | Budget: ${goal.tokensUsed}/${goal.tokenBudget}` : '';
           appendMessage({
             role: 'assistant' as const,
-            content: [
-              `Goal: ${goal.objective}`,
-              `Status: ${goal.status} | Tokens: ${goal.tokensUsed}${budgetInfo} | Time: ${goal.timeUsedSeconds}s`,
-            ].join('\n'),
+            content: t().goalStatusLine(goal.objective, goal.status, goal.tokensUsed, budgetInfo, goal.timeUsedSeconds),
           });
         } else {
           appendMessage({
             role: 'assistant' as const,
-            content: 'No goal set. Use /goal <objective> to create one.',
+            content: t().goalNoBudgetSet,
           });
         }
       }
@@ -789,7 +791,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         if (workflowRunningRef.current) {
           appendMessage({
             role: 'assistant' as const,
-            content: `A workflow is already running. Cancel or wait before starting a new goal.`,
+            content: t().workflowAlreadyRunning,
           });
           return;
         }
@@ -879,7 +881,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         bridge.addWorkflowInstruction(route.content);
         appendMessage({
           role: 'assistant' as const,
-          content: `[Workflow running] Instruction queued for Supervisor: ${route.content}`,
+          content: t().workflowInstructionQueued(route.content),
         });
         return;
       }
@@ -913,9 +915,11 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
   /** 语言切换回调：设置界面语言 */
   const handleLangChoose = useCallback((next: string) => {
-    setLocale(next as any);
+    const nextLocale = next as Locale;
+    setLocale(nextLocale);
+    setLocaleState(nextLocale);
     setShowLangMenu(false);
-    appendMessage({ role: 'assistant' as const, content: t().switchedLang(next) });
+    appendMessage({ role: 'assistant' as const, content: dicts[nextLocale].switchedLang(next) });
   }, [appendMessage]);
 
   /** 推理档位选择回调：更新本地 thinkingMode 并清除 reasoningActive */
@@ -1039,14 +1043,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }))
     if (agentItems.length === 0) {
       agentItems.push(
-        { value: "worker", label: "Worker", description: "执行型 agent，完整工具集" },
-        { value: "supervisor", label: "Supervisor", description: "监督型 agent，规划与审查" },
+        { value: "worker", label: "Worker", description: t().harnessStrictDesc },
+        { value: "supervisor", label: "Supervisor", description: t().harnessNormalDesc },
       )
     }
     return (
       <ChoiceMenu
-        title={`Agent [${activeRole}]`}
-        subtitle={`为 ${activeRole} 岗位选择 agent 身份`}
+        title={t().agentMenuTitle(activeRole)}
+        subtitle={t().agentMenuSubtitle(activeRole)}
         items={agentItems}
         onChoose={handleAgentChoose}
         onCancel={() => setShowAgentMenu(false)}
@@ -1056,14 +1060,16 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
   // ---- 覆盖层：语言切换菜单（当 showLangMenu 为 true 时显示） ----
   if (showLangMenu) {
+    const langItems = [
+      { value: "zh-CN" as const, label: "中文", description: dicts['zh-CN'].welcomeLangHint },
+      { value: "en" as const, label: "English", description: dicts['en'].welcomeLangHint },
+    ]
+    const lang = locale;
     return (
       <ChoiceMenu
         title="Language"
-        subtitle="选择界面语言"
-        items={[
-          { value: "zh-CN", label: "中文", description: "切换到中文界面" },
-          { value: "en", label: "English", description: "switch to English" },
-        ]}
+        subtitle={lang === 'zh-CN' ? '选择界面语言' : 'Select interface language'}
+        items={langItems.map(i => ({ value: i.value, label: i.label, description: i.description }))}
         onChoose={handleLangChoose}
         onCancel={() => setShowLangMenu(false)}
       />
@@ -1071,15 +1077,18 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   }
 
   // ---- 覆盖层：推理档位选择菜单（当 showThinkingMenu 为 true 时显示） ----
+  const thinkingDescs = locale === 'zh-CN'
+    ? ['关闭推理', '开启推理', '强推理 (DeepSeek)']
+    : ['disable reasoning', 'enable reasoning', 'strong reasoning (DeepSeek)'];
   if (showThinkingMenu) {
     return (
       <ChoiceMenu
         title="Thinking"
-        subtitle="选择推理档位"
+        subtitle={locale === 'zh-CN' ? '选择推理档位' : 'Select thinking mode'}
         items={[
-          { value: "off", label: "off", description: "disable reasoning" },
-          { value: "open", label: "open", description: "enable reasoning" },
-          { value: "high", label: "high", description: "strong reasoning (DeepSeek)" },
+          { value: "off", label: "off", description: thinkingDescs[0] },
+          { value: "open", label: "open", description: thinkingDescs[1] },
+          { value: "high", label: "high", description: thinkingDescs[2] },
         ]}
         onChoose={handleThinkingChoose}
         onCancel={() => setShowThinkingMenu(false)}
@@ -1092,11 +1101,11 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     return (
       <ChoiceMenu
         title="Harness strictness"
-        subtitle={`Current: ${harnessStrictness} (${harnessSource})\nApplies from: next submission`}
+        subtitle={locale === 'zh-CN' ? `当前：${harnessStrictness} (${harnessSource})\n自下次提交起生效` : `Current: ${harnessStrictness} (${harnessSource})\nApplies from: next submission`}
         items={[
-          { value: "strict", label: "strict", description: "强约束，适合本地小模型和不稳定工具调用" },
-          { value: "normal", label: "normal", description: "默认，在可靠性与自主执行之间平衡" },
-          { value: "loose", label: "loose", description: "少干预，保留权限、安全和真实性底线" },
+          { value: "strict", label: "strict", description: t().harnessStrictDesc },
+          { value: "normal", label: "normal", description: t().harnessNormalDesc },
+          { value: "loose", label: "loose", description: t().harnessLooseDesc },
         ]}
         onChoose={(value) => {
           const strictness = value as 'strict' | 'normal' | 'loose';
@@ -1106,25 +1115,26 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           setShowHarnessMenu(false);
           appendMessage({
             role: 'assistant' as const,
-            content: `Harness strictness set to: ${strictness} (session)\nApplies from: next submission`,
+            content: t().harnessSetTo(strictness),
           });
         }}
         onCancel={() => setShowHarnessMenu(false)}
-        footer="设为项目默认: /harness project <strict|normal|loose>"
+        footer={t().harnessFooter}
       />
     );
   }
 
   // ---- 覆盖层：工作流模式选择菜单（当 showWorkflowMenu 为 true 时显示） ----
+  const wfRunningSuffix = workflowLifecycle.status === 'running' ? t().workflowInterruptRunning : '';
   if (showWorkflowMenu) {
     return (
       <ChoiceMenu
         title="Workflow mode"
-        subtitle={`Current: ${workflowMode}`}
+        subtitle={locale === 'zh-CN' ? `当前：${workflowMode}` : `Current: ${workflowMode}`}
         items={[
-          { value: "alone", label: "alone", description: `只用当前 agent，普通对话模式${workflowLifecycle.status === 'running' ? '（将中断运行中的 Workflow）' : ''}` },
-          { value: "subagent", label: "subagent", description: `supervisor 自主调度，按需派 worker 子 agent 执行${workflowLifecycle.status === 'running' ? '（将中断运行中的 Workflow）' : ''}` },
-          { value: "loop", label: "loop", description: `固定双角色编排：supervisor 分析→worker 执行→汇报→检查${workflowLifecycle.status === 'running' ? '（将中断运行中的 Workflow）' : ''}` },
+          { value: "alone", label: "alone", description: t().workflowMenuAlone(wfRunningSuffix) },
+          { value: "subagent", label: "subagent", description: t().workflowMenuSubagent(wfRunningSuffix) },
+          { value: "loop", label: "loop", description: t().workflowMenuLoop(wfRunningSuffix) },
         ]}
         onChoose={(value) => {
           const mode = value as WorkflowMode;
@@ -1144,7 +1154,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
             appendMessage({
               role: 'assistant' as const,
-              content: `Workflow mode: loop\n请输入本次工作流的目标（goal），回车启动编排。`,
+              content: t().workflowLoopStarted,
             });
           } else {
             // SFR-70: 切回 alone/subagent 时清理旧 workflow
@@ -1152,7 +1162,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
             appendMessage({
               role: 'assistant' as const,
-              content: `Workflow mode: ${mode}`,
+              content: t().workflowModeChanged(mode),
             });
           }
         }}
@@ -1329,8 +1339,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     </Box>
   );
 
+  const appContent = (inner: React.ReactNode) => (
+    <LocaleProvider locale={locale} onLocaleChange={setLocaleState}>
+      {inner}
+    </LocaleProvider>
+  );
+
   if (isFullscreenEnvEnabled()) {
-    return (
+    return appContent(
       <BridgeRuntimeProvider runtime={bridgeRuntime}>
         <TranscriptProvider reader={transcriptReader}>
           <OrchestrationStoreProvider store={orchestrationStore}>
@@ -1349,7 +1365,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     );
   }
 
-  return (
+  return appContent(
     <BridgeRuntimeProvider runtime={bridgeRuntime}>
       <TranscriptProvider reader={transcriptReader}>
         <OrchestrationStoreProvider store={orchestrationStore}>

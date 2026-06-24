@@ -1,11 +1,3 @@
-/**
- * PermissionPrompt — adapted from OpenCode (MIT License).
- * Source: packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx
- *
- * Three-stage permission flow: permission → always confirmation → reject feedback.
- * Supports once/always/reject with resource pattern display.
- */
-
 import { useState, useRef, useEffect } from 'react';
 import { Box, Text, useInput } from '@deepreef/ink';
 import type { PermissionRequest, PermissionReply } from '@deepreef/core';
@@ -18,25 +10,19 @@ interface PermissionPromptProps {
 
 type PermissionStage = "permission" | "always" | "reject";
 
-/**
- * Format tool name and args for display.
- */
 function formatToolDisplay(toolName: string, metadata: Record<string, unknown>): string {
   const name = toolName.toLowerCase();
 
-  // Shell commands
   if (name === 'bash' || name === 'shell' || name === 'shell_exec') {
     const cmd = metadata.command ?? metadata.cmd ?? '';
     return typeof cmd === 'string' ? cmd : JSON.stringify(cmd);
   }
 
-  // File paths
   const filePath = metadata.filePath ?? metadata.path ?? metadata.file;
   if (typeof filePath === 'string') {
     return filePath;
   }
 
-  // URLs
   const url = metadata.url ?? metadata.query;
   if (typeof url === 'string') {
     return url;
@@ -45,21 +31,18 @@ function formatToolDisplay(toolName: string, metadata: Record<string, unknown>):
   return toolName;
 }
 
-/**
- * Format permission type for display.
- */
 function formatPermissionType(permission: string): string {
-  switch (permission) {
-    case 'read': return 'Read File';
-    case 'edit': return 'Edit File';
-    case 'bash':
-    case 'shell': return 'Execute Command';
-    case 'external_directory': return 'External Directory';
-    case 'webfetch': return 'Fetch URL';
-    case 'websearch': return 'Web Search';
-    case 'task': return 'Spawn Agent';
-    default: return permission;
-  }
+  const map: Record<string, string> = {
+    read: t().permissionRead,
+    edit: t().permissionEdit,
+    bash: t().permissionExecute,
+    shell: t().permissionExecute,
+    external_directory: t().permissionDirectory,
+    webfetch: t().permissionFetch,
+    websearch: t().permissionSearch,
+    task: t().permissionAgent,
+  };
+  return map[permission] ?? permission;
 }
 
 export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
@@ -70,14 +53,12 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
 
   useEffect(() => { return () => { alive.current = false; }; }, []);
 
-  // Permission stage options
   const permissionOptions = [
-    { label: 'Allow Once', value: 'once' as const },
-    { label: 'Always Allow', value: 'always' as const },
-    { label: 'Reject', value: 'reject' as const },
+    { label: t().permissionAllowOnce, value: 'once' as const },
+    { label: t().permissionAlwaysAllow, value: 'always' as const },
+    { label: t().permissionReject, value: 'reject' as const },
   ];
 
-  // Always confirmation options
   const alwaysOptions = [
     { label: 'Confirm', value: 'confirm' as const },
     { label: 'Cancel', value: 'cancel' as const },
@@ -143,17 +124,16 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
   const toolDisplay = formatToolDisplay(request.tool?.toolName ?? 'unknown', request.metadata);
   const permissionType = formatPermissionType(request.permission);
 
-  // Always confirmation stage
   if (stage === "always") {
     return (
       <Box flexDirection="column" width="100%" borderStyle="round" borderColor="warning" paddingX={1} paddingY={1} marginBottom={1}>
         <Box marginBottom={1}>
-          <Text bold color="warning">{`⚠️  Confirm Always Allow`}</Text>
+          <Text bold color="warning">{`⚠️  ${t().permissionAlwaysTitle}`}</Text>
         </Box>
         <Box marginBottom={1}>
           <Text>
             <Text bold>{request.tool?.toolName}</Text>
-            <Text>{` will be automatically approved for patterns:`}</Text>
+            <Text>{` ${t().permissionAlwaysAutoApproved}`}</Text>
           </Text>
         </Box>
         {request.patterns.map((pattern, i) => (
@@ -163,7 +143,7 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
         ))}
         {request.always.length > 0 && (
           <Box marginTop={1} marginBottom={1}>
-            <Text dimColor>{`Suggested always patterns: ${request.always.join(', ')}`}</Text>
+            <Text dimColor>{`${t().permissionSuggested} ${request.always.join(', ')}`}</Text>
           </Box>
         )}
         {alwaysOptions.map((opt, i) => (
@@ -177,39 +157,37 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
           </Box>
         ))}
         <Box marginTop={1} paddingLeft={1}>
-          <Text dimColor>{`enter confirm   esc cancel`}</Text>
+          <Text dimColor>{t().permissionEnterConfirm}</Text>
         </Box>
       </Box>
     );
   }
 
-  // Reject feedback stage
   if (stage === "reject") {
     return (
       <Box flexDirection="column" width="100%" borderStyle="round" borderColor="error" paddingX={1} paddingY={1} marginBottom={1}>
         <Box marginBottom={1}>
-          <Text bold color="error">{`❌ Reject Permission`}</Text>
+          <Text bold color="error">{`❌ ${t().permissionRejectTitle}`}</Text>
         </Box>
         <Box marginBottom={1}>
           <Text>
             <Text bold>{request.tool?.toolName}</Text>
-            <Text>{` will be denied.`}</Text>
+            <Text>{` ${t().permissionToolDenied}`}</Text>
           </Text>
         </Box>
         <Box marginBottom={1}>
-          <Text dimColor>{`Type a message to explain what to do differently (optional):`}</Text>
+          <Text dimColor>{t().permissionTypeMessage}</Text>
         </Box>
         <Box paddingLeft={1} marginBottom={1}>
           <Text color="error">{`> ${rejectMessage}_`}</Text>
         </Box>
         <Box marginTop={1} paddingLeft={1}>
-          <Text dimColor>{`enter submit   esc cancel`}</Text>
+          <Text dimColor>{t().permissionEnterSubmit}</Text>
         </Box>
       </Box>
     );
   }
 
-  // Main permission stage
   return (
     <Box flexDirection="column" width="100%" borderStyle="round" borderColor="warning" paddingX={1} paddingY={1} marginBottom={1}>
       <Box marginBottom={1}>
@@ -218,7 +196,7 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
       <Box marginBottom={1}>
         <Text>
           <Text bold>{request.tool?.toolName}</Text>
-          <Text>{` wants to:`}</Text>
+          <Text>{` ${t().permissionToolWants}`}</Text>
         </Text>
       </Box>
       <Box paddingLeft={1} marginBottom={1}>
@@ -226,7 +204,7 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
       </Box>
       {request.patterns.length > 0 && (
         <Box marginBottom={1}>
-          <Text dimColor>{`Patterns: ${request.patterns.join(', ')}`}</Text>
+          <Text dimColor>{`${t().permissionPatterns} ${request.patterns.join(', ')}`}</Text>
         </Box>
       )}
       {permissionOptions.map((opt, i) => (
@@ -240,7 +218,7 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
         </Box>
       ))}
       <Box marginTop={1} paddingLeft={1}>
-        <Text dimColor>{`↑↓ select   enter confirm   esc reject`}</Text>
+        <Text dimColor>{t().permissionUpDownSelect}</Text>
       </Box>
     </Box>
   );

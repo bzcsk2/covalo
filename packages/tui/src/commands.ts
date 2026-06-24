@@ -4,6 +4,7 @@
  */
 
 import { AGENTS, defaultAgentRegistry } from "@deepreef/core"
+import type { Strings } from "./i18n/strings.js"
 
 export type SlashCommand =
   | { name: "exit" }
@@ -130,26 +131,14 @@ export function toggleAgent(current: string): { next: string; label: string } {
 /**
  * CL-52: Build the /help text.
  */
-interface HelpCommandStrings {
-  cmdExit: string
-  cmdHelp: string
-  cmdModel: string
-  cmdSessions: string
-  cmdAgent: string
-  cmdSkill: string
-  cmdLang: string
-  cmdStatus: string
-  cmdContext: string
-}
-
-export function buildHelpText(activeAgent: string, cmdStrings: HelpCommandStrings): string {
+export function buildHelpText(activeAgent: string, cmdStrings: Strings): string {
   const agentList = defaultAgentRegistry.list()
     .map((a) => `${a.name} — ${a.label}`)
     .join("\n")
   const currentLabel = defaultAgentRegistry.get(activeAgent)?.label ?? AGENTS[activeAgent]?.label ?? activeAgent
 
   return [
-    "Commands:",
+    cmdStrings.helpTitle,
     `  /exit, /bye  — ${cmdStrings.cmdExit}`,
     `  /help        — ${cmdStrings.cmdHelp}`,
     `  /model       — ${cmdStrings.cmdModel}`,
@@ -159,26 +148,25 @@ export function buildHelpText(activeAgent: string, cmdStrings: HelpCommandString
     `  /lang        — ${cmdStrings.cmdLang}`,
     `  /status      — ${cmdStrings.cmdStatus}`,
     `  /context     — ${cmdStrings.cmdContext}`,
-    `  /theme       — list or switch theme`,
-    `  /thinking    — set thinking mode`,
-    `  /workflow    — switch workflow mode (alone | subagent | loop)`,
-    `  /talk [role] — switch input target (worker|supervisor)`,
-    `  /goal        — show/set goal status`,
-    `  /goal <obj>  — set goal objective`,
-    `  /goal edit   — edit goal objective prompt`,
-    `  /goal pause  — pause goal tracking`,
-    `  /goal resume — resume goal tracking`,
-    `  /goal clear  — clear current goal`,
-    `  /goal budget — set token budget for goal`,
-    `  /goal no-budget — unlimited token budget`,
+    `  /theme       — ${cmdStrings.cmdTheme}`,
+    `  /thinking    — ${cmdStrings.cmdThinking}`,
+    `  /workflow    — ${cmdStrings.cmdWorkflow}`,
+    `  /talk [role] — ${cmdStrings.cmdTalk}`,
+    `  /goal        — ${cmdStrings.cmdGoal}`,
+    `  /goal <obj>  — ${cmdStrings.cmdGoalSet}`,
+    `  /goal edit   — ${cmdStrings.cmdGoalEdit}`,
+    `  /goal pause  — ${cmdStrings.cmdGoalPause}`,
+    `  /goal resume — ${cmdStrings.cmdGoalResume}`,
+    `  /goal clear  — ${cmdStrings.cmdGoalClear}`,
+    `  /goal budget — ${cmdStrings.cmdGoalBudget}`,
+    `  /goal no-budget — ${cmdStrings.cmdGoalNoBudget}`,
     "",
-    "Agents:",
+    cmdStrings.helpAgents,
     agentList,
     "",
-    `Current: ${currentLabel}`,
+    `${cmdStrings.helpCurrent} ${currentLabel}`,
     "",
-    "Note: /agent build|plan commands are deprecated.",
-    "Use dual-role mode with Worker/Supervisor instead.",
+    cmdStrings.helpDeprecatedAgentNote,
   ].join("\n")
 }
 

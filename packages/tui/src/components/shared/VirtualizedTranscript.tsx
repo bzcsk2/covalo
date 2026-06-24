@@ -10,6 +10,7 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { Box, Text, useInput } from '@deepreef/ink';
 import { getSemanticColors } from '../../theme/semantic-colors.js';
+import { t } from '../../i18n/index.js';
 
 export interface TranscriptItem {
   id: string;
@@ -141,14 +142,14 @@ export function VirtualizedTranscript({
       {items.length > visibleRange.maxVisible && (
         <Box justifyContent="flex-end">
           <Text color={theme.text.secondary as any}>
-            {userHasScrolledUp ? '↑ scroll to bottom (Ctrl+G)' : ''}
-            {` ${scrollPercent < 1 ? `${Math.round(scrollPercent * 100)}%` : '↓ bottom'}`}
+            {userHasScrolledUp ? t().virtualizedScrollToBottom : ''}
+            {` ${scrollPercent < 1 ? `${Math.round(scrollPercent * 100)}%` : t().virtualizedBottom}`}
           </Text>
         </Box>
       )}
 
       {items.length === 0 && (
-        <Text color={theme.text.secondary as any}>No messages yet.</Text>
+        <Text color={theme.text.secondary as any}>{t().virtualizedNoMessages}</Text>
       )}
     </Box>
   );

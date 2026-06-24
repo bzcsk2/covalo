@@ -335,16 +335,16 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
 
       {step === "custom" && (
         <Box flexDirection="column">
-          <Text dimColor>Configure OpenAI Compatible Provider:</Text>
+          <Text dimColor>{t().modelCustomConfigure}</Text>
           <Box marginTop={1}>
             <Text bold={editField === 0}>❯ </Text>
-            <Text dimColor>Base URL: </Text>
+            <Text dimColor>{t().modelCustomBaseUrl} </Text>
             <Text>{editField === 0 ? `${inputBuf}${inputBuf.length > 0 ? "▊" : ""}` : customUrl}</Text>
           </Box>
           <Box>
             <Text bold={editField === 1}>❯ </Text>
-            <Text dimColor>Model:    </Text>
-            <Text>{editField === 1 ? `${inputBuf}${inputBuf.length > 0 ? "▊" : ""}` : customModel || "(type model name)"}</Text>
+            <Text dimColor>{t().modelCustomModel} </Text>
+            <Text>{editField === 1 ? `${inputBuf}${inputBuf.length > 0 ? "▊" : ""}` : customModel || t().modelCustomPlaceholder}</Text>
           </Box>
           <Box marginTop={1}>
             <Text dimColor>{t().escToGoBack}</Text>

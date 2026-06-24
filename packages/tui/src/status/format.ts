@@ -1,4 +1,5 @@
 import type { EngineStatusSnapshot } from "@deepreef/core"
+import { t } from "../i18n/index.js"
 
 export interface FormatOptions {
   width?: number
@@ -87,26 +88,26 @@ export function formatStatusCodex(snapshot: EngineStatusSnapshot, options: Forma
 
   const lines = [
     box.topBorder(),
-    box.content("STATUS"),
+    box.content(t().statusSectionStatus),
     box.separator(),
     box.content(`Session:    ${sessionId}`),
     box.content(`Agent:      ${snapshot.currentAgent}`),
-    box.content(`Submitting: ${snapshot.isSubmitting ? "Yes" : "No"}`),
+    box.content(`Submitting: ${snapshot.isSubmitting ? t().statusYes : t().statusNo}`),
     box.separator(),
-    box.content("CONTEXT"),
+    box.content(t().statusSectionContext),
     box.content(`Window:     ${leftPercent}% left (${usedFormatted} / ${totalFormatted})`),
     box.content(`Cache:      ${cacheRate}% hit rate`),
     box.separator(),
-    box.content("STATS"),
+    box.content(t().statusSectionStats),
     box.content(`API Calls:  ${snapshot.stats.apiCalls}`),
     box.content(`Tool Calls: ${snapshot.stats.toolCalls}`),
     box.content(`Cost:       ${formatCost(snapshot.stats.totalCost)}`),
     ...(snapshot.sessionWriter ? [
       box.separator(),
-      box.content("SESSION WRITER"),
+      box.content(t().statusSectionSessionWriter),
       box.content(`Queue:      ${snapshot.sessionWriter.queueSize}`),
       box.content(`Dropped:    ${snapshot.sessionWriter.droppedCount}`),
-      box.content(`Flushing:   ${snapshot.sessionWriter.flushing ? "Yes" : "No"}`),
+      box.content(`Flushing:   ${snapshot.sessionWriter.flushing ? t().statusYes : t().statusNo}`),
       ...(snapshot.sessionWriter.lastError
         ? [box.content(`Last Error: ${snapshot.sessionWriter.lastError.slice(0, 40)}`)]
         : []),

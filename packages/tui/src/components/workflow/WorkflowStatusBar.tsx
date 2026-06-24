@@ -1,16 +1,8 @@
-/**
- * WorkflowStatusBar — Workflow 状态栏组件
- *
- * SFR-80: 根据 mode + lifecycle 显示真实状态。
- * - alone/subagent: 仅显示模式 + 角色状态，不显示 workflow phase/goal
- * - loop: 显示 lifecycle、phase、iteration/maxRounds、goal、blocked 原因
- */
-
 import { Box, Text } from '@deepreef/ink';
 import { FG, TONE } from '../../reasonix/tokens.js';
+import { t } from '../../i18n/index.js';
 import type { WorkflowLifecycle } from '../../workflow-mode-router.js';
 
-/** Workflow 阶段类型 */
 export type WorkflowPhase =
   | 'idle'
   | 'supervisor_analyse'
@@ -23,7 +15,6 @@ export type WorkflowPhase =
   | 'blocked'
   | 'ask_user';
 
-/** Workflow 状态 */
 export interface WorkflowState {
   phase: WorkflowPhase;
   iteration: number;
@@ -33,7 +24,6 @@ export interface WorkflowState {
   workerStatus: 'idle' | 'do' | 'report' | 'waiting' | 'blocked';
 }
 
-/** WorkflowStatusBar 属性 */
 export interface WorkflowStatusBarProps {
   workflow: WorkflowState;
   lifecycle: WorkflowLifecycle;
@@ -42,38 +32,86 @@ export interface WorkflowStatusBarProps {
   width?: number;
 }
 
-/** 阶段显示映射 */
-const PHASE_DISPLAY: Record<string, { label: string; prefix: string; color: string }> = {
-  idle: { label: 'idle', prefix: '', color: FG.faint },
-  supervisor_analyse: { label: 'analyse', prefix: '[D]', color: TONE.brand },
-  worker_do: { label: 'do', prefix: '[W]', color: TONE.ok },
-  worker_report: { label: 'report', prefix: '[W]', color: TONE.ok },
-  supervisor_check: { label: 'check', prefix: '[D]', color: TONE.brand },
-  continue: { label: 'continue', prefix: '[D]', color: TONE.brand },
-  revise: { label: 'revise', prefix: '[D]', color: TONE.warn },
-  approve: { label: 'approve', prefix: '[D]', color: TONE.ok },
-  blocked: { label: 'blocked', prefix: '', color: TONE.error },
-  ask_user: { label: 'ask_user', prefix: '', color: TONE.warn },
+function phaseLabel(phase: string): string {
+  switch (phase) {
+    case 'idle': return '';
+    case 'supervisor_analyse': return t().workflowPhaseAnalyse;
+    case 'worker_do': return t().workflowPhaseDo;
+    case 'worker_report': return t().workflowPhaseReport;
+    case 'supervisor_check': return t().workflowPhaseCheck;
+    case 'continue': return t().workflowPhaseContinue;
+    case 'revise': return t().workflowPhaseRevise;
+    case 'approve': return t().workflowPhaseApprove;
+    case 'blocked': return t().workflowPhaseBlocked;
+    case 'ask_user': return t().workflowPhaseAskUser;
+    default: return phase;
+  }
+}
+
+function lifecycleLabel(status: string): string {
+  switch (status) {
+    case 'idle': return '';
+    case 'awaiting_goal': return t().workflowLifecycleAwaitingGoal;
+    case 'running': return t().workflowLifecycleRunning;
+    case 'waiting_user': return t().workflowLifecycleWaiting;
+    case 'blocked': return t().workflowLifecycleBlocked;
+    case 'completed': return t().workflowLifecycleCompleted;
+    case 'failed': return t().workflowLifecycleFailed;
+    default: return status;
+  }
+}
+
+function roleStatusLabel(status: string): string {
+  switch (status) {
+    case 'idle': return t().workflowRoleIdle;
+    case 'analyse': return t().workflowRoleAnalyse;
+    case 'do': return t().workflowRoleDo;
+    case 'report': return t().workflowRoleReport;
+    case 'waiting': return t().workflowRoleWait;
+    case 'blocked': return t().workflowRoleBlocked;
+    default: return status;
+  }
+}
+
+function modeLabel(mode: string): string {
+  switch (mode) {
+    case 'alone': return t().workflowModeAlone;
+    case 'subagent': return t().workflowModeSubagent;
+    case 'loop': return t().workflowModeLoop;
+    default: return mode;
+  }
+}
+
+const PHASE_DISPLAY: Record<string, { prefix: string; color: string }> = {
+  idle: { prefix: '', color: FG.faint },
+  supervisor_analyse: { prefix: '[D]', color: TONE.brand },
+  worker_do: { prefix: '[W]', color: TONE.ok },
+  worker_report: { prefix: '[W]', color: TONE.ok },
+  supervisor_check: { prefix: '[D]', color: TONE.brand },
+  continue: { prefix: '[D]', color: TONE.brand },
+  revise: { prefix: '[D]', color: TONE.warn },
+  approve: { prefix: '[D]', color: TONE.ok },
+  blocked: { prefix: '', color: TONE.error },
+  ask_user: { prefix: '', color: TONE.warn },
 };
 
-const LIFECYCLE_DISPLAY: Record<string, { label: string; color: string }> = {
-  idle: { label: '', color: FG.faint },
-  awaiting_goal: { label: 'awaiting_goal', color: TONE.accent },
-  running: { label: 'running', color: TONE.brand },
-  waiting_user: { label: 'waiting', color: TONE.warn },
-  blocked: { label: 'blocked', color: TONE.error },
-  completed: { label: 'completed', color: TONE.ok },
-  failed: { label: 'failed', color: TONE.error },
+const LIFECYCLE_DISPLAY: Record<string, { color: string }> = {
+  idle: { color: FG.faint },
+  awaiting_goal: { color: TONE.accent },
+  running: { color: TONE.brand },
+  waiting_user: { color: TONE.warn },
+  blocked: { color: TONE.error },
+  completed: { color: TONE.ok },
+  failed: { color: TONE.error },
 };
 
-/** 角色状态显示映射 */
-const ROLE_STATUS_DISPLAY: Record<string, { label: string; color: string }> = {
-  idle: { label: 'idle', color: FG.faint },
-  analyse: { label: 'analyse', color: TONE.brand },
-  do: { label: 'do', color: TONE.ok },
-  report: { label: 'report', color: TONE.ok },
-  waiting: { label: 'wait', color: FG.sub },
-  blocked: { label: 'blocked', color: TONE.error },
+const ROLE_STATUS_COLORS: Record<string, string> = {
+  idle: FG.faint,
+  analyse: TONE.brand,
+  do: TONE.ok,
+  report: TONE.ok,
+  waiting: FG.sub,
+  blocked: TONE.error,
 };
 
 function truncateText(text: string, maxWidth: number): string {
@@ -82,15 +120,12 @@ function truncateText(text: string, maxWidth: number): string {
   return text.slice(0, maxWidth - 3) + '...';
 }
 
-const MODE_DISPLAY: Record<string, { label: string; color: string }> = {
-  alone: { label: 'alone', color: FG.faint },
-  subagent: { label: 'subagent', color: TONE.accent },
-  loop: { label: 'loop', color: TONE.brand },
+const MODE_COLORS: Record<string, string> = {
+  alone: FG.faint,
+  subagent: TONE.accent,
+  loop: TONE.brand,
 };
 
-/**
- * WorkflowStatusBar 组件
- */
 export function WorkflowStatusBar({
   workflow,
   lifecycle,
@@ -99,31 +134,31 @@ export function WorkflowStatusBar({
   width = 80,
 }: WorkflowStatusBarProps) {
   const { phase, iteration, maxRounds, goal, supervisorStatus, workerStatus } = workflow;
-  const modeDisplay = MODE_DISPLAY[workflowMode] ?? MODE_DISPLAY.alone;
-  const supervisorDisplay = ROLE_STATUS_DISPLAY[supervisorStatus] ?? ROLE_STATUS_DISPLAY.idle;
-  const workerDisplay = ROLE_STATUS_DISPLAY[workerStatus] ?? ROLE_STATUS_DISPLAY.idle;
+  const modeColor = MODE_COLORS[workflowMode] ?? MODE_COLORS.alone;
+  const supervisorColor = ROLE_STATUS_COLORS[supervisorStatus] ?? ROLE_STATUS_COLORS.idle;
+  const workerColor = ROLE_STATUS_COLORS[workerStatus] ?? ROLE_STATUS_COLORS.idle;
 
   return (
     <Box width="100%" flexDirection="row" paddingX={1}>
-      <Text bold color={modeDisplay.color as any}>{modeDisplay.label}</Text>
+      <Text bold color={modeColor as any}>{modeLabel(workflowMode)}</Text>
       <Text color={FG.faint}>{'  '}</Text>
 
       {workflowMode === 'loop' && (
         <>
           <Text color={(LIFECYCLE_DISPLAY[lifecycle.status] ?? LIFECYCLE_DISPLAY.idle).color as any}>
-            {(LIFECYCLE_DISPLAY[lifecycle.status] ?? LIFECYCLE_DISPLAY.idle).label}
+            {lifecycleLabel(lifecycle.status)}
           </Text>
           {lifecycle.status === 'running' && phase !== 'idle' && (
             <>
               <Text color={FG.faint}>{' '}</Text>
               <Text color={(PHASE_DISPLAY[phase] ?? PHASE_DISPLAY.idle).color as any}>
-                {PHASE_DISPLAY[phase]?.prefix ? `${PHASE_DISPLAY[phase].prefix} ` : ''}{PHASE_DISPLAY[phase]?.label ?? phase}
+                {PHASE_DISPLAY[phase]?.prefix ? `${PHASE_DISPLAY[phase].prefix} ` : ''}{phaseLabel(phase)}
               </Text>
               <Text color={FG.sub}>{` (${iteration}/${maxRounds})`}</Text>
             </>
           )}
           {lifecycle.status === 'blocked' && (
-            <Text color={TONE.error}>{` blocked`}</Text>
+            <Text color={TONE.error}>{` ${t().workflowRoleBlocked}`}</Text>
           )}
           <Text color={FG.faint}>{'  '}</Text>
         </>
@@ -137,7 +172,7 @@ export function WorkflowStatusBar({
             Supervisor
           </Text>
         </Box>
-        <Text color={FG.sub}>{'/' + supervisorDisplay.label}</Text>
+        <Text color={supervisorColor as any}>{'/' + roleStatusLabel(supervisorStatus)}</Text>
       </Box>
 
       <Text color={FG.faint}>{'  '}</Text>
@@ -148,15 +183,14 @@ export function WorkflowStatusBar({
             Worker
           </Text>
         </Box>
-        <Text color={FG.sub}>{'/' + workerDisplay.label}</Text>
+        <Text color={workerColor as any}>{'/' + roleStatusLabel(workerStatus)}</Text>
       </Box>
 
-      {/* SFR-80: loop 模式显示 goal */}
       {workflowMode === 'loop' && (
         <>
           <Box flexGrow={1}>
             <Text color={FG.sub}>
-              {goal ? truncateText(goal, Math.max(10, width - 50)) : lifecycle.status === 'awaiting_goal' ? 'awaiting goal' : ''}
+              {goal ? truncateText(goal, Math.max(10, width - 50)) : lifecycle.status === 'awaiting_goal' ? t().workflowAwaitingGoal : ''}
             </Text>
           </Box>
         </>

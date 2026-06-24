@@ -1,29 +1,8 @@
 import React from 'react';
 import { Box, Text } from '@deepreef/ink';
 import { FG, TONE } from './reasonix/tokens.js';
+import { t } from './i18n/index.js';
 import figlet from 'figlet';
-
-/**
- * WelcomeScreen 组件 - 欢迎界面
- *
- * 【组件职责】
- * 在对话开始前显示欢迎信息，包括：
- * - 应用 Logo（DEEPREEF 渐变色字母）
- * - 标语 "探索未至之境"
- * - 当前模型信息
- * - Agent 设置面板（推理档位、上下文裁剪、子代理）
- * - 组件状态面板（Provider、Skills、MCP）
- * - 快捷操作提示
- *
- * 【Props 说明】
- * - model: 当前使用的模型名称
- * - provider: 当前使用的提供商名称
- * - agent: 当前使用的 Agent 名称
- * - thinkingMode: 当前推理模式（auto/off/open/high）
- *
- * 【显示参数】
- * 以下参数控制欢迎界面的视觉样式
- */
 
 interface WelcomeScreenProps {
   model: string;
@@ -38,17 +17,10 @@ interface WelcomeScreenProps {
   diagnosticCounts: { errors: number; warnings: number };
 }
 
-/**
- * Logo 组件 - Figlet ASCII Art DEEPREEF 文字
- *
- * 使用 figlet ANSI Regular 字体渲染（实心方块字符），
- * 每行使用不同的渐变色，从蓝色过渡到紫色。
- */
-// 静态缓存：figlet 渲染结果在模块加载时计算一次，避免每次 WelcomeScreen 渲染时同步阻塞
 let DEEPREEF_ASCII: string[] = []
 try {
   DEEPREEF_ASCII = figlet.textSync('deepreef', { font: 'ANSI Regular' }).trim().split('\n')
-} catch {} // font file may not be available in bundled build
+} catch {}
 const DEEPREEF_COLORS: any[] = ['#4FA3F7', '#5C94F9', '#6985FA', '#7676FC', '#866FFB', '#9868F9', '#B064F6', '#C15FF3', '#CA5FF2'];
 
 function Title(): React.ReactElement {
@@ -61,15 +33,6 @@ function Title(): React.ReactElement {
   );
 }
 
-/**
- * 勾选值组件 - 显示带勾选框的配置项
- *
- * 格式：[✓] 值
- * 显示参数：
- * - 方括号使用 body 色
- * - 勾选符号使用 ok 色（绿色）
- * - 值使用 ok 色（绿色）
- */
 function CheckValue({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
     <Text>
@@ -81,16 +44,6 @@ function CheckValue({ children }: { children: React.ReactNode }): React.ReactEle
   );
 }
 
-/**
- * 面板组件 - 无边框信息面板
- *
- * 简洁无边框设计：
- * - 标题使用琥珀色加粗文字
- * - 内容直接排列在标题下方
- *
- * @param title - 面板标题
- * @param children - 面板内容
- */
 function Panel({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
   return (
     <Box flexDirection="column" flexGrow={1}>
@@ -102,12 +55,6 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-/**
- * 键值行组件 - 显示标签和值
- *
- * 布局：标签左对齐，值右对齐
- * 使用 flexGrow={1} 将值推到右侧
- */
 function Row({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
   return (
     <Box flexDirection="row" width="100%">
@@ -120,32 +67,19 @@ function Row({ label, value }: { label: string; value: React.ReactNode }): React
   );
 }
 
-/**
- * 欢迎界面主组件
- *
- * 布局结构（从上到下）：
- * 1. Logo 区域（渐变色 DEEPREEF）
- * 2. 标语
- * 3. 模型信息
- * 4. 双列面板（Agent 设置 | 组件状态）
- * 5. 快捷提示
- */
 function contextModeLabel(mode: string): string {
-  if (mode === 'trim') return '裁剪';
-  if (mode === 'compact' || mode === 'compress') return '压缩';
+  if (mode === 'trim') return t().contextModeTrim;
+  if (mode === 'compact' || mode === 'compress') return t().contextModeCompact;
   return mode;
 }
 
 export function WelcomeScreen({ model, provider, agent, thinkingMode, contextMode, skillCount, pluginCount, contentPackCount, assetCounts, diagnosticCounts }: WelcomeScreenProps): React.ReactElement {
-  // 推理模式与状态栏保持一致，直接显示 auto/off/open/high。
   const thinking = thinkingMode || 'off';
   const context = contextModeLabel(contextMode);
-  // 只显示 agent 名称，去掉 " Agent" 后缀
   const agentShort = agent?.replace(/\s+Agent$/i, '') ?? agent;
 
   return (
     <Box flexDirection="column" width="100%" justifyContent="center" alignItems="center">
-      {/* Logo 区域 */}
       <Box
         flexDirection="column"
         width="100%"
@@ -155,36 +89,32 @@ export function WelcomeScreen({ model, provider, agent, thinkingMode, contextMod
         </Box>
         <Box height={1} />
         <Box justifyContent="center">
-          <Text bold color={FG.body}>探索未至之境</Text>
+          <Text bold color={FG.body}>{t().welcomeTagline}</Text>
         </Box>
       </Box>
       <Box height={1} />
-      {/* 双列面板 */}
       <Box flexDirection="row" width="100%" justifyContent="flex-end">
         <Box flexDirection="row" width="75%" justifyContent="space-between">
-          {/* Agent 设置面板 */}
-          <Panel title="Agent设置">
-            <Row label="推理档 " value={thinking} />
-            <Row label="上下文 " value={context} />
-            <Row label="子代理 " value={agentShort} />
+          <Panel title={t().welcomePanelAgent}>
+            <Row label={t().welcomeThinking + ' '} value={thinking} />
+            <Row label={t().welcomeContext + ' '} value={context} />
+            <Row label={t().welcomeSubagent + ' '} value={agentShort} />
           </Panel>
-          {/* 组件状态面板 */}
-          <Panel title="组件状态">
-            <Row label="插件:" value={String(pluginCount)} />
-            <Row label="技能:" value={String(skillCount)} />
-            <Row label="MCP:" value={String(assetCounts.mcp)} />
+          <Panel title={t().welcomePanelComponents}>
+            <Row label={t().welcomeProvider} value={String(pluginCount)} />
+            <Row label={t().welcomeSkills} value={String(skillCount)} />
+            <Row label={t().welcomeMcp} value={String(assetCounts.mcp)} />
             {diagnosticCounts.warnings > 0 || diagnosticCounts.errors > 0 ? (
-              <Row label="诊断:" value={`${diagnosticCounts.errors}错 ${diagnosticCounts.warnings}警`} />
+              <Row label={t().welcomeDiagnosticsLabel} value={t().welcomeDiagnostics(diagnosticCounts.errors, diagnosticCounts.warnings)} />
             ) : null}
           </Panel>
         </Box>
       </Box>
       <Box height={1} />
-      {/* 快捷提示 1 */}
       <Box flexDirection="row">
-        <Text color={FG.meta}>/help 可以提问本软件任何用法</Text>
+        <Text color={FG.meta}>{t().welcomeHelpHint}</Text>
         <Text color={FG.meta}> • </Text>
-        <Text color={FG.meta}>/lang can switch to English</Text>
+        <Text color={FG.meta}>{t().welcomeLangHint}</Text>
       </Box>
     </Box>
   );

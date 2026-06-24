@@ -27,7 +27,7 @@ export function CommandAutocomplete({ query, onSubmit, onComplete, onClose }: Co
   /** 当前选中的命令在 matches 列表中的索引 */
   const [selectedIdx, setSelectedIdx] = useState(0);
   /** 根据 query 实时过滤出的匹配命令列表 */
-  const matches = useMemo(() => filterCommands(query), [query]);
+  const matches = useMemo(() => filterCommands(query, t), [query]);
 
   useInput((_input, key) => {
     if (matches.length === 0) {

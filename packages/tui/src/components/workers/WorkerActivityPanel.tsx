@@ -16,6 +16,7 @@
 import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput, type HexColor } from '@deepreef/ink';
 import { getSemanticColors } from '../../theme/semantic-colors.js';
+import { t } from '../../i18n/index.js';
 
 export interface WorkerActivityData {
   id: string;
@@ -68,11 +69,11 @@ function getStatusColor(status: WorkerActivityData['status']): HexColor {
 
 function getStatusLabel(status: WorkerActivityData['status']): string {
   switch (status) {
-    case 'running': return 'running';
-    case 'completed': return 'completed';
-    case 'failed': return 'failed';
-    case 'paused': return 'paused';
-    case 'waiting': return 'waiting';
+    case 'running': return t().agentStatusRunning;
+    case 'completed': return t().agentStatusCompleted;
+    case 'failed': return t().agentStatusFailed;
+    case 'paused': return t().agentStatusPaused;
+    case 'waiting': return t().agentStatusReview;
     default: return status;
   }
 }
@@ -172,18 +173,18 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
         borderColor={theme.border.default as HexColor}
       >
         <Text bold color={theme.text.primary as HexColor}>
-          Workers
+          {t().workerPanelTitle}
         </Text>
         <Text color={theme.text.secondary as HexColor}>
-          {workers.length} total
-          {focusedWorkerId ? ' [output focused]' : ' [list]'}
+          {t().workerPanelTotal(workers.length)}
+          {focusedWorkerId ? ` ${t().workerPanelOutputFocused}` : ` ${t().workerPanelList}`}
         </Text>
       </Box>
 
       {/* Worker list */}
       <Box flexDirection="column" paddingX={1} height={workerListHeight + 1}>
         {visibleWorkers.length === 0 ? (
-          <Text color={theme.text.secondary as HexColor}>No workers active</Text>
+          <Text color={theme.text.secondary as HexColor}>{t().workerPanelNoActive}</Text>
         ) : (
           visibleWorkers.map((worker, index) => {
             const isSelected = index === selectedIndex;
@@ -192,10 +193,10 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
             const taskDisplay = worker.currentTask
               ? truncateText(worker.currentTask, maxWorkerNameLength)
               : worker.status === 'completed'
-                ? 'done'
+                ? t().workerTaskDone
                 : worker.status === 'failed'
-                  ? 'error'
-                  : 'idle';
+                  ? t().workerTaskError
+                  : t().workerTaskIdle;
 
             return (
               <Box key={worker.id} flexDirection="row">
@@ -248,7 +249,7 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
             if (!focusedWorker) {
               return (
                 <Text color={theme.text.secondary as HexColor}>
-                  Worker not found
+                  {t().workerPanelNotFound}
                 </Text>
               );
             }
@@ -257,7 +258,7 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
             if (outputLines.length === 0) {
               return (
                 <Text color={theme.text.secondary as HexColor}>
-                  No output yet
+                  {t().workerPanelNoOutput}
                 </Text>
               );
             }
@@ -265,7 +266,7 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
             return (
               <>
                 <Text bold color={theme.text.primary as HexColor}>
-                  {focusedWorker.modelName} output:
+                  {t().workerPanelOutput(focusedWorker.modelName)}
                 </Text>
                 {outputLines.map((line, i) => (
                   <Text key={i} wrap="truncate">
@@ -277,7 +278,7 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
           })()
         ) : (
           <Text color={theme.text.secondary as HexColor}>
-            Select a worker and press Enter to view output (Esc to go back)
+            {t().workerPanelSelectHint}
           </Text>
         )}
       </Box>
@@ -297,8 +298,8 @@ export const WorkerActivityPanel: React.FC<WorkerActivityPanelProps> = ({
         >
           <Text color={theme.text.secondary as HexColor}>
             {focusedWorkerId
-              ? 'Esc: back to list'
-              : '↑↓: navigate | Enter: view output'}
+              ? t().workerPanelEscBack
+              : t().workerPanelNavigate}
           </Text>
         </Box>
       )}

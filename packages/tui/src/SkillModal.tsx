@@ -3,6 +3,7 @@ import { Box, Text, useInput } from '@deepreef/ink';
 import { createSkillTool } from '@deepreef/tools';
 import { ModalShell } from './ModalShell.js';
 import { FG, TONE } from './reasonix/tokens.js';
+import { t } from './i18n/index.js';
 
 export interface SkillRecord {
   name: string;
@@ -42,7 +43,7 @@ function parseLoadedSkill(content: unknown): SkillRecord {
 export function SkillModal({ activeSkills, onChange, onInsertSkill, onClose }: SkillModalProps) {
   const [skills, setSkills] = useState<SkillListItem[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [message, setMessage] = useState<string>('Loading skills...');
+  const [message, setMessage] = useState<string>(t().loadingSkills);
   const [busy, setBusy] = useState(false);
 
   const activeNames = useMemo(() => new Set(activeSkills.map(skill => skill.name)), [activeSkills]);
@@ -62,7 +63,7 @@ export function SkillModal({ activeSkills, onChange, onInsertSkill, onClose }: S
         }
         const list = parseList(result.content);
         setSkills(list);
-        setMessage(list.length > 0 ? `${list.length} skills available` : 'No skills found');
+        setMessage(list.length > 0 ? t().skillsAvailable(list.length) : t().noSkillsFound);
       } catch (error) {
         if (alive) setMessage(error instanceof Error ? error.message : String(error));
       }
@@ -76,7 +77,7 @@ export function SkillModal({ activeSkills, onChange, onInsertSkill, onClose }: S
 
     if (activeNames.has(selected.name)) {
       onChange(activeSkills.filter(skill => skill.name !== selected.name));
-      setMessage(`Disabled ${selected.name}`);
+      setMessage(t().skillDisabled(selected.name));
       return;
     }
 
@@ -90,7 +91,7 @@ export function SkillModal({ activeSkills, onChange, onInsertSkill, onClose }: S
       }
       const loaded = parseLoadedSkill(result.content);
       onChange([...activeSkills.filter(skill => skill.name !== loaded.name), loaded]);
-      setMessage(`Enabled ${loaded.name}`);
+      setMessage(t().skillEnabled(loaded.name));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -137,13 +138,13 @@ export function SkillModal({ activeSkills, onChange, onInsertSkill, onClose }: S
                 <Text bold={selected} color={selected ? TONE.brand : FG.body}>{skill.name}</Text>
               </Box>
               <Box paddingLeft={4}>
-                <Text color={FG.sub} wrap="truncate">{skill.description || 'No description'}</Text>
+                <Text color={FG.sub} wrap="truncate">{skill.description || t().skillNoDescription}</Text>
               </Box>
             </Box>
           );
         })}
         <Box marginTop={1}>
-          <Text color={FG.faint}>↑↓ select · Space enable/disable · Enter insert #skill · Esc close</Text>
+          <Text color={FG.faint}>{t().skillFooterHint}</Text>
         </Box>
       </Box>
     </ModalShell>

@@ -3,6 +3,7 @@ import { Box, Text, useInput } from '@deepreef/ink';
 import type { ContextPolicy, ContextPolicyStatus, ContextReductionResult } from '@deepreef/core';
 import { ModalShell } from './ModalShell.js';
 import { FG, TONE } from './reasonix/tokens.js';
+import { t } from './i18n/index.js';
 
 interface ContextModalProps {
   policy: ContextPolicy;
@@ -31,7 +32,7 @@ export function ContextModal({ policy, loadStatus, onPolicyChange, onRunReductio
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [current, setCurrent] = useState<ContextPolicy>(policy);
   const [status, setStatus] = useState<ContextPolicyStatus | null>(null);
-  const [message, setMessage] = useState('Loading context status...');
+  const [message, setMessage] = useState(t().contextLoading);
   const [busy, setBusy] = useState(false);
 
   const selectedRow = ROWS[selectedIdx] ?? 'mode';
@@ -48,7 +49,7 @@ export function ContextModal({ policy, loadStatus, onPolicyChange, onRunReductio
         if (!alive) return;
         setStatus(next);
         setCurrent(next.policy);
-        setMessage('Context policy loaded');
+        setMessage(t().contextLoaded);
       } catch (error) {
         if (alive) setMessage(error instanceof Error ? error.message : String(error));
       }
@@ -67,21 +68,19 @@ export function ContextModal({ policy, loadStatus, onPolicyChange, onRunReductio
       const refreshed = await loadStatus();
       setStatus(refreshed);
       setCurrent(refreshed.policy);
-      setMessage('Saved');
+      setMessage(t().contextSaved);
     } catch {
-      setMessage('Saved');
+      setMessage(t().contextSaved);
     }
   }
 
   async function runNow(): Promise<void> {
     if (busy) return;
     setBusy(true);
-    setMessage('Reducing context...');
+    setMessage(t().contextReducing);
     try {
       const result = await onRunReduction();
-      setMessage(
-        `${result.mode}: ${tokens(result.beforeTokens)} -> ${tokens(result.afterTokens)} tokens, removed ${result.removedMessages} messages`,
-      );
+      setMessage(t().contextRunResult(result.mode, tokens(result.beforeTokens), tokens(result.afterTokens), result.removedMessages));
       const refreshed = await loadStatus();
       setStatus(refreshed);
       setCurrent(refreshed.policy);
@@ -124,10 +123,10 @@ export function ContextModal({ policy, loadStatus, onPolicyChange, onRunReductio
   });
 
   const rows = [
-    { key: 'mode', label: 'Mode', value: current.mode, description: 'trim drops old turns; compact summarizes then trims' },
-    { key: 'trigger', label: 'Trigger', value: pct(current.triggerRatio), description: `start reduction at ${status ? tokens(status.triggerTokens) : '-'} tokens` },
-    { key: 'target', label: 'Target', value: pct(current.targetRatio), description: `reduce context to ${status ? tokens(status.targetTokens) : '-'} tokens` },
-    { key: 'run', label: 'Run now', value: busy ? 'busy' : 'ready', description: 'apply the current policy immediately' },
+    { key: 'mode', label: t().contextModeRowLabel, value: current.mode, description: t().contextModeDescription },
+    { key: 'trigger', label: t().contextTriggerRowLabel, value: pct(current.triggerRatio), description: t().contextTriggerDescription(status ? tokens(status.triggerTokens) : '-') },
+    { key: 'target', label: t().contextTargetRowLabel, value: pct(current.targetRatio), description: t().contextTargetDescription(status ? tokens(status.targetTokens) : '-') },
+    { key: 'run', label: t().contextRunRowLabel, value: busy ? 'busy' : 'ready', description: t().contextRunDescription },
   ] as const;
 
   return (
@@ -149,7 +148,7 @@ export function ContextModal({ policy, loadStatus, onPolicyChange, onRunReductio
           );
         })}
         <Box marginTop={1}>
-          <Text color={FG.faint}>↑↓ select · ←→ adjust ratios · Enter toggle/run · Esc close</Text>
+          <Text color={FG.faint}>{t().contextFooterHint}</Text>
         </Box>
         <Text color={FG.sub}>{message}</Text>
       </Box>

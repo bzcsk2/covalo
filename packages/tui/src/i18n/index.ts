@@ -6,12 +6,14 @@ import { zhCN } from './zh-CN.js';
 import { en } from './en.js';
 import { loadLang, saveLang } from './persist.js';
 
-const dicts: Record<Locale, Strings> = { 'zh-CN': zhCN, en };
+export const dicts: Record<Locale, Strings> = { 'zh-CN': zhCN, en };
 
 let activeLocale: Locale = loadLang() ?? 'zh-CN';
 
 /** Get the current locale's string dictionary. */
 export function t(): Strings { return dicts[activeLocale]; }
+
+export { saveLang } from './persist.js';
 
 /** Switch the active locale at runtime and persist. */
 export function setLocale(locale: Locale): void {

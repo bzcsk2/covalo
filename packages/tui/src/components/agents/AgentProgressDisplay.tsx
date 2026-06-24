@@ -17,6 +17,7 @@ import React from 'react';
 import { Box, Text, type HexColor } from '@deepreef/ink';
 import { getSemanticColors } from '../../theme/semantic-colors.js';
 import type { WorkerDisplayData, WorkerStatus, AgentActivityItem } from './AgentGroupDisplay.js';
+import { t } from '../../i18n/index.js';
 
 interface AgentProgressDisplayProps {
   worker: WorkerDisplayData;
@@ -57,18 +58,18 @@ function getStatusColor(status: WorkerStatus): HexColor {
 
 function getStatusLabel(status: WorkerStatus): string {
   switch (status) {
-    case 'queued': return 'Queued';
-    case 'starting': return 'Starting';
-    case 'running': return 'Running';
-    case 'waiting_permission': return 'Needs Permission';
-    case 'waiting_question': return 'Awaiting Answer';
-    case 'waiting_supervisor': return 'Supervisor Review';
-    case 'verifying': return 'Verifying';
-    case 'paused': return 'Paused';
-    case 'completed': return 'Completed';
-    case 'failed': return 'Failed';
-    case 'cancelled': return 'Cancelled';
-    case 'idle': return 'Idle';
+    case 'queued': return t().agentStatusQueued;
+    case 'starting': return t().agentStatusStarting;
+    case 'running': return t().agentStatusRunning;
+    case 'waiting_permission': return t().agentStatusPermission;
+    case 'waiting_question': return t().agentStatusAnswer;
+    case 'waiting_supervisor': return t().agentStatusReview;
+    case 'verifying': return t().agentStatusVerifying;
+    case 'paused': return t().agentStatusPaused;
+    case 'completed': return t().agentStatusCompleted;
+    case 'failed': return t().agentStatusFailed;
+    case 'cancelled': return t().agentStatusCancelled;
+    case 'idle': return t().agentStatusIdle;
     default: return status;
   }
 }

@@ -17,6 +17,7 @@ import React from 'react';
 import { Box, Text, type HexColor } from '@deepreef/ink';
 import { getSemanticColors } from '../../theme/semantic-colors.js';
 import { AgentProgressDisplay } from './AgentProgressDisplay.js';
+import { t } from '../../i18n/index.js';
 
 export type WorkerStatus =
   | 'queued' | 'starting' | 'running' | 'waiting_permission'
@@ -93,18 +94,18 @@ function getStatusColor(status: WorkerStatus): HexColor {
 
 function getStatusLabel(status: WorkerStatus): string {
   switch (status) {
-    case 'queued': return 'Queued';
-    case 'starting': return 'Starting';
-    case 'running': return 'Running';
-    case 'waiting_permission': return 'Needs Permission';
-    case 'waiting_question': return 'Awaiting Answer';
-    case 'waiting_supervisor': return 'Supervisor Review';
-    case 'verifying': return 'Verifying';
-    case 'paused': return 'Paused';
-    case 'completed': return 'Completed';
-    case 'failed': return 'Failed';
-    case 'cancelled': return 'Cancelled';
-    case 'idle': return 'Idle';
+    case 'queued': return t().agentStatusQueued;
+    case 'starting': return t().agentStatusStarting;
+    case 'running': return t().agentStatusRunning;
+    case 'waiting_permission': return t().agentStatusPermission;
+    case 'waiting_question': return t().agentStatusAnswer;
+    case 'waiting_supervisor': return t().agentStatusReview;
+    case 'verifying': return t().agentStatusVerifying;
+    case 'paused': return t().agentStatusPaused;
+    case 'completed': return t().agentStatusCompleted;
+    case 'failed': return t().agentStatusFailed;
+    case 'cancelled': return t().agentStatusCancelled;
+    case 'idle': return t().agentStatusIdle;
     default: return status;
   }
 }
@@ -115,13 +116,13 @@ function computeGroupHeader(workers: WorkerDisplayData[]): string {
   const failed = workers.filter(w => w.status === 'failed' || w.status === 'cancelled').length;
 
   const parts: string[] = [];
-  if (running > 0) parts.push(`${running} Running`);
-  if (completed > 0) parts.push(`${completed} Completed`);
-  if (failed > 0) parts.push(`${failed} Failed`);
+  if (running > 0) parts.push(t().agentGroupRunning(running));
+  if (completed > 0) parts.push(t().agentGroupCompleted(completed));
+  if (failed > 0) parts.push(t().agentGroupFailed(failed));
 
   if (parts.length === 0) {
-    if (workers.length === 0) return 'No Workers';
-    return `${workers.length} Worker${workers.length > 1 ? 's' : ''} Idle`;
+    if (workers.length === 0) return t().agentGroupNoWorkers;
+    return t().agentGroupWorkersIdle(workers.length);
   }
   return parts.join(', ') + (running > 0 ? '...' : '');
 }

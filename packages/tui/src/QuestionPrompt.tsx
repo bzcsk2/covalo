@@ -31,6 +31,7 @@ import {
 import { Card } from './reasonix/Card.js';
 import { CardHeader } from './reasonix/CardHeader.js';
 import { FG, TONE } from './reasonix/tokens.js';
+import { t } from './i18n/index.js';
 
 interface QuestionPromptProps {
   request: QuestionRequest;
@@ -229,7 +230,7 @@ export function QuestionPrompt({ request, onReply, onReject }: QuestionPromptPro
           >
             {isCustomSelected ? '❯ ' : '  '}
             {state.editing ? '> ' : '  '}
-            {state.editing ? customValue || 'Type your answer...' : 'Type your own answer'}
+            {state.editing ? customValue || t().questionTypeAnswer : t().questionTypeYourOwn}
           </Text>
         </Box>
       );
@@ -244,14 +245,14 @@ export function QuestionPrompt({ request, onReply, onReject }: QuestionPromptPro
 
     return (
       <Box flexDirection="column" marginLeft={1}>
-        <Text color={TONE.brand} bold>Summary:</Text>
+        <Text color={TONE.brand} bold>{t().questionSummary}</Text>
         {request.questions.map((q, i) => {
           const answers = state.answers[i] ?? [];
           return (
             <Box key={i} flexDirection="row" marginLeft={1}>
               <Text color={FG.meta}>{`${q.header}: `}</Text>
               <Text color={FG.body}>
-                {answers.length > 0 ? answers.join(', ') : 'No answer'}
+                {answers.length > 0 ? answers.join(', ') : t().questionNoAnswer}
               </Text>
             </Box>
           );
@@ -266,11 +267,11 @@ export function QuestionPrompt({ request, onReply, onReject }: QuestionPromptPro
         glyph="?"
         tone={TONE.brand}
         title="Question"
-        right={state.submitting ? <Text color={FG.faint}>Submitting...</Text> : undefined}
+        right={state.submitting ? <Text color={FG.faint}>{t().questionSubmitting}</Text> : undefined}
       />
       {renderTabs()}
       <Box flexDirection="column" marginLeft={1}>
-        <Text color={FG.body} bold>{info?.question ?? 'Confirm your answers'}</Text>
+        <Text color={FG.body} bold>{info?.question ?? t().questionConfirmAnswers}</Text>
       </Box>
       {renderOptions()}
       {renderConfirm()}
