@@ -1,20 +1,24 @@
 # Operations
 
-最后整理：2026-06-24。
+Last consolidated: 2026-06-25.
 
-## 安装
+This document is the operational reference for installing, running, configuring, diagnosing, and safely using DeepReef.
+
+## Installation and startup
+
+Install the published CLI:
 
 ```bash
 npm install -g @deepreef/cli
 ```
 
-或：
+or:
 
 ```bash
 bun install -g @deepreef/cli
 ```
 
-源码运行：
+Run from source:
 
 ```bash
 git clone https://github.com/bzcsk2/DeepReef.git
@@ -23,28 +27,35 @@ bun install
 bun run dev
 ```
 
-## 常用命令
+Top-level CLI commands:
 
-TUI 内常用命令：
+```bash
+deepreef                         # start interactive TUI
+deepreef --help                  # show help
+deepreef --version               # show version
+deepreef config <subcommand>     # manage config
+```
 
-| 命令 | 说明 |
+## TUI commands
+
+Common slash commands:
+
+| Command | Purpose |
 | --- | --- |
-| `/help` | 查看帮助。 |
-| `/model` | 切换当前角色的 provider/model/baseUrl/API key。 |
-| `/workflow` | 启动 Supervisor/Worker loop。 |
-| `/goal` | 在 loop 模式查看或管理当前 goal。 |
-| `/sessions` | 查看和恢复历史 session。 |
-| `/skill` | 浏览和启用技能。 |
-| `/status` | 查看运行状态。 |
-| `/context` | 调整上下文策略。 |
-| `/thinking` | 调整 thinking 模式。 |
-| `/harness` | 调整弱模型执行约束。 |
+| `/help` | Show help. |
+| `/model` | Switch provider/model/base URL/API key for the current role. |
+| `/workflow` | Start or control the Supervisor/Worker loop. |
+| `/goal` | View or manage the active loop goal. |
+| `/sessions` | Browse and restore sessions. |
+| `/skill` | Browse and enable skills. |
+| `/status` | Show runtime status. |
+| `/context` | Adjust context policy. |
+| `/thinking` | Adjust thinking mode. |
+| `/harness` | Adjust weak-model execution constraints. |
+| `/lang` | Switch Chinese/English UI language. |
+| `/config` | Show or change configuration. |
 
-## Goal 命令
-
-`/goal` 仅在 loop 模式下有效。
-
-常见用法：
+Goal commands are only meaningful in loop/workflow mode:
 
 ```text
 /goal
@@ -57,63 +68,247 @@ TUI 内常用命令：
 /goal no-budget
 ```
 
-目标持久化路径：
+Goal state is persisted with the session:
 
 ```text
 .deepreef/sessions/<sessionId>/goal.json
 ```
 
-## 当前配置文件
+## Configuration
 
-当前已实现的是窄配置，不是完整 TOML 控制面。
+DeepReef now has a unified TOML configuration system. Config is validated with Zod and loaded from defaults, user config, project config, and CLI/TUI overrides.
 
-| 文件 | 说明 |
+Effective priority, from low to high:
+
+```text
+built-in defaults
+  < user config: ~/.deepreef/config.toml
+  < project config: <project>/.deepreef/config.toml
+  < CLI overrides
+  < TUI/session-level temporary overrides
+```
+
+Runtime state is not static config. Sessions, active goal state, mailbox entries, token usage, and workflow phase remain runtime/session data.
+
+### Config CLI
+
+```bash
+deepreef config path
+deepreef config print
+deepreef config print --redact
+deepreef config print --json
+deepreef config validate
+deepreef config doctor
+deepreef config edit
+deepreef config init
+deepreef config init --template local-first
+deepreef config init --template safe-readonly
+deepreef config init --template autonomous-coding
+```
+
+Use `--project` with `init` or `edit` to target the project config instead of the user config.
+
+### Config shape
+
+The canonical in-code schema uses camelCase keys. The parser also normalizes snake_case input, but new docs and examples should prefer camelCase.
+
+Minimal example:
+
+```toml
+version = 1
+
+[workflow]
+defaultMode = "loop"
+maxRounds = 6
+structuredProtocol = true
+requireJsonDecisions = true
+legacyTextFallback = true
+askUserOnBlocked = true
+autoResumeAfterAskUser = false
+maxConsecutiveErrors = 2
+supervisorInterventionErrorThreshold = 2
+
+[goal]
+enabled = true
+autoContinue = true
+maxAutoContinuations = 10
+maxConsecutiveBlockedTurns = 3
+maxConsecutiveTurnErrors = 2
+defaultTokenBudget = 0
+completionAuditRequired = true
+blockedAuditRequired = true
+injectContinuationPrompt = true
+injectObjectiveUpdatedPrompt = true
+injectBudgetLimitPrompt = true
+
+[tools]
+approvalPolicy = "on-request"
+sandbox = "workspace-write"
+dangerousToolsEnabled = false
+
+[tools.supervisor.loop]
+allow = []
+deny = ["bash", "edit_file", "apply_patch", "write_file", "AgentTool"]
+
+[tools.worker.loop]
+allow = []
+deny = ["update_goal"]
+
+[logging]
+level = "info"
+path = ".deepreef/logs"
+eventsJsonl = true
+mailboxJsonl = true
+workflowJsonl = true
+redactSecrets = true
+```
+
+Provider example:
+
+```toml
+[providers.local]
+type = "openai-compatible"
+baseUrl = "http://localhost:11434/v1"
+apiKey = "none"
+model = "qwen2.5-coder:7b"
+local = true
+free = false
+timeoutMs = 30000
+maxRetries = 3
+headers = {}
+
+[agents.worker]
+provider = "local"
+reasoningEffort = "medium"
+temperature = 0.1
+topP = 1
+maxOutputTokens = 8192
+contextStrategy = "full"
+contextTurns = 20
+```
+
+### Config troubleshooting
+
+```bash
+# Show config paths
+deepreef config path
+
+# Validate user/project/effective config
+deepreef config validate
+
+# Print effective config with secrets redacted
+deepreef config print --redact
+
+# Inspect likely config problems
+deepreef config doctor
+```
+
+If config seems ineffective, check the target path, run `deepreef config validate`, reload from the TUI if applicable, and confirm a higher-priority project config is not overriding the user config.
+
+## Model providers
+
+DeepReef supports built-in provider families and arbitrary OpenAI-compatible endpoints. Use `/model` for interactive selection and role assignment.
+
+| Family | Notes |
 | --- | --- |
-| `.deepreef/last-config.json` | 全局 fallback provider/model/baseUrl。 |
-| `.deepreef/role-config.json` | Worker/Supervisor per-role provider/model/baseUrl。 |
-| `.deepreef/model-targets.json` | 项目级 model target 覆盖。 |
-| `.deepreef/sessions/` | session、goal 等运行状态。 |
+| DeepSeek | `deepseek-v4-flash-free`, `deepseek-v4-flash`, `deepseek-v4-pro`; user API key supported. |
+| Mimo | `mimo-v2.5-free`, `mimo-v2.5-pro`, `mimo-v2.5`; user API key supported. |
+| Qwen | Qwen models through vLLM, Ollama, llama.cpp, or OpenAI-compatible endpoints. |
+| Gemma | Gemma models through vLLM, Ollama, llama.cpp, or OpenAI-compatible endpoints. |
+| Kimi | Kimi model presets; user API key supported. |
+| GLM/ZAI | GLM model presets; user API key supported. |
+| Minimax | Minimax model presets. |
+| Stepfun | `step-3.7-flash-free`, `step-3.7-flash`, `step-3.7-turbo`; user API key supported. |
+| NVIDIA | Nemotron/NIM presets; NIM API key supported. |
+| OpenAI | OpenAI-compatible presets such as `gpt-oss-120b`; user API key supported. |
+| Custom | Any OpenAI-compatible endpoint. |
 
-API key 通常来自环境变量或 TUI 输入，不应提交到 git。
-
-常见环境变量命名：
-
-```text
-DEEPSEEK_API_KEY
-MIMO_API_KEY
-NVIDIA_API_KEY
-QWEN_API_KEY
-KIMI_API_KEY
-OPENAI_API_KEY
-<PROVIDER>_BASE_URL
-<PROVIDER>_MODEL
-```
-
-Memory 开关：
+Thinking modes:
 
 ```text
-DEEPREEF_MEMORY=false
-DEEPREEF_MEMORY_AUTO_OBSERVE=false
-DEEPREEF_MEMORY_INJECT_CONTEXT=false
-DEEPREEF_MEMORY_ADVANCED=true
-DEEPREEF_MEMORY_GRAPH=true
-DEEPREEF_MEMORY_CONSOLIDATE=true
-DEEPREEF_MEMORY_REFLECT=true
-DEEPREEF_MEMORY_SLOTS=true
+/thinking off
+/thinking high
+/thinking max
 ```
 
-## 安全边界
+Recommended split for DeepSeek-style usage:
 
-DeepReef 是本地工程 agent，能读写文件、运行命令、访问网络和调用扩展工具。它不是完整隔离沙箱。
+- Supervisor: stronger model, higher thinking, review-heavy role.
+- Worker: cheaper/free/local model, execution-heavy role, with stricter harness and evidence reporting.
 
-当前安全机制包括：
+Provider/model IDs change faster than architecture. Treat `packages/core/src/config.ts` as the source of truth when updating this section.
 
-- Deny-first permission engine。
-- 写文件和 shell 等敏感工具走权限判断。
-- 危险命令阻断。
-- stale-read 编辑保护。
-- 文件快照。
-- Web 请求 SSRF 防护。
-- 子 agent 工具/权限隔离。
+## Logging and diagnostics
 
-不要在不愿审查修改结果的仓库中运行 DeepReef。
+The unified config has a `[logging]` section:
+
+```toml
+[logging]
+level = "info"          # debug | info | warn | error
+path = ".deepreef/logs"
+eventsJsonl = true
+mailboxJsonl = true
+workflowJsonl = true
+redactSecrets = true
+```
+
+Expected log layout:
+
+```text
+.deepreef/logs/
+  runtime-YYYY-MM-DD.jsonl
+  mailbox-YYYY-MM-DD.jsonl
+  workflow-YYYY-MM-DD.jsonl
+```
+
+JSONL records are intended for `jq`:
+
+```bash
+# Inspect warnings/errors
+cat .deepreef/logs/*.jsonl | jq 'select(.level == "warn" or .level == "error")'
+
+# Inspect tool failures
+cat .deepreef/logs/*.jsonl | jq 'select(.event == "tool.execute.done" and .isError == true)'
+
+# Inspect API usage if present
+cat .deepreef/logs/*.jsonl | jq 'select(.event == "api.usage")'
+```
+
+Sensitive fields such as API keys, authorization headers, tokens, cookies, passwords, and secrets should be redacted. Keep `redactSecrets = true` unless debugging a local-only throwaway environment.
+
+## Tracing
+
+Trace config exists under `[trace]`:
+
+```toml
+[trace]
+enabled = true
+includePrompts = false
+includeToolArgs = true
+includeToolResults = false
+includeModelOutputs = false
+```
+
+If prompt or model-output capture is enabled, treat trace files as sensitive artifacts.
+
+## Safety boundary
+
+DeepReef is a local engineering agent. It can read and write files, run commands, access networks, and invoke extension tools. It is not a complete sandbox.
+
+Current safety mechanisms include:
+
+- deny-first permission engine,
+- write and shell permission checks,
+- dangerous command blocking,
+- stale-read edit protection,
+- file snapshots,
+- web request SSRF protections,
+- role/mode/workflow-phase tool filtering,
+- configurable hard-deny tool policy.
+
+Operational rules:
+
+- Do not commit API keys or `.deepreef/` runtime/session data.
+- Do not run autonomous coding mode in a repository whose changes you are unwilling to review.
+- Prefer `safe-readonly` config for audits, onboarding, and repo exploration.
+- Prefer project-level config for team/repo policy and user-level config for personal model/provider preferences.
