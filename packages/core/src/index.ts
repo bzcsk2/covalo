@@ -379,6 +379,19 @@ export {
   ConfigMigrationError,
   ConfigAccessError,
 } from "./config/errors.js"
+
+export {
+  toWorkflowCoordinatorConfig,
+  toGoalRuntimeConfig,
+  getSupervisorToolPolicy,
+  getWorkerToolPolicy,
+  isToolAllowed,
+  isHardDeniedForSupervisorLoop,
+  isHardDeniedForWorkerLoop,
+  getMailboxConfig,
+  getContextConfig,
+} from "./config/adapter.js"
+
 export type { ChatMessage, ToolCall, ToolSpec, Usage, Role } from "./types.js"
 export type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult, LoopEventRole, ToolTier, ToolConcurrency, ToolProgressUpdate, ChatClient } from "./interface.js"
 // TUI-OT-60: 多 Agent 编排事件类型（供 TUI 消费）

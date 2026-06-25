@@ -3,6 +3,8 @@ import type { ToolSpec } from "./types.js"
 import type { AgentRole } from "./agent-profile/types.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import type { WorkflowPhase } from "./workflow-coordinator/types.js"
+import type { DeepReefConfig } from "./config/schema.js"
+import { isHardDeniedForSupervisorLoop, isHardDeniedForWorkerLoop, isToolAllowed } from "./config/adapter.js"
 
 const SUPERVISOR_TOOLS_SUBAGENT = new Set([
   "AgentTool",
@@ -55,6 +57,8 @@ export interface ResolveEffectiveToolsOpts {
   mode: WorkflowMode
   agentToolNames?: string[]
   workflowPhase?: WorkflowPhase
+  /** 新配置系统配置（可选） */
+  config?: DeepReefConfig
 }
 
 export interface ResolveEffectiveToolsResult {
@@ -77,13 +81,37 @@ function supervisorLoopToolsForPhase(phase: WorkflowPhase | undefined): Set<stri
 }
 
 export function resolveEffectiveTools(opts: ResolveEffectiveToolsOpts): ResolveEffectiveToolsResult {
-  const { registeredTools, role, mode, agentToolNames, workflowPhase } = opts
+  const { registeredTools, role, mode, agentToolNames, workflowPhase, config } = opts
   const toolSpecs: ToolSpec[] = []
   let filteredCount = 0
   let filteredReason: string | undefined
 
   for (const tool of registeredTools.values()) {
     const name = tool.name
+
+    // 如果有新配置系统配置，使用配置系统的allow/deny策略
+    if (config) {
+      // 检查hard deny（Supervisor loop不能使用的工程工具）
+      if (role === "supervisor" && mode === "loop" && isHardDeniedForSupervisorLoop(name)) {
+        filteredCount++
+        if (!filteredReason) filteredReason = "supervisor loop hard deny: engineering tools not allowed"
+        continue
+      }
+
+      // 检查hard deny（Worker loop不能使用的工具）
+      if (role === "worker" && mode === "loop" && isHardDeniedForWorkerLoop(name)) {
+        filteredCount++
+        if (!filteredReason) filteredReason = "worker loop hard deny: goal tools are coordinator-managed"
+        continue
+      }
+
+      // 检查配置系统的allow/deny策略
+      if (!isToolAllowed(config, role as "supervisor" | "worker", mode as "loop" | "subagent", name)) {
+        filteredCount++
+        if (!filteredReason) filteredReason = `config policy: ${role} ${mode} denies ${name}`
+        continue
+      }
+    }
 
     // Loop is coordinator-orchestrated: Supervisor tools are scoped by
     // workflow phase so analyse never gets read_file/grep (which would cause
