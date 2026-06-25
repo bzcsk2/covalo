@@ -783,9 +783,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             const key = command.path.slice(dotIndex + 1);
             const value = command.value;
             try {
-              const current = configManager.get() as unknown as Record<string, Record<string, unknown>>;
-              if (!current[section]) {
+              const config = configManager.get();
+              const sectionValue = config[section as keyof typeof config];
+              if (sectionValue === undefined || sectionValue === null) {
                 appendMessage({ role: 'assistant' as const, content: t().configError(`Unknown section: ${section}`) });
+              } else if (typeof sectionValue !== 'object' || Array.isArray(sectionValue)) {
+                appendMessage({ role: 'assistant' as const, content: t().configError(`Section '${section}' is not an object`) });
               } else {
                 // 类型转换
                 let parsed: unknown = value;
@@ -793,8 +796,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
                 else if (value === 'false') parsed = false;
                 else if (!isNaN(Number(value))) parsed = Number(value);
                 
-                current[section][key] = parsed;
-                configManager.update(current, 'tui');
+                (sectionValue as Record<string, unknown>)[key] = parsed;
+                configManager.update(config, 'tui');
                 await configManager.saveProjectConfig();
                 appendMessage({ role: 'assistant' as const, content: t().configSet(command.path, value) });
               }
@@ -804,15 +807,15 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           }
         } else if (command.path) {
           // 显示某个 section 的配置
-          const current = configManager.get() as unknown as Record<string, Record<string, unknown>>;
-          const section = command.path;
-          if (current[section]) {
+          const config = configManager.get();
+          const sectionValue = config[command.path as keyof typeof config];
+          if (sectionValue !== undefined && sectionValue !== null) {
             appendMessage({ 
               role: 'assistant' as const, 
-              content: t().configAll(JSON.stringify(current[section], null, 2))
+              content: t().configAll(JSON.stringify(sectionValue, null, 2))
             });
           } else {
-            appendMessage({ role: 'assistant' as const, content: t().configError(`Unknown section: ${section}`) });
+            appendMessage({ role: 'assistant' as const, content: t().configError(`Unknown section: ${command.path}`) });
           }
         } else {
           // /config — 显示当前配置文件路径
