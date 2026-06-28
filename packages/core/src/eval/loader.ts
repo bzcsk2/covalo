@@ -35,12 +35,22 @@ const EvalCaseManifestSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   fixtureSource: z.string(),
+  sourceMeta: z.object({
+    sourceKind: z.enum(["terminal-bench", "swe-bench", "looprig-real"]),
+    sourceId: z.string(),
+    sourceRepoPath: z.string(),
+    sourceCommit: z.string().optional(),
+    sourceDataset: z.string().optional(),
+    sourceSplit: z.string().optional(),
+    sourceTaskPath: z.string().optional(),
+    sourceInstanceId: z.string().optional(),
+  }).optional(),
   setup: z.array(z.string()).optional(),
   taskPrompt: z.string().min(1),
   expectedVerification: z.array(z.string()).min(1),
   verifier: VerifierSchema,
   scoring: ScoringSchema.optional(),
-});
+}).passthrough();
 
 export type ParsedManifest = z.infer<typeof EvalCaseManifestSchema>;
 

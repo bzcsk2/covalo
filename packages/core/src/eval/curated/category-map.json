@@ -1,0 +1,71 @@
+{
+  "version": "1",
+  "categories": {
+    "coding-basics": {
+      "title": "Coding Basics",
+      "description": "基础编码能力评测：类型修复、bug 修复、测试修复、构建修复",
+      "suites": {
+        "standard": {
+          "title": "Terminal-Bench 真实任务集",
+          "description": "来自 Terminal-Bench original-tasks 的真实修复任务",
+          "estimatedMinutes": "15-30"
+        }
+      }
+    },
+    "tool-use": {
+      "title": "Tool Use",
+      "description": "工具使用能力评测：搜索、编辑、命令行工具链操作",
+      "suites": {
+        "standard": {
+          "title": "Terminal-Bench 真实任务集",
+          "description": "来自 Terminal-Bench 的多工具配合任务",
+          "estimatedMinutes": "15-30"
+        }
+      }
+    },
+    "safety": {
+      "title": "Safety",
+      "description": "安全与约束评测：权限修复、安全漏洞修复、凭据处理",
+      "suites": {
+        "standard": {
+          "title": "Terminal-Bench 真实任务集",
+          "description": "来自 Terminal-Bench 的安全相关任务",
+          "estimatedMinutes": "15-30"
+        }
+      }
+    },
+    "supervisor-recovery": {
+      "title": "Supervisor Recovery",
+      "description": "监督恢复能力评测：初始失败后基于 supervisor 反馈恢复",
+      "suites": {
+        "standard": {
+          "title": "Terminal-Bench 恢复场景",
+          "description": "Terminal-Bench 任务包装为恢复场景，首次失败后 supervisor 接管",
+          "estimatedMinutes": "20-40"
+        }
+      }
+    },
+    "long-run": {
+      "title": "Long Run",
+      "description": "长链任务评测：多步骤、多阶段、多文件修改的综合任务",
+      "suites": {
+        "standard": {
+          "title": "Terminal-Bench 长链任务",
+          "description": "Terminal-Bench 中需要多步骤综合操作的任务",
+          "estimatedMinutes": "30-60"
+        }
+      }
+    },
+    "weak-model": {
+      "title": "Weak Model",
+      "description": "弱模型评测：适合轻量模型的短链小型修复任务",
+      "suites": {
+        "standard": {
+          "title": "Terminal-Bench 小型任务",
+          "description": "Terminal-Bench 中最简单的小型修复任务",
+          "estimatedMinutes": "10-20"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "version": "1",
+  "source": {
+    "kind": "looprig-real",
+    "repoPath": "/vol4/Agent/looprig",
+    "datasetName": "looprig-repo-commits",
+    "datasetVersion": "HEAD"
+  },
+  "instances": [
+    {
+      "taskId": "lr-register-slash-commands",
+      "commitId": "d47123edaef4ee1372ffee5e4f012d851df1c082",
+      "baseCommit": "37af754c67be115e26cb0f15523ab1bbbbda0153",
+      "category": "coding-basics",
+      "suite": "standard",
+      "title": "注册 /eval、/talk、/theme 到 SLASH_COMMANDS 自动补全",
+      "description": "修复缺少的斜杠命令注册，使 autocomplete 能补全 /eval、/talk、/theme",
+      "verifierCommand": "bun test packages/tui/__tests__/commands.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-migrate-max-thinking-store",
+      "commitId": "9932d33a99e696b975edf6997dc3ef608d6b0ad5",
+      "baseCommit": "123d96c4d4617b38f775873735af8f148ffb128e",
+      "category": "weak-model",
+      "suite": "standard",
+      "title": "迁移 max thinking 模式配置字段",
+      "description": "agent-profile store 中 maxThinking 字段未正确迁移",
+      "verifierCommand": "bun test packages/core/__tests__/agent-profile.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-validate-max-thinking-schema",
+      "commitId": "19df7cf3d01c21a7482cb9a6ead57ccc47df5bbc",
+      "baseCommit": "9932d33a99e696b975edf6997dc3ef608d6b0ad5",
+      "category": "weak-model",
+      "suite": "standard",
+      "title": "profile validation 包含 max thinking",
+      "description": "agent-profile schema 验证缺少 maxThinking 字段，导致合法配置被拒绝",
+      "verifierCommand": "bun test packages/core/__tests__/agent-profile.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-max-thinking-engine-interface",
+      "commitId": "123d96c4d4617b38f775873735af8f148ffb128e",
+      "baseCommit": "9980fc48b7f1e040eaf2f00eb865bf0c1c600024",
+      "category": "coding-basics",
+      "suite": "standard",
+      "title": "engine interface 允许 max thinking",
+      "description": "core engine interface 中 maxThinking 参数缺失导致类型错误",
+      "verifierCommand": "cd packages/core && bun run typecheck 2>&1"
+    },
+    {
+      "taskId": "lr-tui-streaming-indent-finalize",
+      "commitId": "bdcac23fda402f59f23382cd1c0e9db8e578d05e",
+      "baseCommit": "16d8b00d98bd13afa1f3f108aa37d76083d1444e",
+      "category": "coding-basics",
+      "suite": "standard",
+      "title": "TUI 缩进统一 + loop round finalize 消息保护",
+      "description": "TUI streaming 缩进不一致，loop workflow round finalize 时消息丢失",
+      "verifierCommand": "bun test packages/tui/__tests__/deepi-messages.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-preserve-reasoning-across-turns",
+      "commitId": "2887e7600f633d3122e5265d7860324ee21fa39a",
+      "baseCommit": "42df0b9cfcdd999f8706352db1e65016c9bd91c0",
+      "category": "tool-use",
+      "suite": "standard",
+      "title": "跨 tool turn 保留 workflow reasoning",
+      "description": "workflow 推理在多次 tool 调用间丢失，导致 AI 无法记住之前的推理链",
+      "verifierCommand": "bun test packages/tui/__tests__/bridge.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-timeline-entries-unique",
+      "commitId": "519d725c9785eb9d8ba68920fcf0bdf0eac1d93c",
+      "baseCommit": "bdcac23fda402f59f23382cd1c0e9db8e578d05e",
+      "category": "tool-use",
+      "suite": "standard",
+      "title": "workflow tool timeline 条目唯一化 + 去重通知",
+      "description": "tool timeline 出现重复条目，多余 tool-loop 通知干扰界面",
+      "verifierCommand": "bun test packages/tui/__tests__/bridge.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-harden-phase-tool-scoping",
+      "commitId": "c727a9f41841fc9e5ea2b22ea06221c84c20e091",
+      "baseCommit": "09dccf1b8206483bfc357227b14739263c6b19b3",
+      "category": "safety",
+      "suite": "standard",
+      "title": "workflow phase tool scoping 强化",
+      "description": "各 workflow phase 中可用工具越界，分析期混入编辑期工具",
+      "verifierCommand": "bun test packages/core/__tests__/resolve-effective-tools.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-supervisor-tools-by-phase",
+      "commitId": "09dccf1b8206483bfc357227b14739263c6b19b3",
+      "baseCommit": "5285ac7096fba82ee493693143a6d88be195906f",
+      "category": "safety",
+      "suite": "standard",
+      "title": "supervisor loop 工具按 phase 限定范围",
+      "description": "supervisor 在错误 phase 使用禁用工具，导致运行时越权行为",
+      "verifierCommand": "bun test packages/core/__tests__/supervisor-request-contract.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-acceptance-blocking-issues",
+      "commitId": "caa898118c7ae2380124f0c1986d930efcfeb099",
+      "baseCommit": "f997646f791c85c1b1f0d008e4a857f457a3e18c",
+      "category": "supervisor-recovery",
+      "suite": "standard",
+      "title": "5 个验收阻塞问题修复",
+      "description": "验收测试中 5 个阻塞性 bug：工作流状态不一致、UI 响应失效、配置持久化异常等",
+      "verifierCommand": "bun test packages/core/__tests__/phase-ab-acceptance.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-loop-worker-report-refactor",
+      "commitId": "9397df69699b9c3c668262b71bf573e509c6b46a",
+      "baseCommit": "5226e684b7d93f5e835af249d3a13a4475c3416c",
+      "category": "long-run",
+      "suite": "standard",
+      "title": "Loop Worker Report 整改 Phase 1-5",
+      "description": "Loop Worker Report 多个 phase 存在输出错误、时序问题、边 case 缺失",
+      "verifierCommand": "bun test packages/core/__tests__/workflow-coordinator.test.ts 2>&1"
+    },
+    {
+      "taskId": "lr-goal-loop-path-fix",
+      "commitId": "4850260a0cc26be5636da9237fbc1cf7580c5f03",
+      "baseCommit": "ba41376caff21dbda408fe46bedda42ce79cd833",
+      "category": "supervisor-recovery",
+      "suite": "standard",
+      "title": "loop=goal 用户路径修复 + 审计门槛 + 续跑",
+      "description": "goal loop 用户路径处理错误、审计门槛缺失、续跑逻辑中断",
+      "verifierCommand": "bun test packages/core/__tests__/goal.test.ts 2>&1"
+    }
+  ]
+}

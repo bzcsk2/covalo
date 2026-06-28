@@ -42,6 +42,17 @@ export interface FileAssertion {
   mustNotContain?: string[];
 }
 
+export interface RealCaseSourceMeta {
+  sourceKind: "terminal-bench" | "swe-bench" | "looprig-real";
+  sourceId: string;
+  sourceRepoPath: string;
+  sourceCommit?: string;
+  sourceDataset?: string;
+  sourceSplit?: string;
+  sourceTaskPath?: string;
+  sourceInstanceId?: string;
+}
+
 export interface EvalCaseManifest {
   id: string;
   category: EvalCategoryId;
@@ -49,6 +60,7 @@ export interface EvalCaseManifest {
   title: string;
   description: string;
   fixtureSource: string;
+  sourceMeta?: RealCaseSourceMeta;
   setup?: string[];
   taskPrompt: string;
   expectedVerification: string[];

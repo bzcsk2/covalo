@@ -37,7 +37,7 @@ describe("eval registry", () => {
     const cat = getCategory("coding-basics");
     expect(cat).toBeDefined();
     expect(cat!.id).toBe("coding-basics");
-    expect(cat!.suites).toHaveLength(1);
+    expect(cat!.suites.length).toBeGreaterThanOrEqual(1);
   });
 
   it("should return undefined for missing category", () => {
@@ -580,6 +580,17 @@ describe("report generation", () => {
             patchDiff: "diff content",
             startedAt: new Date().toISOString(),
             finishedAt: new Date().toISOString(),
+            manifest: {
+              id: "case-1",
+              category: "coding-basics",
+              suite: "smoke",
+              title: "Case 1",
+              description: "test",
+              fixtureSource: "test",
+              taskPrompt: "test",
+              expectedVerification: ["ok"],
+              verifier: { type: "command", command: "true" },
+            },
           },
           {
             caseId: "case-2",
@@ -596,6 +607,17 @@ describe("report generation", () => {
             patchDiff: "",
             startedAt: new Date().toISOString(),
             finishedAt: new Date().toISOString(),
+            manifest: {
+              id: "case-2",
+              category: "coding-basics",
+              suite: "smoke",
+              title: "Case 2",
+              description: "test",
+              fixtureSource: "test",
+              taskPrompt: "test",
+              expectedVerification: ["ok"],
+              verifier: { type: "command", command: "true" },
+            },
           },
         ],
       },

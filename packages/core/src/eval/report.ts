@@ -133,6 +133,9 @@ function generateMarkdownReport(report: EvalRunReport): string {
     lines.push(`- **Verdict**: \`${result.verdict}\``);
     lines.push(`- **Final Score**: ${result.score?.finalScore.toFixed(2) ?? "N/A"}`);
     lines.push(`- **Verifier**: ${result.verifierResult?.verdict ?? "N/A"}`);
+    if (result.manifest?.sourceMeta) {
+      lines.push(`- **Source**: \`${result.manifest.sourceMeta.sourceKind}\` (\`${result.manifest.sourceMeta.sourceId}\`)`);
+    }
     lines.push(`- **Duration**: ${result.startedAt} → ${result.finishedAt}`);
     if (result.error) {
       lines.push(`- **Error**: ${result.error}`);

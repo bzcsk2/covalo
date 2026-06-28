@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import type { EvalCaseManifest } from "./types";
 import type { SandboxProvider } from "../sandbox/types";
+import { runMaterializers, initDefaultMaterializers } from "./materialize/shared";
 
 export interface WorkspaceInfo {
   workspaceDir: string;
@@ -56,6 +57,12 @@ export async function createCaseWorkspace(
       recursive: true,
       force: true,
     });
+  }
+
+  const isMaterialized = manifest.fixtureSource.startsWith("__");
+  if (isMaterialized) {
+    await initDefaultMaterializers();
+    await runMaterializers(manifest, workspaceDir);
   }
 
   const { execSync } = await import("node:child_process");

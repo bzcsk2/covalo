@@ -682,6 +682,8 @@ export {
   runFixedEval,
   saveEvalReport,
   ALL_MANIFESTS,
+  getRealManifests,
+  getRealCategories,
 } from "./eval/index.js"
 export type {
   EvalCategoryId,
