@@ -12,9 +12,7 @@ export function average(numbers: number[]): number {
 export function chunk<T>(array: T[], size: number): T[][] {
   const result: T[][] = [];
   for (let i = 0; i < array.length; i += size) {
-    // BUG: The slice should be array.slice(i, i + size)
-    // but it incorrectly uses a fixed end index
-    result.push(array.slice(i, size));
+    result.push(array.slice(i, i + size));
   }
   return result;
 }

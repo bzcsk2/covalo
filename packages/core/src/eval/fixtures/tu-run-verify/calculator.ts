@@ -13,8 +13,7 @@ export function multiply(a: number, b: number): number {
 }
 
 export function divide(a: number, b: number): number {
-  // BUG: Should throw or return Infinity when dividing by zero
-  // but instead returns a / b which crashes on 0
+  if (b === 0) throw new Error("Division by zero");
   return a / b;
 }
 

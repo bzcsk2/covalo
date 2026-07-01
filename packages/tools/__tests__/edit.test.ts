@@ -252,7 +252,7 @@ describe("edit tool stale-read integration", () => {
     writeFileSync(filePath, "short", "utf-8")
     const { stat } = await import("node:fs/promises")
     const st = await stat(filePath)
-    recordRead(filePath, st.mtimeMs, st.size)
+    await recordRead(filePath, st.mtimeMs, st.size)
     writeFileSync(filePath, "much longer content to ensure size changes", "utf-8")
 
     const tool = createEditTool()

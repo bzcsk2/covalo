@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
 import { McpHost, setMcpHost, isCommandAvailable } from "../src/index.js"
+
+// import.meta.dir may be undefined on some Windows Node.js builds;
+// fall back to fileURLToPath + dirname.
+const testDir = import.meta.dir ?? dirname(fileURLToPath(import.meta.url))
 import { getMcpHost } from "../src/mcp-host-global.js"
 import { McpClient } from "../src/client.js"
 import { mkdtempSync, writeFileSync } from "node:fs"
@@ -27,7 +32,7 @@ describe("McpHost", () => {
 
   it("should discover and call tools from a connected MCP server", { timeout: process.platform === "win32" ? 15000 : 5000 }, async () => {
     const host = new McpHost()
-    await host.connect("fake", { command: process.execPath, args: [join(import.meta.dir, "fixtures", "fake-mcp.mjs")] })
+    await host.connect("fake", { command: process.execPath, args: [join(testDir, "fixtures", "fake-mcp.mjs")] })
     expect(host.allTools.map(entry => entry.tool.name)).toEqual(["echo"])
     expect(await host.callTool("fake", "echo", { text: "hello" })).toEqual({ content: [{ type: "text", text: "hello" }] })
     await host.disconnectAll()
@@ -38,7 +43,7 @@ describe("McpHost", () => {
     const configPath = join(dir, "mcp.json")
     writeFileSync(configPath, JSON.stringify({
       mcpServers: {
-        good: { command: process.execPath, args: [join(import.meta.dir, "fixtures", "fake-mcp.mjs")] },
+        good: { command: process.execPath, args: [join(testDir, "fixtures", "fake-mcp.mjs")] },
         bad: { command: process.execPath, args: ["-e", "process.exit(1)"] },
       },
     }))
@@ -64,7 +69,7 @@ describe("getMcpHost / setMcpHost", () => {
 })
 
 describe("CL-10: MCP client lifecycle", () => {
-  const fixture = join(import.meta.dir, "fixtures", "fake-mcp.mjs")
+  const fixture = join(testDir, "fixtures", "fake-mcp.mjs")
 
   it("rejects request when not connected", async () => {
     const client = new McpClient("test")
@@ -191,7 +196,7 @@ describe("isCommandAvailable", () => {
 // Built-in MCP server integration — full coverage
 // ---------------------------------------------------------------------------
 describe("Built-in MCP server integration", () => {
-  const fixture = join(import.meta.dir, "fixtures", "fake-mcp.mjs")
+  const fixture = join(testDir, "fixtures", "fake-mcp.mjs")
 
   // Helper: write a config file with the given servers
   function writeConfig(dir: string, servers: Record<string, { command: string; args?: string[] }>) {

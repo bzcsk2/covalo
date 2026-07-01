@@ -214,11 +214,20 @@ describe("TT2: E2E tool chains through engine", () => {
 
   it("5-turn tool chain: write → edit → bash → bash → read", async () => {
     const filePath = join(tmpDir, "chain.txt")
+    // Cross-platform shell commands: cat/grep are Unix-specific.
+    // On Windows the shell backend uses PowerShell, which has
+    // "cat" as an alias for Get-Content but no "grep".
+    const catCmd = process.platform === "win32"
+      ? `Get-Content ${filePath}`
+      : `cat ${filePath}`
+    const grepCmd = process.platform === "win32"
+      ? `(Select-String -Pattern "edited" -Path "${filePath}").Matches.Count`
+      : `grep -c "edited" ${filePath}`
     mockClient.setGenerators([
       genWrite(filePath, "step1\nstep2\nstep3"),
       genEdit(filePath, "step2", "edited"),
-      genBash(`cat ${filePath}`),
-      genBash(`grep -c "edited" ${filePath}`),
+      genBash(catCmd),
+      genBash(grepCmd),
       genRead(filePath),
       genText("chain complete"),
     ])

@@ -178,7 +178,7 @@ describe("write_file", () => {
 
     // Read the file to record it
     const st = await fsStat(filePath)
-    recordRead(filePath, st.mtimeMs, st.size)
+    await recordRead(filePath, st.mtimeMs, st.size)
 
     // Modify externally (simulate concurrent edit)
     writeFileSync(filePath, "externally modified", "utf-8")
@@ -360,10 +360,15 @@ describe("grep", () => {
     const r = await tool.execute({ pattern: ".", path: tmpDir }, ctx(tmpDir))
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
-    const filePaths = p.results.map((line: string) => line.split(":")[0])
+    // Handle both Unix (path:num:text) and Windows (C:\path:num:text) output formats
+    const filePaths = p.results.map((line: string) => {
+      const lastColon = line.lastIndexOf(":")
+      const secondLastColon = lastColon > 0 ? line.lastIndexOf(":", lastColon - 1) : -1
+      return secondLastColon >= 0 ? line.substring(0, secondLastColon) : line.split(":")[0]
+    })
     expect(filePaths).not.toContain(join(tmpDir, ".env"))
     expect(filePaths).not.toContain(join(tmpDir, ".npmrc"))
-    expect(filePaths).not.toContain(join(tmpDir, ".ssh/id_rsa"))
+    expect(filePaths).not.toContain(join(tmpDir, ".ssh", "id_rsa"))
     expect(filePaths).toContain(join(tmpDir, "normal.txt"))
   })
 

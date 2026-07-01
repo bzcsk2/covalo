@@ -93,7 +93,7 @@ describe("BranchBudgetTracker - hard block gate", () => {
       { workspaceRoot: root },
     )
     expect(block.blocked).toBe(true)
-    expect(block.message).toMatch(/Do not rewrite this file again/)
+    expect(block.message).toMatch(/不要重写此文件/)
   })
 
   it("file edit block message mentions write_file when file missing", () => {
@@ -111,6 +111,6 @@ describe("BranchBudgetTracker - hard block gate", () => {
     )
     expect(block.blocked).toBe(true)
     expect(block.message).toMatch(/write_file/)
-    expect(block.message).toMatch(/does not exist/)
+    expect(block.message).toMatch(/不存在/)
   })
 })

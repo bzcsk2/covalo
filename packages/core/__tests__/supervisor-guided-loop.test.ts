@@ -82,6 +82,7 @@ function mockClient(responseText: string, error?: string): ChatClient {
 
 describe("formatSupervisorAdviceForScratch", () => {
   it("包含来源、时间戳与 evidence hash", () => {
+    setPromptLocale("en")
     const text = formatSupervisorAdviceForScratch(validAdvice(), {
       source: "zen-deepseek",
       timestamp: 1_700_000_000_000,
@@ -98,6 +99,7 @@ describe("formatSupervisorAdviceForScratch", () => {
 
 describe("injectAdviceToContext", () => {
   it("注入到 ctx.scratch", () => {
+    setPromptLocale("en")
     const ctx = new ContextManager(32_768)
     injectAdviceToContext({
       ctx,
@@ -312,6 +314,7 @@ describe("runSupervisorGuidanceAtSafePoint", () => {
 
 describe("buildSupervisorDegradedMessage", () => {
   it("截断过长错误", () => {
+    setPromptLocale("en")
     const msg = buildSupervisorDegradedMessage({
       success: false,
       error: "x".repeat(300),

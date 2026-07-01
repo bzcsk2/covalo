@@ -18,7 +18,11 @@ describe("bash tool", () => {
   it("should execute command with special characters", async () => {
     const { createBashTool } = await import("../src/shell-exec.js")
     const tool = createBashTool()
-    const r = await tool.execute({ command: "echo 'hello world' && echo 'done'" }, ctx)
+    // Use semicolon separator which works in both Unix shells and PowerShell
+    const cmd = process.platform === "win32"
+      ? "echo 'hello world'; echo 'done'"
+      : "echo 'hello world' && echo 'done'"
+    const r = await tool.execute({ command: cmd }, ctx)
     expect(r.isError).toBe(false)
   })
 

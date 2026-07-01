@@ -22,7 +22,7 @@ describe("stale-read", () => {
   it("should not report stale when file is unchanged", async () => {
     const fullPath = join(tmpDir, testFile)
     const { mtimeMs, size } = await import("node:fs/promises").then((fs) => fs.stat(fullPath))
-    recordRead(fullPath, mtimeMs, size)
+    await recordRead(fullPath, mtimeMs, size)
     const result = await checkStale(fullPath)
     expect(result.isStale).toBe(false)
   })
@@ -30,7 +30,7 @@ describe("stale-read", () => {
   it("should report stale when file size changes", async () => {
     const fullPath = join(tmpDir, testFile)
     const { mtimeMs, size } = await import("node:fs/promises").then((fs) => fs.stat(fullPath))
-    recordRead(fullPath, mtimeMs, size)
+    await recordRead(fullPath, mtimeMs, size)
     await writeFile(fullPath, "hello world", "utf-8")
     const result = await checkStale(fullPath)
     expect(result.isStale).toBe(true)
@@ -45,14 +45,14 @@ describe("stale-read", () => {
   it("should report stale when file is deleted", async () => {
     const fullPath = join(tmpDir, testFile)
     const { mtimeMs, size } = await import("node:fs/promises").then((fs) => fs.stat(fullPath))
-    recordRead(fullPath, mtimeMs, size)
+    await recordRead(fullPath, mtimeMs, size)
     await rm(fullPath)
     const result = await checkStale(fullPath)
     expect(result.isStale).toBe(true)
   })
 
-  it("should handle clearReadTracker", () => {
-    recordRead("/tmp/test.txt", 100, 10)
+  it("should handle clearReadTracker", async () => {
+    await recordRead("/tmp/test.txt", 100, 10)
     clearReadTracker()
     // Should be treated as never-read
   })

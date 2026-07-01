@@ -11,7 +11,9 @@ export class PathContainmentError extends Error {
 /**
  * Resolve user-provided path within cwd, with symlink containment checking.
  *
- * - If the target exists: resolves symlinks via realpath, verifies it's under cwd.
+ * - If the target exists: resolves symlinks via realpath to verify containment,
+ *   then returns the original resolved path (not the realpath-transformed one)
+ *   to preserve user-facing path identity (e.g. short vs long names on Windows).
  * - If it does not exist: resolves the nearest existing parent to check containment,
  *   then returns the original resolved path (parent symlinks resolved, suffix appended).
  * - Throws PathContainmentError if the resolved path escapes cwd.
@@ -23,7 +25,8 @@ export async function resolvePath(userPath: string, cwd: string): Promise<string
   try {
     const real = await realpath(resolved)
     ensureContained(real, realCwd)
-    return real
+    // Return original resolved path (may have short/DOS names) — containment already verified
+    return resolved
   } catch {
     if (resolved === realCwd) return realCwd
     // Path doesn't exist yet — resolve nearest existing parent

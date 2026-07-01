@@ -14,8 +14,11 @@ export function spawnProcess(
 export function terminateProcessTree(child: ChildProcess, force = false, platform: SupportedPlatform = normalizePlatform()): void {
   if (!child.pid) return
   if (platform === "win32") {
-    const args = ["/PID", String(child.pid), "/T"]
-    if (force) args.push("/F")
+    // On Windows, taskkill /T without /F sends WM_CLOSE which only works for
+    // GUI apps.  Console processes (like most MCP servers) will never exit,
+    // so we always use /F to guarantee termination.  The `force` parameter
+    // is not meaningful on Windows; it exists for Unix SIGTERM vs SIGKILL.
+    const args = ["/PID", String(child.pid), "/T", "/F"]
     const killer = spawn("taskkill.exe", args, { stdio: "ignore" })
     killer.on("error", () => { try { child.kill() } catch {} })
     return

@@ -1,22 +1,42 @@
-// CSV parser - needs to be implemented
-// There's an incomplete implementation below
+// CSV parser with quoted-value support
 
 export interface ParseResult {
   headers: string[];
   rows: Record<string, string>[];
 }
 
+function splitCSVLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === "," && !inQuotes) {
+      fields.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
 export function parseCSV(input: string): ParseResult {
-  const lines = input.trim().split("\n");
-  if (lines.length === 0) {
+  const raw = input.trim();
+  if (raw.length === 0) {
     return { headers: [], rows: [] };
   }
 
-  const headers = lines[0].split(",").map((h) => h.trim());
+  const lines = raw.split("\n");
+  const headers = splitCSVLine(lines[0]).map((h) => h.replace(/^"|"$/g, ""));
   const rows: Record<string, string>[] = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(",").map((v) => v.trim());
+    const values = splitCSVLine(lines[i]).map((v) => v.replace(/^"|"$/g, ""));
     const row: Record<string, string> = {};
     for (let j = 0; j < headers.length; j++) {
       row[headers[j]] = values[j] ?? "";
@@ -26,6 +46,3 @@ export function parseCSV(input: string): ParseResult {
 
   return { headers, rows };
 }
-
-// TODO: Need to add:
-// 1. Export and test support from serializer.ts

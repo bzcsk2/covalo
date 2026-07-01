@@ -521,15 +521,18 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
 /** 跨平台 sleep 命令（用于测试） */
 export function sleepCommand(seconds: number): string {
   if (process.platform === "win32") {
-    return `ping -n ${seconds + 1} 127.0.0.1 > nul`
+    return `Start-Sleep -Seconds ${seconds}`
   }
   return `sleep ${seconds}`
 }
 
-/** 直接 spawn 用于 adopt 单元测试 */
+/** 直接 spawn 用于 adopt 单元测试 — 使用与 dual-track tool 相同的 shell */
 export function spawnTestShell(command: string, cwd: string): ChildProcess {
   const platform = normalizePlatform()
-  const shell = platform === "win32" ? "cmd.exe" : "/bin/sh"
-  const args = platform === "win32" ? ["/c", command] : ["-c", command]
-  return spawn(shell, args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+  if (platform === "win32") {
+    return spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+      cwd, stdio: ["ignore", "pipe", "pipe"],
+    })
+  }
+  return spawn("/bin/sh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] })
 }

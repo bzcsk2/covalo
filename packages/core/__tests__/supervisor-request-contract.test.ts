@@ -3,6 +3,7 @@ import { ReasonixEngine } from "../src/engine.js"
 import type { AgentTool, AgentConfig, ChatClient } from "../src/interface.js"
 import type { DeepSeekStreamEvent } from "../src/client.js"
 import { agentConfigFor } from "../src/agent.js"
+import { setPromptLocale } from "../src/prompt-locale"
 
 // ── 拦截型 Mock Client ──
 // 捕获每次 chatCompletionsStream 调用时的 messages 和 opts，
@@ -26,6 +27,7 @@ function createInterceptClient(): ChatClient {
 
 beforeEach(() => {
   capturedMessages = null
+  setPromptLocale("en")
 })
 
 // ── 工具工厂 ──

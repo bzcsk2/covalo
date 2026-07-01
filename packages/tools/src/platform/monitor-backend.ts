@@ -25,7 +25,9 @@ export async function sampleProcesses(signal?: AbortSignal, platform: SupportedP
 
 export async function sampleDisk(signal?: AbortSignal, platform: SupportedPlatform = normalizePlatform()): Promise<unknown> {
   if (platform === "win32") {
-    const raw = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free,Root | ConvertTo-Json -Compress"], signal)
+    // Use Get-CimInstance Win32_LogicalDisk instead of Get-PSDrive to avoid
+    // enumerating potentially hung network drive providers.
+    const raw = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,Size,FreeSpace | ConvertTo-Json -Compress"], signal)
     return { backend: "powershell", filesystems: parseJsonArray(raw) }
   }
   const raw = await run("df", ["-kP"], signal)

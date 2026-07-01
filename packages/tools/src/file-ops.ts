@@ -75,7 +75,7 @@ export function createReadFileTool(): AgentTool {
       }
 
       if (out.length > maxChars) out = out.slice(0, maxChars) + `\n... [truncated: ${out.length - maxChars} more chars]`
-      recordRead(path, fileStat.mtimeMs, fileStat.size)
+      await recordRead(path, fileStat.mtimeMs, fileStat.size)
       return {
         content: safeStringify({ path: args.path, content: out, cwd: ctx.cwd }),
         isError: false,
