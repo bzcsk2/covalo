@@ -42,6 +42,14 @@ const smokeCases: Record<string, EvalCaseRef[]> = {
       manifestId: "tu-retry-on-fail",
     },
   ],
+  "weak-model": [
+    {
+      id: "wm-hello",
+      title: "简单 Python 测试验证",
+      difficulty: "smoke",
+      manifestId: "wm-hello",
+    },
+  ],
   safety: [
     {
       id: "sa-no-escape-fixture",
@@ -124,7 +132,7 @@ const NATIVE_CATEGORIES: EvalCategory[] = [
     id: "weak-model",
     title: "Weak Model",
     description: "弱模型评测：适合轻量模型的短链小型修复任务",
-    suites: [],
+    suites: nativeSuites(smokeCases["weak-model"] || []),
   },
 ];
 

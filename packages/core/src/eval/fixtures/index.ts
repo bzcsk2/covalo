@@ -406,8 +406,46 @@ Important constraint: This is a read-only task. Do not modify, create, or delete
   },
 ];
 
+export const WEAK_MODEL_MANIFESTS: EvalCaseManifest[] = [
+  {
+    id: "wm-hello",
+    category: "weak-model",
+    suite: "smoke",
+    title: "简单 Python 测试验证",
+    description: "验证基础 Python 测试能力，适合轻量模型",
+    fixtureSource: "wm-hello",
+    taskPrompt: `你需要在 workspace 中验证一个简单的 Python 测试。
+
+项目包含一个 test_hello.py 文件，其中有两个测试函数。
+你的任务就是运行测试，确认它们全部通过。
+
+如果测试失败，修复 test_hello.py 中的代码。`,
+    taskPromptByLocale: {
+      en: `You need to verify a simple Python test in the workspace.
+
+The project has a test_hello.py file with two test functions.
+Your task is to run the tests and confirm they all pass.
+
+If a test fails, fix the code in test_hello.py.`,
+    },
+    expectedVerification: [
+      "python3 -m pytest test_hello.py -v 应返回 exit code 0",
+      "两个测试都应通过",
+    ],
+    requiredBinaries: ["python3"],
+    verifier: {
+      type: "command",
+      command: "python3 -m pytest test_hello.py -v 2>&1",
+    },
+    scoring: {
+      requireCleanGitDiff: false,
+    },
+  },
+];
+
 export const ALL_MANIFESTS: EvalCaseManifest[] = [
   ...CODING_BASICS_MANIFESTS,
   ...TOOL_USE_MANIFESTS,
   ...SAFETY_MANIFESTS,
+  ...WEAK_MODEL_MANIFESTS,
 ];

@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync, statSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { execSync } from "node:child_process";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..", "..");
 const ASSETS_DIR = join(REPO_ROOT, "resources", "eval-assets");
@@ -18,6 +19,8 @@ const ASSETS_DIR = join(REPO_ROOT, "resources", "eval-assets");
 const TOTAL_SIZE_TARGET = 35 * 1024 * 1024;
 const TOTAL_SIZE_MAX = 45 * 1024 * 1024;
 const SNAPSHOT_SIZE_MAX = 8 * 1024 * 1024;
+const NPM_PACKED_MAX = 30 * 1024 * 1024;
+const NPM_UNPACKED_MAX = 60 * 1024 * 1024;
 
 let exitCode = 0;
 
@@ -103,6 +106,35 @@ function main(): void {
     console.log(`  WARN: Total size ${formatSize(totalSize)} exceeds target ${formatSize(TOTAL_SIZE_TARGET)} (within ${formatSize(TOTAL_SIZE_MAX)} max)`);
   } else {
     console.log(`  [ok] Within target ${formatSize(TOTAL_SIZE_TARGET)}`);
+  }
+
+  // Check npm pack --dry-run sizes
+  console.log("");
+  try {
+    const packOutput = execSync("npm pack --dry-run --json 2>/dev/null", {
+      cwd: REPO_ROOT,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 30000,
+    }).trim();
+    const packData = JSON.parse(packOutput);
+    const packInfo = Array.isArray(packData) ? packData[0] : packData;
+    const packedSize = packInfo.size || 0;
+    const unpackedSize = packInfo.unpackedSize || 0;
+    if (packedSize > NPM_PACKED_MAX) {
+      console.error(`FAIL: npm packed size ${formatSize(packedSize)} exceeds max ${formatSize(NPM_PACKED_MAX)}`);
+      exitCode = 1;
+    } else {
+      console.log(`  [ok] npm packed size: ${formatSize(packedSize)} (max ${formatSize(NPM_PACKED_MAX)})`);
+    }
+    if (unpackedSize > NPM_UNPACKED_MAX) {
+      console.error(`FAIL: npm unpacked size ${formatSize(unpackedSize)} exceeds max ${formatSize(NPM_UNPACKED_MAX)}`);
+      exitCode = 1;
+    } else {
+      console.log(`  [ok] npm unpacked size: ${formatSize(unpackedSize)} (max ${formatSize(NPM_UNPACKED_MAX)})`);
+    }
+  } catch {
+    console.log("  [skip] npm pack --dry-run not available (not in package dir?)");
   }
 
   console.log("\n[check-size] Done.");

@@ -14,9 +14,9 @@ export async function extractSafeTarGz(
     throw new Error(`Workspace directory not found: ${workspaceDir}`);
   }
 
-  const entries = listTarEntries(assetPath);
+  const entries = listTarVerboseEntries(assetPath);
   for (const entry of entries) {
-    validateTarEntry(entry, assetPath);
+    validateTarEntry(entry, assetPath, workspaceDir);
   }
 
   try {
@@ -27,6 +27,32 @@ export async function extractSafeTarGz(
   } catch (e) {
     throw new EvalAssetExtractionError(
       `Failed to extract ${assetPath} to ${workspaceDir}: ${e}`,
+    );
+  }
+
+  // Post-extraction scan: verify every extracted path is inside workspaceDir
+  const entriesAfter = listTarEntries(assetPath);
+  for (const entry of entriesAfter) {
+    const resolved = join(workspaceDir, normalize(entry));
+    if (!resolved.startsWith(workspaceDir + sep) && resolved !== workspaceDir) {
+      throw new UnsafeEvalAssetPathError(
+        `Extracted path escapes workspaceDir in ${assetPath}: ${entry}`,
+      );
+    }
+  }
+}
+
+function listTarVerboseEntries(tarPath: string): string[] {
+  try {
+    const output = execSync(`tar -tvzf "${tarPath}" 2>/dev/null`, {
+      stdio: "pipe",
+      timeout: 30000,
+      encoding: "utf-8",
+    });
+    return output.split("\n").filter(Boolean);
+  } catch (e) {
+    throw new EvalAssetExtractionError(
+      `Failed to list entries in tar archive ${tarPath}: ${e}`,
     );
   }
 }
@@ -46,24 +72,53 @@ function listTarEntries(tarPath: string): string[] {
   }
 }
 
-function validateTarEntry(entry: string, archivePath: string): void {
-  const normalized = normalize(entry);
+function validateTarEntry(
+  verboseEntry: string,
+  archivePath: string,
+  workspaceDir: string,
+): void {
+  // verbose format: "permissions user/group size date time name"
+  // symlinks:       "lrwxr-xr-x user/group size date time linkname -> target"
+  const parts = verboseEntry.split(/\s+/);
+  const permissions = parts[0] || "";
+
+  // Extract the filename (last column before "->" for symlinks)
+  const arrowIdx = verboseEntry.indexOf(" -> ");
+  const entryName = arrowIdx >= 0
+    ? verboseEntry.slice(0, arrowIdx).split(/\s+/).pop() || ""
+    : parts[parts.length - 1] || "";
+
+  const normalized = normalize(entryName);
 
   if (isAbsolute(normalized)) {
     throw new UnsafeEvalAssetPathError(
-      `Tar entry is absolute path in ${archivePath}: ${entry}`,
+      `Tar entry is absolute path in ${archivePath}: ${entryName}`,
     );
   }
 
   if (normalized.includes("..")) {
     throw new UnsafeEvalAssetPathError(
-      `Tar entry contains ".." in ${archivePath}: ${entry}`,
+      `Tar entry contains ".." in ${archivePath}: ${entryName}`,
     );
   }
 
   if (/^[A-Za-z]:[/\\]/.test(normalized)) {
     throw new UnsafeEvalAssetPathError(
-      `Tar entry contains Windows drive letter in ${archivePath}: ${entry}`,
+      `Tar entry contains Windows drive letter in ${archivePath}: ${entryName}`,
     );
+  }
+
+  // Symlink target validation: ensure symlink target is within workspaceDir
+  if (arrowIdx >= 0 && permissions.startsWith("l")) {
+    const symTarget = verboseEntry.slice(arrowIdx + 4).trim();
+    if (isAbsolute(symTarget)) {
+      const resolvedTarget = normalize(symTarget);
+      const resolvedWs = normalize(workspaceDir);
+      if (!resolvedTarget.startsWith(resolvedWs)) {
+        throw new UnsafeEvalAssetPathError(
+          `Symlink in ${archivePath} points outside workspaceDir: ${entryName} -> ${symTarget}`,
+        );
+      }
+    }
   }
 }

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import type { EvalCaseManifest } from "../types";
+import { MissingEvalAssetError } from "../types";
 import { copyToWorkspace, patchTestPaths, createTestRunner, type Materializer } from "./shared";
 
 const TB_PREFIX = "__tb__";
@@ -18,8 +19,9 @@ export const terminalBenchMaterializer: Materializer = {
     const taskId = manifest.fixtureSource.slice(TB_PREFIX.length);
     const sourceMeta = manifest.sourceMeta;
     if (!sourceMeta || !sourceMeta.sourceTaskPath) {
-      console.error(`[tb-materializer] No sourceTaskPath for ${manifest.id}`);
-      return;
+      throw new MissingEvalAssetError(
+        `No sourceTaskPath for terminal-bench case ${manifest.id}`,
+      );
     }
 
     const taskPath = sourceMeta.sourceTaskPath;

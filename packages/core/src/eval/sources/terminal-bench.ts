@@ -140,12 +140,6 @@ const VERIFIER_SETUP_COMMANDS: Record<string, string[]> = {
   "csv-to-parquet": [
     "pip install pandas pyarrow 2>&1 || pip3 install pandas pyarrow 2>&1",
   ],
-  "pytorch-model-cli": [
-    "pip install torch 2>&1 || pip3 install torch 2>&1",
-  ],
-  "pytorch-model-recovery": [
-    "pip install torch 2>&1 || pip3 install torch 2>&1",
-  ],
   "mnist-learning-fix": [
     "pip install torch torchvision 2>&1 || pip3 install torch torchvision 2>&1",
   ],

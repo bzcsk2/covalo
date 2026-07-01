@@ -1,10 +1,107 @@
 {
   "version": 1,
-  "createdAt": "2026-07-01T00:00:00.000Z",
+  "createdAt": "2026-07-01T09:12:36.419Z",
   "sweBench": {
     "dataset": "SWE-bench_Lite",
     "datasetVersion": "20240627",
-    "snapshots": {}
+    "snapshots": {
+      "psf/requests#a0df2cbb10419037d11d04352b3175405ab52941": {
+        "repo": "psf/requests",
+        "baseCommit": "a0df2cbb10419037d11d04352b3175405ab52941",
+        "path": "swe-bench/snapshots/psf_requests/a0df2cbb10419037d11d04352b3175405ab52941.tar.gz",
+        "format": "tar.gz",
+        "sha256": "a429f4ac4f9c326df0bae66888d4e24aa30c72e987ab2fb058bf9a918457cc99",
+        "sizeBytes": 718702
+      },
+      "psf/requests#110048f9837f8441ea536804115e80b69f400277": {
+        "repo": "psf/requests",
+        "baseCommit": "110048f9837f8441ea536804115e80b69f400277",
+        "path": "swe-bench/snapshots/psf_requests/110048f9837f8441ea536804115e80b69f400277.tar.gz",
+        "format": "tar.gz",
+        "sha256": "f65466e40bfd61fa2e17df6322a96b3ed2b6336c15577d32c6103a93186a53fe",
+        "sizeBytes": 613980
+      },
+      "psf/requests#fe693c492242ae532211e0c173324f09ca8cf227": {
+        "repo": "psf/requests",
+        "baseCommit": "fe693c492242ae532211e0c173324f09ca8cf227",
+        "path": "swe-bench/snapshots/psf_requests/fe693c492242ae532211e0c173324f09ca8cf227.tar.gz",
+        "format": "tar.gz",
+        "sha256": "63df1a48b8ca619ca208734539f871a333258e981bdeda5aa64562c8f1bde59a",
+        "sizeBytes": 641532
+      },
+      "psf/requests#091991be0da19de9108dbe5e3752917fea3d7fdc": {
+        "repo": "psf/requests",
+        "baseCommit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+        "path": "swe-bench/snapshots/psf_requests/091991be0da19de9108dbe5e3752917fea3d7fdc.tar.gz",
+        "format": "tar.gz",
+        "sha256": "1a9ce46e5eb35b68b14254ca2ce5a151bbae122534a55fb8c716740c3333e839",
+        "sizeBytes": 646445
+      },
+      "psf/requests#0be38a0c37c59c4b66ce908731da15b401655113": {
+        "repo": "psf/requests",
+        "baseCommit": "0be38a0c37c59c4b66ce908731da15b401655113",
+        "path": "swe-bench/snapshots/psf_requests/0be38a0c37c59c4b66ce908731da15b401655113.tar.gz",
+        "format": "tar.gz",
+        "sha256": "723a4f870dc1d34b62df5503b66a991eecc5acda4871d7bbe48a733395aabb15",
+        "sizeBytes": 663311
+      },
+      "psf/requests#36453b95b13079296776d11b09cab2567ea3e703": {
+        "repo": "psf/requests",
+        "baseCommit": "36453b95b13079296776d11b09cab2567ea3e703",
+        "path": "swe-bench/snapshots/psf_requests/36453b95b13079296776d11b09cab2567ea3e703.tar.gz",
+        "format": "tar.gz",
+        "sha256": "bb2b0b5ad960d1e61efaf4d09eddc2f19a1d6524471f728747cafbf823e9c10b",
+        "sizeBytes": 709085
+      },
+      "pallets/flask#d8c37f43724cd9fb0870f77877b7c4c7e38a19e0": {
+        "repo": "pallets/flask",
+        "baseCommit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+        "path": "swe-bench/snapshots/pallets_flask/d8c37f43724cd9fb0870f77877b7c4c7e38a19e0.tar.gz",
+        "format": "tar.gz",
+        "sha256": "de71afead7faa225641a283329c5c196e1517003373c86ae4f6bb88c26a8d34a",
+        "sizeBytes": 618419
+      },
+      "pallets/flask#4c288bc97ea371817199908d0d9b12de9dae327e": {
+        "repo": "pallets/flask",
+        "baseCommit": "4c288bc97ea371817199908d0d9b12de9dae327e",
+        "path": "swe-bench/snapshots/pallets_flask/4c288bc97ea371817199908d0d9b12de9dae327e.tar.gz",
+        "format": "tar.gz",
+        "sha256": "7c1777bc8d4e5dfd09d09dca03e17269654de7d768a3cfa0d168e1819aa20c72",
+        "sizeBytes": 688028
+      },
+      "pallets/flask#182ce3dd15dfa3537391c3efaf9c3ff407d134d4": {
+        "repo": "pallets/flask",
+        "baseCommit": "182ce3dd15dfa3537391c3efaf9c3ff407d134d4",
+        "path": "swe-bench/snapshots/pallets_flask/182ce3dd15dfa3537391c3efaf9c3ff407d134d4.tar.gz",
+        "format": "tar.gz",
+        "sha256": "7972085bc0207fe10ae18276952145731c169b0c7677ff9e89db9d3d22e3045e",
+        "sizeBytes": 687400
+      },
+      "pytest-dev/pytest#6995257cf470d2143ad1683824962de4071c0eb7": {
+        "repo": "pytest-dev/pytest",
+        "baseCommit": "6995257cf470d2143ad1683824962de4071c0eb7",
+        "path": "swe-bench/snapshots/pytest-dev_pytest/6995257cf470d2143ad1683824962de4071c0eb7.tar.gz",
+        "format": "tar.gz",
+        "sha256": "ba01f1372672f221e347508a2de61d5516bdd00978458d67f35da9dfdc22fe07",
+        "sizeBytes": 1337125
+      },
+      "pytest-dev/pytest#2f7415cfbc4b6ca62f9013f1abd27136f46b9653": {
+        "repo": "pytest-dev/pytest",
+        "baseCommit": "2f7415cfbc4b6ca62f9013f1abd27136f46b9653",
+        "path": "swe-bench/snapshots/pytest-dev_pytest/2f7415cfbc4b6ca62f9013f1abd27136f46b9653.tar.gz",
+        "format": "tar.gz",
+        "sha256": "7ebb9c78706d6a1c1a0a13d5165530252e4313c32ef96a9ca46171be63666260",
+        "sizeBytes": 1335912
+      },
+      "pytest-dev/pytest#4787fd64a4ca0dba5528b5651bddd254102fe9f3": {
+        "repo": "pytest-dev/pytest",
+        "baseCommit": "4787fd64a4ca0dba5528b5651bddd254102fe9f3",
+        "path": "swe-bench/snapshots/pytest-dev_pytest/4787fd64a4ca0dba5528b5651bddd254102fe9f3.tar.gz",
+        "format": "tar.gz",
+        "sha256": "e2ad2600a7642facd4a64857d04a4615cd8ea335032de15cbda6462d24ca816a",
+        "sizeBytes": 1020364
+      }
+    }
   },
   "terminalBench": {
     "dataset": "terminal-bench-core",

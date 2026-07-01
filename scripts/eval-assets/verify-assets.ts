@@ -161,6 +161,44 @@ function main(): void {
     }
   }
 
+  // 9. Check category-map.json does not reference removed PyTorch tasks
+  const catMapPath = join(ASSETS_DIR, "category-map.json");
+  if (existsSync(catMapPath)) {
+    const catMap = JSON.parse(readFileSync(catMapPath, "utf-8")) as Record<string, unknown>;
+    const raw = JSON.stringify(catMap);
+    for (const task of pytorchTasks) {
+      if (raw.includes(task)) {
+        fail(`PyTorch task "${task}" still referenced in category-map.json`);
+      }
+    }
+  }
+
+  // 10. Check for unregistered large files (>1MB not in assets.lock)
+  const knownAssetPaths = new Set<string>();
+  for (const entry of Object.values(sweSnapshots ?? {})) {
+    knownAssetPaths.add(entry.path);
+  }
+  for (const entry of Object.values(tbAssets ?? {})) {
+    knownAssetPaths.add((entry as any).path);
+  }
+  const allAssetFiles = walkDir(ASSETS_DIR, "").filter(f => {
+    // Skip lock files, json metadata, and task dirs
+    if (f.endsWith(".json")) return false;
+    if (f.startsWith("terminal-bench/tasks/")) return false;
+    return true;
+  });
+  for (const f of allAssetFiles) {
+    if (!knownAssetPaths.has(f)) {
+      const fullPath = join(ASSETS_DIR, f);
+      try {
+        const size = statSync(fullPath).size;
+        if (size > 1024 * 1024) {
+          fail(`Unregistered large file (>1MB): ${f} (${(size / 1024 / 1024).toFixed(2)} MB)`);
+        }
+      } catch {}
+    }
+  }
+
   console.log("\n[verify-assets] Done.");
   process.exit(exitCode);
 }

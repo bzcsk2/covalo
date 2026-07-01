@@ -40,6 +40,12 @@ import type {
 } from "./types";
 import { getSuite, getCategories } from "./registry";
 import { getManifest } from "./loader";
+import {
+  MissingEvalAssetError,
+  CorruptEvalAssetError,
+  UnsafeEvalAssetPathError,
+  EvalAssetExtractionError,
+} from "./types";
 import { createCaseWorkspace, writeCaseArtifact, getCaseWorkspaceDir, setEvalSandboxProvider, getEvalSandboxProvider, SetupFailedError } from "./workspace";
 import { runVerifier, setSandboxProvider as setVerifierSandboxProvider } from "./verifier";
 import { classifyVerifierResult } from "./verifier-classifier";
@@ -1469,6 +1475,55 @@ export async function runFixedEval(
           totalCases: caseRefs.length,
           completedCases: results.length,
           error: "Infrastructure error: setup failed",
+        });
+      } else if (
+        err instanceof MissingEvalAssetError ||
+        err instanceof CorruptEvalAssetError ||
+        err instanceof UnsafeEvalAssetPathError ||
+        err instanceof EvalAssetExtractionError
+      ) {
+        infraErrorCount++;
+        const assetErrMsg = err instanceof Error ? err.message : String(err);
+        recordTrace("case-asset-error", {
+          caseId: manifest.id,
+          error: assetErrMsg,
+        });
+        writeObservability("eval.case.asset.error", "error", { caseId: manifest.id, reason: "asset-error", error: assetErrMsg });
+        const assetResult: CaseResult = {
+          caseId: manifest.id,
+          title: manifest.title,
+          category: manifest.category,
+          suite: manifest.suite,
+          manifest,
+          verdict: "infra_error",
+          verifierResult: null,
+          objectiveSignals: null,
+          setupResult: null,
+          policyGates: [],
+          supervisorAssessment: null,
+          score: null,
+          workerOutput: "",
+          supervisorOutput: "",
+          patchDiff: "",
+          caseContract: null,
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          error: `Asset error: ${assetErrMsg}`,
+          failureClass: "setup_failure" as FailureClass,
+          failureReason: assetErrMsg,
+          failureEvidence: { event: "asset_missing" },
+          scoreEligible: false,
+          officialScoreEligible: false,
+        };
+        results.push(assetResult);
+        onProgress?.({
+          type: "infra-error",
+          caseId: caseRef.id,
+          title: manifest.title,
+          result: assetResult,
+          totalCases: caseRefs.length,
+          completedCases: results.length,
+          error: `Asset error: ${assetErrMsg}`,
         });
       } else {
         errored++;

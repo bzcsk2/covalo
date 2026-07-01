@@ -101,12 +101,37 @@ async function buildSnapshots(): Promise<void> {
       console.log(`    Fetch failed (may be offline), using cached data.`);
     }
 
+    // Fetch the specific commit into the cache
+    try {
+      execSync(`git fetch origin "${baseCommit}"`, {
+        cwd: cachePath,
+        stdio: "pipe",
+        timeout: 60000,
+      });
+    } catch {
+      console.log(`    WARN: commit ${baseCommit} not found in remote, skipping.`);
+      console.log(`    To remove this instance, delete it from swe-bench/lock.json`);
+      continue;
+    }
+
+    // Verify the commit is now in the cache
+    try {
+      execSync(`git cat-file -e "${baseCommit}"`, { cwd: cachePath, stdio: "pipe" });
+    } catch {
+      console.log(`    WARN: commit ${baseCommit} not found after fetch, skipping.`);
+      continue;
+    }
+
     const workDir = join(CACHE_DIR, `tmp-${safeName}-${baseCommit}`);
     if (existsSync(workDir)) {
       execSync(`rm -rf "${workDir}"`, { stdio: "pipe" });
     }
 
-    execSync(`git clone "${cachePath}" "${workDir}"`, { stdio: "pipe", timeout: 60000 });
+    // Create workdir from scratch to avoid clone issues with non-branch refs
+    mkdirSync(workDir, { recursive: true });
+    execSync(`git init`, { cwd: workDir, stdio: "pipe" });
+    execSync(`git remote add origin "${cachePath}"`, { cwd: workDir, stdio: "pipe" });
+    execSync(`git fetch origin "${baseCommit}"`, { cwd: workDir, stdio: "pipe", timeout: 60000 });
     execSync(`git checkout "${baseCommit}"`, { cwd: workDir, stdio: "pipe", timeout: 30000 });
 
     const excludes = [
