@@ -133,8 +133,9 @@ function main(): void {
     } else {
       console.log(`  [ok] npm unpacked size: ${formatSize(unpackedSize)} (max ${formatSize(NPM_UNPACKED_MAX)})`);
     }
-  } catch {
-    console.log("  [skip] npm pack --dry-run not available (not in package dir?)");
+  } catch (e) {
+    console.error(`FAIL: npm pack --dry-run failed: ${e}`);
+    exitCode = 1;
   }
 
   console.log("\n[check-size] Done.");

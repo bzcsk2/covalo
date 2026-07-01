@@ -111,14 +111,20 @@ function validateTarEntry(
   // Symlink target validation: ensure symlink target is within workspaceDir
   if (arrowIdx >= 0 && permissions.startsWith("l")) {
     const symTarget = verboseEntry.slice(arrowIdx + 4).trim();
-    if (isAbsolute(symTarget)) {
-      const resolvedTarget = normalize(symTarget);
-      const resolvedWs = normalize(workspaceDir);
-      if (!resolvedTarget.startsWith(resolvedWs)) {
-        throw new UnsafeEvalAssetPathError(
-          `Symlink in ${archivePath} points outside workspaceDir: ${entryName} -> ${symTarget}`,
-        );
-      }
+
+    // Resolve the symlink target to an absolute path.
+    // For absolute targets, resolve relative to filesystem root.
+    // For relative targets, resolve relative to the symlink's parent directory.
+    const resolvedTarget = isAbsolute(symTarget)
+      ? normalize(symTarget)
+      : normalize(join(workspaceDir, normalize(entryName), "..", symTarget));
+
+    const resolvedWs = normalize(workspaceDir);
+
+    if (resolvedTarget !== resolvedWs && !resolvedTarget.startsWith(resolvedWs + sep)) {
+      throw new UnsafeEvalAssetPathError(
+        `Symlink in ${archivePath} points outside workspaceDir: ${entryName} -> ${symTarget}`,
+      );
     }
   }
 }
