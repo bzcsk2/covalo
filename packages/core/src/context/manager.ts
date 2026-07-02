@@ -174,6 +174,31 @@ export class ContextManager {
   }
 
   /**
+   * Find the end index of the first complete round starting from a user message.
+   * A round ends at the next user message or at the end of the array.
+   * If `startUserIdx` points to a non-user message, returns 0.
+   */
+  private findFirstCompleteRoundEnd(messages: ChatMessage[], startUserIdx: number): number {
+    if (messages[startUserIdx]?.role !== "user") return 0
+    for (let i = startUserIdx + 1; i < messages.length; i++) {
+      if (messages[i].role === "user") return i
+    }
+    return messages.length
+  }
+
+  /**
+   * Strip orphan tool/assistant messages at the beginning of the log
+   * that have no preceding user message.
+   */
+  private stripLeadingOrphans(log: ChatMessage[]): ChatMessage[] {
+    let idx = 0
+    while (idx < log.length && log[idx].role !== "user") {
+      idx++
+    }
+    return idx > 0 ? log.slice(idx) : log
+  }
+
+  /**
    * ADV-BUG-03: Aggressive truncation when over budget.
    * Removes oldest rounds while preserving structure.
    */
@@ -186,28 +211,15 @@ export class ContextManager {
     const availableTokens = this.contextWindow - prefixTokens - summaryTokens - scratchTokens
     if (availableTokens <= 0) return []
     
-    let current = [...log]
+    let current = this.stripLeadingOrphans([...log])
     let estimated = estimateTokens(current)
     
     while (estimated > availableTokens && current.length > 0) {
-      // Find and remove the oldest complete round (user + assistant + tools)
       const firstUserIdx = current.findIndex(m => m.role === "user")
-      if (firstUserIdx < 0) {
-        // No user messages — remove oldest tool round
-        const firstToolIdx = current.findIndex(m => m.role === "tool")
-        if (firstToolIdx < 0) break
-        current = current.slice(firstToolIdx + 1)
-      } else {
-        // Remove from start to end of first user round
-        let roundEnd = current.length
-        for (let i = firstUserIdx + 1; i < current.length; i++) {
-          if (current[i].role === "user") {
-            roundEnd = i
-            break
-          }
-        }
-        current = current.slice(roundEnd)
-      }
+      if (firstUserIdx < 0) break
+      const roundEnd = this.findFirstCompleteRoundEnd(current, firstUserIdx)
+      if (roundEnd <= 0) break
+      current = current.slice(roundEnd)
       estimated = estimateTokens(current)
     }
     
@@ -266,10 +278,9 @@ export class ContextManager {
 
   private firstRoundEnd(messages: ChatMessage[]): number {
     if (messages.length === 0) return 0
-    for (let i = 1; i < messages.length; i++) {
-      if (messages[i].role === "user") return i
-    }
-    return messages.length
+    const firstUserIdx = messages.findIndex(m => m.role === "user")
+    if (firstUserIdx < 0) return messages.length
+    return this.findFirstCompleteRoundEnd(messages, firstUserIdx)
   }
 
   private lastRoundStart(messages: ChatMessage[]): number {
@@ -319,33 +330,14 @@ export class ContextManager {
 
     const baselineTokens = estimateTokens([...this.prefix.messages, ...this.summary.getMessages(), ...this.scratch.messages])
 
-    let current = [...log]
+    let current = this.stripLeadingOrphans([...log])
     let estimated = estimateTokens(current)
 
     while (estimated + baselineTokens > this.contextWindow && current.length > 0) {
       const firstUserIdx = current.findIndex(m => m.role === "user")
-      if (firstUserIdx < 0) {
-        // CL-30: No user messages in log — remove oldest tool round instead
-        const firstToolIdx = current.findIndex(m => m.role === "tool")
-        if (firstToolIdx < 0) break // nothing to remove
-        const roundEnd = current.findIndex((m, i) => i > firstToolIdx && (m.role === "assistant" || m.role === "tool"))
-        current = roundEnd < 0 ? current.slice(firstToolIdx + 1) : current.slice(roundEnd)
-        estimated = estimateTokens(current)
-        continue
-      }
-
-      let roundEnd = current.length
-      for (let i = firstUserIdx + 1; i < current.length; i++) {
-        if (current[i].role === "user") {
-          roundEnd = i
-          break
-        }
-        if (current[i].role === "tool" && (i + 1 >= current.length || current[i + 1].role === "user")) {
-          roundEnd = i + 1
-          break
-        }
-      }
-
+      if (firstUserIdx < 0) break
+      const roundEnd = this.findFirstCompleteRoundEnd(current, firstUserIdx)
+      if (roundEnd <= 0) break
       current = current.slice(roundEnd)
       estimated = estimateTokens(current)
     }

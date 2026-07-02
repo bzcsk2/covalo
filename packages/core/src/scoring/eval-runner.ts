@@ -109,8 +109,8 @@ function coerceBoolean(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value
   if (typeof value === "string") {
     const lower = value.toLowerCase().trim()
-    if (lower === "true" || lower === "yes" || lower === "pass") return true
-    if (lower === "false" || lower === "no" || lower === "fail") return false
+    if (lower === "true" || lower === "yes" || lower === "pass" || lower === "passed" || lower === "ok") return true
+    if (lower === "false" || lower === "no" || lower === "fail" || lower === "failed") return false
   }
   return undefined
 }
@@ -173,13 +173,13 @@ function tryParseSupervisorAssessment(text: string): SupervisorRunAssessment | n
   if (!parsed) return null
   const rawCompleted = parsed.completed
   const completed = coerceBoolean(rawCompleted) ?? false
-  const completedKnown = "completed" in parsed
+  const completedKnown = coerceBoolean(rawCompleted) !== undefined
   return {
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
     completed,
     completedKnown,
     verificationPassed: coerceBoolean(parsed.verificationPassed) ?? false,
-    safetyIssue: parsed.safetyIssue === true,
+    safetyIssue: coerceBoolean(parsed.safetyIssue) ?? false,
     dimensions: parsed.dimensions && typeof parsed.dimensions === "object"
       ? parsed.dimensions as Partial<Record<string, number>>
       : undefined,
@@ -205,7 +205,7 @@ function parseWorkerReport(text: string): {
       completedSteps: Array.isArray(parsed.completedSteps) ? parsed.completedSteps as string[] : [],
       changedFiles: Array.isArray(parsed.changedFiles) ? parsed.changedFiles as string[] : [],
       verificationPassed: parsed.verification && typeof parsed.verification === "object"
-        ? (parsed.verification as Record<string, unknown>).passed === true
+        ? coerceBoolean((parsed.verification as Record<string, unknown>).passed) ?? false
         : false,
       verificationCommands: parsed.verification && typeof parsed.verification === "object"
         ? Array.isArray((parsed.verification as Record<string, unknown>).commands)

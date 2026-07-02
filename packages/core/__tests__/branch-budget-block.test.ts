@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, beforeEach } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,8 +8,10 @@ import {
   extractRunCommand,
   extractToolTargetPath,
 } from "../src/governance/branch-budget-tool-path.js"
+import { setPromptLocale } from "../src/prompt-locale.js"
 
 describe("BranchBudgetTracker - hard block gate", () => {
+  beforeEach(() => setPromptLocale("zh-CN"))
   it("wouldBlockFileEdit when count reaches fileEditMax", () => {
     const t = new BranchBudgetTracker({ fileEditMax: 3 })
     t.recordFileEdit("src/tasks.ts")
@@ -61,7 +63,7 @@ describe("BranchBudgetTracker - hard block gate", () => {
     ).blocked).toBe(false)
   })
 
-  it("allows write_file at file cap when path missing on disk", () => {
+  it("blocks write_file at file cap even when path missing on disk", () => {
     const root = mkdtempSync(join(tmpdir(), "drf-budget-"))
     const t = new BranchBudgetTracker({ fileEditMax: 2 })
     const filePath = "src/scenes/MapSelectScene.ts"
@@ -74,7 +76,10 @@ describe("BranchBudgetTracker - hard block gate", () => {
       extractRunCommand,
       { workspaceRoot: root },
     )
-    expect(block.blocked).toBe(false)
+    expect(block.blocked).toBe(true)
+    expect(block.dimension).toBe("file_edit")
+    expect(block.message).toMatch(/write_file/)
+    expect(block.message).toMatch(/不存在/)
   })
 
   it("file edit block message mentions rewrite guidance when file exists", () => {

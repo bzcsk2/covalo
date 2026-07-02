@@ -221,6 +221,7 @@ export function shouldExitForcedMode(
 ): boolean {
   if (executionModeLockRemaining > 0) return false
   if (state.forcedTaskBearingRoundsSinceEntry < config.forcedMinDwellRounds) return false
+  if (!state.lastToolSuccess || signals.includes("tool_failure")) return false
   if (state.recoveryPending || signals.includes("recovery_pending")) return false
   if (state.verificationPending || signals.includes("verification_pending")) return false
   return state.pendingStepCount === 0

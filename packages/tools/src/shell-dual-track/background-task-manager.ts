@@ -331,7 +331,6 @@ export class BackgroundTaskManager extends EventEmitter {
 
     const lines = text.split("\n")
     for (const line of lines) {
-      if (line.length === 0 && task.outputLines.length > 0) continue
       task.outputLines.push(line)
       task.totalOutputLines += 1
       if (task.outputLines.length > MAX_OUTPUT_LINES) {

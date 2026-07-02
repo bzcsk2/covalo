@@ -41,12 +41,10 @@ class RuntimeLogSink {
   readonly createSymlink: boolean
   private readonly maxQueueSize: number
   private queue: string[] = []
-  private bufferBytes = 0
-  private flushing = false
+  private flushPromise: Promise<void> = Promise.resolve()
   private initPromise?: Promise<void>
   private droppedCount = 0
   private flushTimer: ReturnType<typeof setTimeout> | null = null
-  private pendingOverflow: string[] | null = null
 
   constructor(options: RuntimeLoggerOptions) {
     this.enabled = options.enabled ?? true
@@ -73,14 +71,13 @@ class RuntimeLogSink {
     try {
       const serialized = JSON.stringify(record) + "\n"
       this.queue.push(serialized)
-      this.bufferBytes += serialized.length
-      this.scheduleFlush()
-      if (this.queue.length >= 50 || this.bufferBytes >= 65536) {
-        this.flushDeferred()
-      }
-      while (this.queue.length > this.maxQueueSize) {
+      if (this.queue.length > this.maxQueueSize) {
         this.queue.shift()
         this.droppedCount++
+      }
+      this.scheduleFlush()
+      if (this.queue.length >= 50) {
+        this.flushNow()
       }
     } catch {
       // Runtime logging must never break the agent.
@@ -93,69 +90,27 @@ class RuntimeLogSink {
 
   async flush(): Promise<void> {
     if (!this.enabled) return
-    // Cancel any scheduled timer so the event loop can exit after this flush
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
     }
-    this.flushSync()
-    while (this.flushing) {
-      await new Promise(resolve => setTimeout(resolve, 1))
-    }
+    this.flushNow()
+    await this.flushPromise
   }
 
-  flushSync(): void {
-    if (this.pendingOverflow) {
-      void this.writeChunk(this.pendingOverflow)
-      this.pendingOverflow = null
-    }
+  private flushNow(): void {
     if (this.queue.length === 0) return
     const chunk = this.queue.splice(0)
-    this.bufferBytes = 0
-    void this.writeChunk(chunk)
+    this.flushPromise = this.flushPromise.then(() => this.writeChunk(chunk))
   }
 
   private scheduleFlush(): void {
     if (!this.flushTimer) {
       this.flushTimer = setTimeout(() => {
         this.flushTimer = null
-        this.flushSync()
+        this.flushNow()
       }, FLUSH_INTERVAL_MS)
     }
-  }
-
-  private flushDeferred(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
-    }
-    if (this.pendingOverflow) {
-      // Trim pendingOverflow before appending new records to bound memory
-      const maxOverflowRecords = this.maxQueueSize
-      if (this.pendingOverflow.length >= maxOverflowRecords) {
-        const excess = this.pendingOverflow.length - maxOverflowRecords
-        this.pendingOverflow.splice(0, excess)
-        this.droppedCount += excess
-      }
-      const capacity = maxOverflowRecords - this.pendingOverflow.length
-      if (this.queue.length > capacity) {
-        this.droppedCount += this.queue.length - capacity
-        this.queue = this.queue.slice(this.queue.length - capacity)
-      }
-      for (let i = 0; i < this.queue.length; i++) {
-        this.pendingOverflow.push(this.queue[i])
-      }
-      this.queue = []
-      this.bufferBytes = 0
-      return
-    }
-    this.pendingOverflow = this.queue.splice(0)
-    this.bufferBytes = 0
-    setImmediate(() => {
-      const toWrite = this.pendingOverflow
-      this.pendingOverflow = null
-      if (toWrite) void this.writeChunk(toWrite)
-    })
   }
 
   private async init(): Promise<void> {
@@ -167,7 +122,6 @@ class RuntimeLogSink {
 
   private async writeChunk(chunk: string[]): Promise<void> {
     if (chunk.length === 0) return
-    this.flushing = true
     try {
       await this.init()
       await appendFile(this.filePath, chunk.join(""), "utf-8")
@@ -176,8 +130,6 @@ class RuntimeLogSink {
       }
     } catch {
       // Best-effort file logging: keep the main execution path alive.
-    } finally {
-      this.flushing = false
     }
   }
 

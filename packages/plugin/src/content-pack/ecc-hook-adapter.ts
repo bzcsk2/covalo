@@ -425,6 +425,9 @@ async function executeHookCommandSpawn(
     let timedOut = false
     let settled = false
 
+    const platform = process.platform
+    const isWin = platform === "win32"
+
     const child = spawn(executable, args, {
       cwd: workspaceRoot,
       env: {
@@ -434,14 +437,18 @@ async function executeHookCommandSpawn(
       },
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
-      detached: true,
+      detached: !isWin,
     })
 
     const killTree = () => {
-      try { process.kill(-child.pid!, "SIGTERM") } catch { /* already dead */ }
-      setTimeout(() => {
-        try { process.kill(-child.pid!, "SIGKILL") } catch { /* already dead */ }
-      }, 1000)
+      if (isWin && child.pid) {
+        try { spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]) } catch { /* no-op */ }
+      } else if (child.pid) {
+        try { process.kill(-child.pid!, "SIGTERM") } catch { /* already dead */ }
+        setTimeout(() => {
+          try { process.kill(-child.pid!, "SIGKILL") } catch { /* already dead */ }
+        }, 1000)
+      }
     }
 
     const timer = setTimeout(() => {
@@ -509,6 +516,9 @@ async function executeHookCommandUnsafe(
     let timedOut = false
     let settled = false
 
+    const platform = process.platform
+    const isWin = platform === "win32"
+
     const child = spawn("sh", ["-c", command], {
       cwd: workspaceRoot,
       env: {
@@ -517,14 +527,18 @@ async function executeHookCommandUnsafe(
         HOME: process.env.HOME ?? "",
       },
       stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
+      detached: !isWin,
     })
 
     const killTree = () => {
-      try { process.kill(-child.pid!, "SIGTERM") } catch { /* already dead */ }
-      setTimeout(() => {
-        try { process.kill(-child.pid!, "SIGKILL") } catch { /* already dead */ }
-      }, 1000)
+      if (isWin && child.pid) {
+        try { spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]) } catch { /* no-op */ }
+      } else if (child.pid) {
+        try { process.kill(-child.pid!, "SIGTERM") } catch { /* already dead */ }
+        setTimeout(() => {
+          try { process.kill(-child.pid!, "SIGKILL") } catch { /* already dead */ }
+        }, 1000)
+      }
     }
 
     const timer = setTimeout(() => {

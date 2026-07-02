@@ -372,6 +372,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       }
     }
 
+    streamLoop:
     for await (const event of client.chatCompletionsStream(ctx.buildMessages(), {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -497,7 +498,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                 }
                 // DRF-40: 记录工具结果到 TaskLedger
                 if (taskLedger && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
-                  const tc = toolCalls.find(t => t.function.name === toolEvent.toolName)
+                  const tc = findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex)
                   if (tc) {
                     const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
                     if (argsResult.ok) {
@@ -555,7 +556,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             // DRF-60: Safe point — Supervisor 指导（暂停工具环后继续 Worker）
             const supervisorInjected = yield* trySupervisorGuidance()
             if (supervisorInjected) {
-              break
+              break streamLoop
             }
 
             // P2: Safe point 1 — consume one pending instruction after tool batch
@@ -563,8 +564,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             if (injectedAfterTools) {
               yield injectedAfterTools
             }
+            // End current stream consumption: return to outer while for next turn
+            break streamLoop
           } else if (finishedWithToolUse) {
             // defensive: second done after tool use
+            break streamLoop
           } else {
             const filterTail = textToolCallFilter.flush()
             if (filterTail) {
@@ -598,7 +602,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
                     }
                     if (taskLedger && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
-                      const tc = salvagedCalls.find(t => t.function.name === toolEvent.toolName)
+                      const tc = findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex)
                       if (tc) {
                         const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
                         if (argsResult.ok) {
@@ -682,6 +686,9 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           streamError = { role: "error", content: event.message, severity: "error" as const, metadata: { ...(event.status ? { status: event.status } : {}), responseBody: event.body } }
           yield streamError
           sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: streamError })
+          if (toolCalls.length > 0) {
+            break streamLoop
+          }
           break
       }
     }
@@ -691,7 +698,15 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         yield { role: "status", content: "interrupted" }
         return
       }
-      if (fullContent) {
+      if (toolCalls.length > 0) {
+        // Stream error after tool_calls were emitted: append tool_calls + error results
+        // to maintain protocol consistency, then retry
+        ctx.log.append({ role: "assistant", content: fullContent || null, tool_calls: toolCalls })
+        for (const tc of toolCalls) {
+          appendToolResult(tc, { content: "Stream error: tool call result not available", isError: true, metadata: { error: "stream_error" } })
+        }
+        sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+      } else if (fullContent) {
         ctx.log.append({ role: "assistant", content: fullContent })
       }
       consecutiveErrors++
@@ -744,4 +759,24 @@ function* emitEarlyStopSignal(
   yield orchEvent
   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: evt })
   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: orchEvent })
+}
+
+/** Find tool call by id (preferred), then index, then name (fallback). */
+function findToolCallByIdOrName(
+  toolCalls: import("./types.js").ToolCall[],
+  toolCallId?: string,
+  toolName?: string,
+  toolCallIndex?: number,
+): import("./types.js").ToolCall | undefined {
+  if (toolCallId) {
+    const byId = toolCalls.find(t => t.id === toolCallId)
+    if (byId) return byId
+  }
+  if (toolCallIndex !== undefined && toolCallIndex >= 0 && toolCallIndex < toolCalls.length) {
+    return toolCalls[toolCallIndex]
+  }
+  if (toolName) {
+    return toolCalls.find(t => t.function.name === toolName)
+  }
+  return undefined
 }

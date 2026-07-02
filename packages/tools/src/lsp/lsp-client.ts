@@ -107,8 +107,6 @@ export class LspClient {
 
       this.setupConnectionHandlers()
       this.connection.listen()
-
-      this.state = "running"
     } catch (error) {
       this.state = "unhealthy"
       throw error
@@ -209,6 +207,7 @@ export class LspClient {
     }, INITIALIZE_TIMEOUT_MS)
 
     this.serverCapabilities = result?.capabilities ?? {}
+    this.state = "running"
     await this.connection.sendNotification("initialized", {})
 
     if (this.options.settings) {
@@ -242,8 +241,31 @@ export class LspClient {
     return new Promise<T>((resolve, reject) => {
       const timeout = timeoutMs ?? this.options.timeoutMs ?? INITIALIZE_TIMEOUT_MS
       let settled = false
+      const id = this.nextId++
+      let timer: ReturnType<typeof setTimeout> | undefined
 
-      const timer = setTimeout(() => {
+      const pendingEntry: PendingRequest = {
+        resolve: (value: unknown) => {
+          if (!settled) {
+            settled = true
+            if (timer) clearTimeout(timer)
+            this.pending.delete(id)
+            resolve(value as T)
+          }
+        },
+        reject: (error: Error) => {
+          if (!settled) {
+            settled = true
+            if (timer) clearTimeout(timer)
+            this.pending.delete(id)
+            reject(error)
+          }
+        },
+      }
+      this.pending.set(id, pendingEntry)
+
+      timer = setTimeout(() => {
+        this.pending.delete(id)
         if (!settled) {
           settled = true
           reject(new Error(`Request ${method} timed out after ${timeout}ms`))
@@ -251,20 +273,8 @@ export class LspClient {
       }, timeout)
 
       this.connection!.sendRequest(method, params).then(
-        (result) => {
-          if (!settled) {
-            settled = true
-            clearTimeout(timer)
-            resolve(result as T)
-          }
-        },
-        (error) => {
-          if (!settled) {
-            settled = true
-            clearTimeout(timer)
-            reject(error instanceof Error ? error : new Error(String(error)))
-          }
-        },
+        (result) => pendingEntry.resolve(result),
+        (error) => pendingEntry.reject(error instanceof Error ? error : new Error(String(error))),
       )
     })
   }

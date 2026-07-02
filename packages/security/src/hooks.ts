@@ -46,12 +46,12 @@ export class HookManager {
 
   async runBeforeToolCall(context: BeforeToolCallContext): Promise<PermissionDecision | void> {
     // First-match-wins: hooks are evaluated in registration order.
-    // The first hook that returns "allow" or "deny" determines the result.
+    // The first hook that returns "deny", "allow", or "ask" determines the result.
     for (const hooks of this.hooks) {
       if (hooks.beforeToolCall) {
         try {
           const result = await hooks.beforeToolCall(context)
-          if (result === "deny" || result === "allow") return result
+          if (result === "deny" || result === "allow" || result === "ask") return result
         } catch (e) {
           this.onHookError?.(e, "before")
           return "deny" // hook failure = deny (fail-safe)

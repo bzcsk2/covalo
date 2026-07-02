@@ -182,20 +182,9 @@ export class BranchBudgetTracker {
     const path = extractPath(toolName, args)
     const fileKey = path ? this.budgetKey(path) : undefined
     if (fileKey && (this.fileEdits.get(fileKey) ?? 0) >= this.limits.fileEditMax) {
-      const workspaceRoot = context?.workspaceRoot ?? this.budgetWorkspaceRoot
-      if (
-        workspaceRoot
-        && toolName === "write_file"
-        && path
-        && !workspaceFileExists(workspaceRoot, path)
-      ) {
-        return { blocked: false }
-      }
-
       const count = this.fileEdits.get(fileKey) ?? 0
-      const fileExists = workspaceRoot && path
-        ? workspaceFileExists(workspaceRoot, path)
-        : true
+      const workspaceRoot = context?.workspaceRoot ?? this.budgetWorkspaceRoot
+      const fileExists = workspaceRoot && path ? workspaceFileExists(workspaceRoot, path) : true
       return {
         blocked: true,
         dimension: "file_edit",

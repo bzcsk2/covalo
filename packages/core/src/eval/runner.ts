@@ -120,9 +120,10 @@ function getObjectiveSignals(workspaceDir: string): ObjectiveSignals {
       diffSize: 0,
       toolFailureCount: 0,
       verificationCommandsRun: 0,
-      cleanGitDiff: true,
+      cleanGitDiff: false,
       outOfBoundsWrites: [],
       toolTrackingValid: false,
+      gitSignalError: "git command failed",
     };
   }
 }
@@ -169,7 +170,8 @@ function computeScore(
   if (supervisorAssessment) {
     const dims = Object.values(supervisorAssessment);
     if (dims.length > 0) {
-      supervisorScore = dims.reduce((a, b) => a + b, 0) / dims.length;
+      const normalizedAvg = dims.reduce((a, b) => a + b, 0) / dims.length;
+      supervisorScore = normalizedAvg * 100;
     }
   }
 
@@ -540,10 +542,10 @@ async function runSingleCase(
 
     changedFiles = await getChangedFiles(workspaceDir);
     function matchProtectedFile(filePath: string, pattern: string): boolean {
-      if (filePath === pattern) return true;
-      if (filePath.startsWith(pattern + "/") || filePath.startsWith(pattern)) return true;
-      if (pattern.endsWith("/") && filePath.includes("/" + pattern)) return true;
-      return false;
+      const p = pattern.replace(/\/+$/, "").replace(/\\/g, "/");
+      const f = filePath.replace(/\\/g, "/");
+      if (!p) return false;
+      return f === p || f.startsWith(p + "/");
     }
     if (manifest.protectedFiles && manifest.protectedFiles.length > 0) {
       for (const pf of manifest.protectedFiles) {
@@ -811,20 +813,19 @@ async function runSingleCase(
   } else if (error) {
     failureClass = "system_error";
     failureReason = error;
-  } else if (!workerOutput.trim() && !error) {
-    // Worker empty output takes priority over verifier/policy failures
-    failureClass = "worker_empty_output";
-    failureReason = "Worker submit completed with empty assistant_final";
-    failureEvidence = {
-      event: "worker_empty_output",
-      stdoutSnippet: workerOutput.slice(0, 200),
-    };
   } else if (gateFailures.length > 0 && !(verifierResult?.verdict === "pass")) {
     failureClass = "policy_gate_failure";
     failureReason = errorMsg;
     failureEvidence = {
       event: "policy_gate",
       missing: gateFailures.map(g => g.gate),
+    };
+  } else if (!workerOutput.trim() && !error) {
+    failureClass = "worker_empty_output";
+    failureReason = "Worker submit completed with empty assistant_final";
+    failureEvidence = {
+      event: "worker_empty_output",
+      stdoutSnippet: workerOutput.slice(0, 200),
     };
   } else if (verifierResult) {
     classifiedVerdict = classifyVerifierResult(verifierResult, manifest);
@@ -1055,7 +1056,13 @@ function extractAssessment(
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       if (parsed.dimensions) {
-        return parsed.dimensions as Record<string, number>;
+        const result: Record<string, number> = {};
+        for (const [key, value] of Object.entries(parsed.dimensions)) {
+          if (typeof value === "number" && !isNaN(value)) {
+            result[key] = value > 1 ? Math.max(0, Math.min(1, value / 100)) : Math.max(0, Math.min(1, value));
+          }
+        }
+        return Object.keys(result).length > 0 ? result : null;
       }
     }
   } catch {

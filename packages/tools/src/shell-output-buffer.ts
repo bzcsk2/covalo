@@ -21,19 +21,20 @@ export function pushBounded(buf: BoundedBuffer, chunk: string): void {
 }
 
 export function finalizeBounded(buf: BoundedBuffer): { text: string; dropped: number } {
-  if (buf.dropped > 0) {
+  let totalDropped = buf.dropped
+  let text = buf.text
+  if (text.length > buf.max) {
+    const excess = text.length - buf.max
+    text = text.slice(-buf.max)
+    totalDropped += excess
+  }
+  if (totalDropped > 0) {
     return {
-      text: buf.text.slice(-buf.max) + `\n... [dropped ${buf.dropped} earlier chars]`,
-      dropped: buf.dropped,
+      text: text + `\n... [dropped ${totalDropped} earlier chars]`,
+      dropped: totalDropped,
     }
   }
-  if (buf.text.length > buf.max) {
-    return {
-      text: buf.text.slice(-buf.max) + `\n... [truncated: ${buf.text.length - buf.max} more chars]`,
-      dropped: buf.text.length - buf.max,
-    }
-  }
-  return { text: buf.text, dropped: 0 }
+  return { text, dropped: 0 }
 }
 
 export function createProgressThrottle(report?: (update: ToolProgressUpdate) => void): (update: ToolProgressUpdate) => void {

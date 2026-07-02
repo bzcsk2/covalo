@@ -44,6 +44,48 @@ describe('DeltaBatcher', () => {
     batcher.schedule();
     expect(onFlush).toHaveBeenCalledTimes(2);
   });
+
+  it('cancel clears pending timer and prevents flush', () => {
+    const onFlush = vi.fn();
+    const batcher = new DeltaBatcher(16, onFlush);
+
+    batcher.schedule();
+    batcher.cancel();
+    vi.advanceTimersByTime(16);
+    expect(onFlush).not.toHaveBeenCalled();
+  });
+
+  it('cancel is safe when no timer is pending', () => {
+    const batcher = new DeltaBatcher(16, vi.fn());
+    expect(() => batcher.cancel()).not.toThrow();
+  });
+
+  it('cancel then reschedule starts a new timer', () => {
+    const onFlush = vi.fn();
+    const batcher = new DeltaBatcher(16, onFlush);
+
+    batcher.schedule();
+    batcher.cancel();
+    batcher.schedule();
+    vi.advanceTimersByTime(8);
+    expect(onFlush).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(8);
+    expect(onFlush).toHaveBeenCalledTimes(1);
+  });
+
+  it('flushNow when no timer is pending still calls onFlush', () => {
+    const onFlush = vi.fn();
+    const batcher = new DeltaBatcher(16, onFlush);
+
+    batcher.flushNow();
+    expect(onFlush).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancel at flushMs=0 is safe (no-op)', () => {
+    const onFlush = vi.fn();
+    const batcher = new DeltaBatcher(0, onFlush);
+    expect(() => batcher.cancel()).not.toThrow();
+  });
 });
 
 describe('resolveDeltaFlushMs', () => {

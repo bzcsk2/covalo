@@ -135,51 +135,41 @@ export class CheckpointEngine {
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true })
     const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`
 
-    const isTerminal = (c: CombinedCheckpointFile | null | undefined): c is CombinedCheckpointFile =>
-      !!c && (c.status === "completed" || c.status === "failed" || c.status === "aborted")
-
-    const peekA = await this.readExistingCheckpoint(6, 14)
-    const peekB = await this.readExistingCheckpoint(6, 14)
-
-    let base: CombinedCheckpointFile | null =
-      isTerminal(peekB) ? peekB
-      : isTerminal(peekA) ? peekA
-      : peekB ?? peekA
-
-    if (!base) {
-      try {
-        await fs.access(this.checkpointPath)
-        for (let i = 0; i < 12; i++) {
-          const recovered = await this.readExistingCheckpoint(4, 20)
-          if (recovered) {
-            base = recovered
-            break
-          }
-          await new Promise((r) => setTimeout(r, 12))
-        }
-        if (!base) {
-          return cloneV2(this.v2State)
-        }
-      } catch {
+    let base: CombinedCheckpointFile | null = null
+    try {
+      const raw = await fs.readFile(this.checkpointPath, "utf-8")
+      const parsed = JSON.parse(raw) as CombinedCheckpointFile
+      if (parsed && this.isV1CombinedCheckpoint(parsed)) {
+        base = parsed
+      }
+    } catch (err: unknown) {
+      if (this.isENOENT(err)) {
         base = buildMinimalCheckpointEnvelope(this.sessionId)
+      } else {
+        try {
+          await fs.access(this.checkpointPath)
+          for (let i = 0; i < 3; i++) {
+            await new Promise((r) => setTimeout(r, 20 * (i + 1)))
+            try {
+              const retryRaw = await fs.readFile(this.checkpointPath, "utf-8")
+              const retryParsed = JSON.parse(retryRaw) as CombinedCheckpointFile
+              if (retryParsed && this.isV1CombinedCheckpoint(retryParsed)) {
+                base = retryParsed
+                break
+              }
+            } catch {}
+          }
+        } catch {}
       }
     }
 
-    let merged: CombinedCheckpointFile = {
+    if (!base) {
+      base = buildMinimalCheckpointEnvelope(this.sessionId)
+    }
+
+    const merged: CombinedCheckpointFile = {
       ...base,
       runtimeV2: cloneV2(this.v2State),
-    }
-
-    const peekC = await this.readExistingCheckpoint(8, 18)
-    if (isTerminal(peekC)) {
-      merged = { ...peekC, runtimeV2: cloneV2(this.v2State) }
-    }
-
-    const fence = await this.readExistingCheckpoint(12, 16)
-    if (fence) {
-      merged = { ...fence, runtimeV2: cloneV2(this.v2State) }
-    } else if (await this.checkpointMainPathProbablyExists()) {
-      return cloneV2(this.v2State)
     }
 
     await fs.writeFile(tmpPath, JSON.stringify(merged, null, 2), "utf-8")
@@ -266,35 +256,6 @@ export class CheckpointEngine {
     if (!parsed || typeof parsed !== "object") return false
     const ver = (parsed as { version?: unknown }).version
     return typeof ver === "number" && ver === 1
-  }
-
-  private async readExistingCheckpoint(
-    maxAttempts: number,
-    baseBackoffMs = 22,
-  ): Promise<CombinedCheckpointFile | null> {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const raw = await fs.readFile(this.checkpointPath, "utf-8")
-        const parsed: unknown = JSON.parse(raw)
-        if (!this.isV1CombinedCheckpoint(parsed)) continue
-        return parsed
-      } catch (err: unknown) {
-        if (this.isENOENT(err)) return null
-        if (attempt < maxAttempts - 1) {
-          await new Promise((r) => setTimeout(r, baseBackoffMs * (attempt + 1)))
-        }
-      }
-    }
-    return null
-  }
-
-  private async checkpointMainPathProbablyExists(): Promise<boolean> {
-    try {
-      await fs.access(this.checkpointPath)
-      return true
-    } catch {
-      return false
-    }
   }
 }
 

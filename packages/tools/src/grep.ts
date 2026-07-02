@@ -1,5 +1,7 @@
 import { resolve } from "node:path"
 import { spawn } from "node:child_process"
+import * as fs from "node:fs"
+import * as path from "node:path"
 import type { AgentTool } from "@covalo/core"
 import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { isSensitive } from "./sensitive.js"
@@ -186,7 +188,7 @@ function tryFindstr(pattern: string, searchPath: string, include?: string, signa
     } else {
       // For directories, findstr /s with a directory target searches all files recursively
       try {
-        const stat = require("node:fs").statSync(searchPath)
+        const stat = fs.statSync(searchPath)
         if (stat.isDirectory()) {
           target = normalizedPath + "\\*"
         }
@@ -226,10 +228,7 @@ function tryFindstr(pattern: string, searchPath: string, include?: string, signa
  * applies JS RegExp pattern.
  */
 function tryNodeGrep(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fs = require("node:fs") as typeof import("node:fs")
-    const path = require("node:path") as typeof import("node:path")
-
+  return new Promise((resolvePromise, reject) => {
     try {
       const stat = fs.statSync(searchPath)
       let files: string[] = []
@@ -240,11 +239,9 @@ function tryNodeGrep(pattern: string, searchPath: string, include?: string, sign
         for (const entry of entries) {
           const fullPath = path.join(dir, entry.name)
           if (entry.isDirectory()) {
-            // Skip common directories that should not be searched
             if (entry.name === "node_modules" || entry.name === ".git") continue
             collectFiles(fullPath)
           } else if (entry.isFile()) {
-            // Apply include filter if specified (simple glob matching)
             if (include) {
               const ext = include.replace(/^\*/, "")
               if (!entry.name.endsWith(ext)) continue
@@ -270,21 +267,19 @@ function tryNodeGrep(pattern: string, searchPath: string, include?: string, sign
           const lines = content.split(/\r?\n/)
           for (let i = 0; i < lines.length; i++) {
             if (regex.test(lines[i])) {
-              // Normalize path separators to backslashes for Windows consistency
               const normalizedPath = file.replace(/\//g, "\\")
               results.push(`${normalizedPath}:${i + 1}:${lines[i]}`)
               if (results.join("\n").length > MAX_OUTPUT_CHARS) {
-                resolve(results.join("\n"))
+                resolvePromise(results.join("\n"))
                 return
               }
             }
           }
         } catch {
-          // Skip unreadable files
         }
       }
 
-      resolve(results.join("\n"))
+      resolvePromise(results.join("\n"))
     } catch (err: any) {
       reject(err)
     }

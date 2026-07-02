@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, writeFile, unlink } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join, relative } from "node:path"
 import { createHash, randomUUID } from "node:crypto"
@@ -32,6 +32,7 @@ export class FileSnapshot {
     const snapPath = join(dir, snaps[snaps.length - 1])
     const content = await readFile(snapPath)
     await writeFile(filepath, content)
+    await unlink(snapPath).catch(() => {})
     return true
   }
 

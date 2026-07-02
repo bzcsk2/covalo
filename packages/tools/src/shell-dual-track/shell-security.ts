@@ -64,11 +64,15 @@ export function matchDeniedShellPattern(command: string, backend: ShellBackendId
  */
 export function matchSensitivePathInCommand(command: string): string | null {
   // Split on whitespace, quotes, pipes, redirects, semicolons, etc.
-  const tokens = command.split(/[\s"'|&;<>()`$]+/).filter(Boolean)
+  // Also split on = to capture --flag=/path forms
+  const tokens = command.split(/[\s="'|&;<>()`$]+/).filter(Boolean)
   for (const token of tokens) {
-    // Skip obvious flags and numeric-only tokens
-    if (token.startsWith("-") || /^\d+$/.test(token)) continue
-    if (isSensitive(token)) return token
+    // Split by = to extract the value part (e.g., --file=/etc/shadow -> /etc/shadow)
+    const eqParts = token.split("=")
+    for (const part of eqParts) {
+      if (!part || /^\d+$/.test(part)) continue
+      if (isSensitive(part)) return part
+    }
   }
   return null
 }

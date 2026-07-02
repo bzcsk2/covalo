@@ -20,6 +20,7 @@ export class DeltaBatcher {
    */
   schedule(): void {
     if (this.flushMs === 0) {
+      this.cancel();
       this.onFlush();
       return;
     }

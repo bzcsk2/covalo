@@ -104,9 +104,10 @@ export class LspManager {
       if (existing.client.getState() === "running") {
         return existing
       }
-      // Client is unhealthy, remove it
+      // Client is unhealthy, remove it and clear associated documents
       existing.client.kill()
       this.servers.delete(key)
+      this.clearDocumentsForServer(key)
     }
 
     const client = new LspClient({
@@ -274,6 +275,15 @@ export class LspManager {
     return null
   }
 
+  private clearDocumentsForServer(serverKey: string): void {
+    for (const [uri, doc] of this.documents) {
+      const serverForDoc = this.findClientForLanguage(doc.language)
+      if (!serverForDoc || serverForDoc.key !== serverKey) {
+        this.documents.delete(uri)
+      }
+    }
+  }
+
   private cleanupIdleServers(): void {
     const now = Date.now()
     const idleTimeout = DEFAULT_IDLE_TIMEOUT_MS
@@ -282,6 +292,7 @@ export class LspManager {
       if (now - managed.lastUsedAt > idleTimeout) {
         managed.client.kill()
         this.servers.delete(key)
+        this.clearDocumentsForServer(key)
       }
     }
   }
@@ -291,6 +302,7 @@ export class LspManager {
       if (managed.workspaceRoot === workspaceRoot) {
         await managed.client.shutdown()
         this.servers.delete(key)
+        this.clearDocumentsForServer(key)
       }
     }
   }

@@ -54,33 +54,52 @@ function ipv4ToUint32(ip: string): bigint {
 }
 
 function ipv6ToBytes(ip: string): number[] {
-  // Normalize IPv6: handle :: notation
-  const parts = ip.split(":")
-  const len = parts.length
-  let expanded: string[] = []
+  // Handle IPv4-mapped IPv6 (::ffff:127.0.0.1)
+  const v4MappedMatch = ip.match(/^::ffff:(\d+)\.(\d+)\.(\d+)\.(\d+)$/i)
+  if (v4MappedMatch) {
+    const bytes: number[] = []
+    for (let i = 0; i < 10; i++) bytes.push(0)
+    bytes.push(0xff, 0xff)
+    bytes.push(parseInt(v4MappedMatch[1]!), parseInt(v4MappedMatch[2]!))
+    bytes.push(parseInt(v4MappedMatch[3]!), parseInt(v4MappedMatch[4]!))
+    return bytes
+  }
 
-  // Check for :: abbreviation
-  const emptyIndex = parts.indexOf("")
-  if (emptyIndex >= 0 && emptyIndex < len - 1) {
-    // Count the groups we have
-    const nonEmpty = parts.filter(p => p !== "")
-    const zerosNeeded = 8 - len + 2 // including the empty parts
+  // Strip IPv4 tail if present (e.g., ::1.2.3.4)
+  let ipv6Part = ip
+  const v4TailMatch = ip.match(/^([0-9a-f:.]+):(\d+\.\d+\.\d+\.\d+)$/i)
+  if (v4TailMatch) {
+    ipv6Part = v4TailMatch[1]!
+  }
+
+  const parts = ipv6Part.split(":")
+  const doubleColon = parts.indexOf("")
+
+  // Count non-empty hextets
+  const nonEmpty = parts.filter(p => p !== "")
+  const zerosNeeded = 8 - nonEmpty.length
+
+  let expanded: string[]
+  if (doubleColon >= 0) {
     expanded = [
-      ...parts.slice(0, emptyIndex).map(p => p || "0"),
+      ...parts.slice(0, doubleColon).map(p => p || "0"),
       ...Array(zerosNeeded).fill("0"),
-      ...parts.slice(emptyIndex + 1).map(p => p || "0"),
+      ...parts.slice(doubleColon + 1).map(p => p || "0"),
     ]
   } else {
     expanded = parts.map(p => p || "0")
   }
 
+  if (expanded.length !== 8) return []
+
   const bytes: number[] = []
   for (const hex of expanded) {
-    const padded = hex.padStart(4, "0")
-    bytes.push(parseInt(padded.slice(0, 2), 16))
-    bytes.push(parseInt(padded.slice(2, 4), 16))
+    const parsed = parseInt(hex, 16)
+    if (isNaN(parsed)) return []
+    bytes.push((parsed >> 8) & 0xff)
+    bytes.push(parsed & 0xff)
   }
-  return bytes
+  return bytes.length === 16 ? bytes : []
 }
 
 function bytesToBigInt(bytes: number[]): bigint {

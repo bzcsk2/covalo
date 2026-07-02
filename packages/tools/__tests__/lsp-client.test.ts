@@ -29,9 +29,10 @@ describe("LspClient", () => {
     })
 
     await client.start()
-    expect(client.getState()).toBe("running")
+    expect(client.getState()).toBe("starting")
 
     const capabilities = await client.initialize()
+    expect(client.getState()).toBe("running")
     expect(capabilities).toBeDefined()
     expect(capabilities.hoverProvider).toBe(true)
     expect(capabilities.definitionProvider).toBe(true)

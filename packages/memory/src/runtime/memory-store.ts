@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, renameSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, renameSync, copyFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { homedir } from "node:os"
 import { randomUUID } from "node:crypto"
@@ -79,9 +79,24 @@ export class MemoryStore {
     this.validateAccess(scope, key)
     try {
       const raw = readFileSync(this.filePath(scope, key), "utf8")
-      return JSON.parse(raw) as T
-    } catch {
-      return null
+      const parsed = JSON.parse(raw) as T
+      if (parsed === undefined) return null
+      return parsed
+    } catch (err) {
+      if (isNodeError(err) && err.code === "ENOENT") return null
+      throw err
+    }
+  }
+
+  private async getOrCreate<T = unknown>(scope: string, key: string, defaultValue: T): Promise<T> {
+    try {
+      const raw = readFileSync(this.filePath(scope, key), "utf8")
+      const parsed = JSON.parse(raw) as T
+      if (parsed === undefined) return defaultValue
+      return parsed
+    } catch (err) {
+      if (isNodeError(err) && err.code === "ENOENT") return defaultValue
+      throw err
     }
   }
 
@@ -96,8 +111,10 @@ export class MemoryStore {
       try {
         renameSync(tmp, path)
       } catch {
+        const bak = `${path}.bak`
+        try { copyFileSync(path, bak) } catch {}
         writeFileSync(path, data, "utf8")
-        try { unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+        try { unlinkSync(tmp) } catch {}
       }
       return value
     })
@@ -107,7 +124,8 @@ export class MemoryStore {
     return this.withKeyLock(scope, key, async () => {
       this.validateAccess(scope, key)
       // Read inside the lock to prevent lost updates
-      let current = await this.get<Record<string, unknown>>(scope, key) ?? {} as Record<string, unknown>
+      // getOrCreate returns {} for not-found, throws on parse-error (won't overwrite corrupted files)
+      let current = await this.getOrCreate<Record<string, unknown>>(scope, key, {} as Record<string, unknown>)
       for (const op of ops) {
         if (op.op === "set") {
           this.setNested(current, op.path, op.value)
@@ -126,10 +144,12 @@ export class MemoryStore {
       const path = this.filePath(scope, key)
       const data = JSON.stringify(current, null, 2)
       const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
+      const bak = `${path}.bak`
       writeFileSync(tmp, data, "utf8")
       try {
         renameSync(tmp, path)
       } catch {
+        try { copyFileSync(path, bak) } catch {}
         writeFileSync(path, data, "utf8")
         try { unlinkSync(tmp) } catch {}
       }
@@ -206,4 +226,8 @@ export class MemoryStore {
     }
     return current
   }
+}
+
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return typeof err === "object" && err !== null && "code" in err
 }

@@ -33,6 +33,7 @@ export interface LoopEvent {
   content?: string
   toolName?: string
   toolCallIndex?: number
+  toolCallId?: string
   severity?: "info" | "warning" | "error"
   metadata?: Record<string, unknown>
   // TUI-OT-60: orchestration 事件时携带结构化数据

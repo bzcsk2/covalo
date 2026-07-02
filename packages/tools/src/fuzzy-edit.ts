@@ -5,6 +5,7 @@ export interface FuzzyEditResult {
 }
 
 export function fuzzyReplaceOnce(haystack: string, needle: string, replacement: string): FuzzyEditResult | null {
+  if (needle.length === 0) return null
   // Pass 1: exact match
   const allOccurrences = findAllOccurrences(haystack, needle)
   if (allOccurrences.length === 1) {
@@ -97,12 +98,14 @@ function trimBothLines(s: string): string {
 
 function blockAnchorPass(haystack: string, needle: string, replacement: string): FuzzyEditResult | null {
   const needleLines = needle.split("\n")
-  const firstAnchor = needleLines.find(l => l.trim())?.trim()
-  const lastAnchor = needleLines.slice().reverse().find(l => l.trim())?.trim()
+  const nonEmptyNeedleLines = needleLines.filter(l => l.trim().length > 0)
+  const firstAnchor = nonEmptyNeedleLines[0]?.trim()
+  const lastAnchor = nonEmptyNeedleLines[nonEmptyNeedleLines.length - 1]?.trim()
   if (!firstAnchor || !lastAnchor || firstAnchor === lastAnchor) return null
 
   const haystackLines = haystack.split("\n")
-  const threshold = Math.max(3, Math.floor(needleLines.length * 0.55))
+  const nonEmptyLineCount = nonEmptyNeedleLines.length
+  const threshold = Math.max(3, Math.floor(nonEmptyLineCount * 0.55))
 
   // Find all candidate regions
   const candidates: { firstIdx: number; lastIdx: number }[] = []
@@ -110,14 +113,14 @@ function blockAnchorPass(haystack: string, needle: string, replacement: string):
   for (let i = 0; i < haystackLines.length; i++) {
     if (haystackLines[i].trim() !== firstAnchor) continue
     for (let j = i + 1; j < haystackLines.length; j++) {
-      if (haystackLines[j].trim() === lastAnchor && j - i + 1 >= needleLines.length) {
+      if (haystackLines[j].trim() === lastAnchor && j - i + 1 >= nonEmptyLineCount) {
         const regionLines = haystackLines.slice(i, j + 1)
         const trimmedNeedle = needleLines.map(l => l.trim())
         const trimmedRegion = regionLines.map(l => l.trim())
 
         let matches = 0
         for (let k = 0; k < trimmedNeedle.length && k < trimmedRegion.length; k++) {
-          if (trimmedNeedle[k] === trimmedRegion[k]) matches++
+          if (trimmedNeedle[k] && trimmedRegion[k] && trimmedNeedle[k] === trimmedRegion[k]) matches++
         }
 
         if (matches >= threshold) {
@@ -234,6 +237,7 @@ function contextAwarePass(haystack: string, needle: string, replacement: string)
 }
 
 function findAllOccurrences(haystack: string, needle: string): number[] {
+  if (needle.length === 0) return []
   const indices: number[] = []
   let searchFrom = 0
   while (true) {

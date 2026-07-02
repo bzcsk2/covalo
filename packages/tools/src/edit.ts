@@ -64,6 +64,9 @@ export function createEditTool(): AgentTool {
       if (typeof args.old_string !== "string") {
         return { content: safeStringify({ error: "old_string is required" }), isError: true }
       }
+      if (args.old_string.length === 0) {
+        return { content: safeStringify({ error: "old_string must be non-empty" }), isError: true }
+      }
       if (typeof args.new_string !== "string") {
         return { content: safeStringify({ error: "new_string is required" }), isError: true }
       }

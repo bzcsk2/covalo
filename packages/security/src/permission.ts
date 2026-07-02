@@ -26,7 +26,22 @@ function matchToolName(rule: string | RegExp, name: string): boolean {
 
 function matchArgs(pattern: Record<string, unknown>, actual: Record<string, unknown>): boolean {
   for (const [key, val] of Object.entries(pattern)) {
-    if (actual[key] !== val) return false
+    if (!(key in actual)) return false
+    const actualVal = actual[key]
+    // Deep match for plain objects (recursive)
+    if (val !== null && typeof val === "object" && !Array.isArray(val) &&
+        actualVal !== null && typeof actualVal === "object" && !Array.isArray(actualVal)) {
+      if (!matchArgs(val as Record<string, unknown>, actualVal as Record<string, unknown>)) return false
+    }
+    // Array equality
+    else if (Array.isArray(val) && Array.isArray(actualVal)) {
+      if (val.length !== actualVal.length) return false
+      for (let i = 0; i < val.length; i++) {
+        if (val[i] !== actualVal[i]) return false
+      }
+    }
+    // Primitive comparison
+    else if (actualVal !== val) return false
   }
   return true
 }

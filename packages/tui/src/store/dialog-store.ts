@@ -65,16 +65,11 @@ function deriveActiveDialog(
  * ```
  */
 export function createDialogController(
+  getState: () => DialogState,
   setState: React.Dispatch<React.SetStateAction<DialogState>>,
 ): [DialogState & { isBlocking: () => boolean }, DialogActions] {
   const isBlocking = (): boolean => {
-    // Read from latest state via ref pattern; for simplicity, check via callback
-    let blocking = false;
-    setState(prev => {
-      blocking = prev.activeDialog !== null;
-      return prev;
-    });
-    return blocking;
+    return getState().activeDialog !== null;
   };
 
   const actions: DialogActions = {
@@ -113,9 +108,7 @@ export function createDialogController(
   };
 
   const getSnapshot = (): DialogState & { isBlocking: () => boolean } => {
-    // This is a closure-based approach; the actual state is managed via setState
-    // We return a proxy-like object that delegates to the latest state
-    return { ...createInitialDialogState(), isBlocking };
+    return { ...getState(), isBlocking };
   };
 
   return [getSnapshot() as DialogState & { isBlocking: () => boolean }, actions];

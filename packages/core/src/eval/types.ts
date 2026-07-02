@@ -160,6 +160,7 @@ export interface ObjectiveSignals {
   cleanGitDiff: boolean;
   outOfBoundsWrites: string[];
   toolTrackingValid: boolean;
+  gitSignalError?: string;
 }
 
 export interface CaseScore {

@@ -372,6 +372,7 @@ export class StreamingToolExecutor {
           role: result.isError ? "error" : "tool",
           toolName: tc.function.name,
           toolCallIndex: index,
+          toolCallId: tc.id,
           content: result.content,
           severity: result.isError ? "error" : undefined,
           metadata: result.metadata,
