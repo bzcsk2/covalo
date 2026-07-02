@@ -1,10 +1,10 @@
 {
   "threadId": "session-12345",
-  "goalId": "cda4192d-a786-4ac0-872d-ee8627515027",
+  "goalId": "ebc50481-479b-40f8-82a9-221248c70c20",
   "objective": "Test goal integration",
   "status": "active",
   "tokensUsed": 0,
   "timeUsedSeconds": 0,
-  "createdAt": 1782968638910,
-  "updatedAt": 1782968638910
+  "createdAt": 1782990142097,
+  "updatedAt": 1782990142097
 }

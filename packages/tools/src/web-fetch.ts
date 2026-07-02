@@ -5,6 +5,12 @@
  * - Uses TurndownService for proper HTML→Markdown conversion
  * - Uses htmlparser2 for clean HTML→text extraction
  * - Retains covalo's SSRF protection and approval model
+ *
+ * SSRF protection:
+ * - Proper CIDR-based IP matching (not string prefixes)
+ * - IPv4-mapped IPv6 detection
+ * - DNS resolution with all-address check
+ * - Redirect following with per-hop re-validation
  */
 import type { AgentTool } from "@covalo/core"
 import { safeStringify } from "./safe-stringify.js"
@@ -16,27 +22,170 @@ import TurndownService from "turndown"
 const FETCH_TIMEOUT = 30_000
 const MAX_CONTENT_LENGTH = 10 * 1024 * 1024
 const MAX_OUTPUT_LENGTH = 100_000
+const MAX_REDIRECTS = 5
 
-const BLOCKED_NETS = [
-  "0.", "10.", "100.", "127.", "169.254.",
-  "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
-  "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
-  "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
-  "192.0.0.", "192.0.2.", "192.168.",
-  "198.18.", "198.19.", "198.51.100.", "203.0.113.",
-  "224.", "240.",
-  "fc", "fd", "fe80", "::1", "::",
+// ---------- CIDR-based IP blocking ----------
+
+/** Parse a CIDR string like "10.0.0.0/8" or "fc00::/7" into { network, bits, mask } */
+function parseCIDR(cidr: string): { network: bigint; bits: number; mask: bigint; family: 4 | 6 } | null {
+  const [addr, bitsStr] = cidr.split("/")
+  const bits = parseInt(bitsStr, 10)
+  if (!addr || isNaN(bits)) return null
+
+  if (isIP(addr) === 4) {
+    const network = ipv4ToUint32(addr)
+    const mask = bits === 0 ? 0n : ((1n << BigInt(bits)) - 1n) << BigInt(32 - bits)
+    return { network: network & mask, bits, mask, family: 4 }
+  }
+
+  if (isIP(addr) === 6) {
+    const bytes = ipv6ToBytes(addr)
+    const network = bytesToBigInt(bytes)
+    const mask = bits === 0 ? 0n : ((1n << BigInt(bits)) - 1n) << BigInt(128 - bits)
+    return { network: network & mask, bits, mask, family: 6 }
+  }
+
+  return null
+}
+
+function ipv4ToUint32(ip: string): bigint {
+  const parts = ip.split(".").map(Number)
+  return BigInt(((parts[0]! << 24) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0)
+}
+
+function ipv6ToBytes(ip: string): number[] {
+  // Normalize IPv6: handle :: notation
+  const parts = ip.split(":")
+  const len = parts.length
+  let expanded: string[] = []
+
+  // Check for :: abbreviation
+  const emptyIndex = parts.indexOf("")
+  if (emptyIndex >= 0 && emptyIndex < len - 1) {
+    // Count the groups we have
+    const nonEmpty = parts.filter(p => p !== "")
+    const zerosNeeded = 8 - len + 2 // including the empty parts
+    expanded = [
+      ...parts.slice(0, emptyIndex).map(p => p || "0"),
+      ...Array(zerosNeeded).fill("0"),
+      ...parts.slice(emptyIndex + 1).map(p => p || "0"),
+    ]
+  } else {
+    expanded = parts.map(p => p || "0")
+  }
+
+  const bytes: number[] = []
+  for (const hex of expanded) {
+    const padded = hex.padStart(4, "0")
+    bytes.push(parseInt(padded.slice(0, 2), 16))
+    bytes.push(parseInt(padded.slice(2, 4), 16))
+  }
+  return bytes
+}
+
+function bytesToBigInt(bytes: number[]): bigint {
+  let result = 0n
+  for (const b of bytes) {
+    result = (result << 8n) | BigInt(b)
+  }
+  return result
+}
+
+function ipInCIDR(ip: string, cidr: string): boolean {
+  const parsed = parseCIDR(cidr)
+  if (!parsed) return false
+
+  if (parsed.family === 4) {
+    if (isIP(ip) !== 4) {
+      // Check for IPv4-mapped IPv6 (::ffff:a.b.c.d)
+      const mappedMatch = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)
+      if (mappedMatch) {
+        const ipv4 = mappedMatch[1]!
+        const addr = ipv4ToUint32(ipv4)
+        return (addr & parsed.mask) === parsed.network
+      }
+      return false
+    }
+    const addr = ipv4ToUint32(ip)
+    return (addr & parsed.mask) === parsed.network
+  }
+
+  if (parsed.family === 6) {
+    if (isIP(ip) !== 6) return false
+    // IPv4-mapped IPv6: convert to IPv4 and check v4 CIDRs too
+    const mappedMatch = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)
+    if (mappedMatch) {
+      // Also check against IPv4 CIDRs
+      const ipv4 = mappedMatch[1]!
+      for (const v4Cidr of BLOCKED_V4_CIDRS) {
+        const p = parseCIDR(v4Cidr)
+        if (p) {
+          const addr = ipv4ToUint32(ipv4)
+          if ((addr & p.mask) === p.network) return true
+        }
+      }
+    }
+    const bytes = ipv6ToBytes(ip)
+    const addr = bytesToBigInt(bytes)
+    return (addr & parsed.mask) === parsed.network
+  }
+
+  return false
+}
+
+// Blocked CIDR ranges:
+// IPv4 private/reserved ranges
+const BLOCKED_V4_CIDRS = [
+  "0.0.0.0/8",       // Current network (RFC 6890)
+  "10.0.0.0/8",      // Private
+  "100.64.0.0/10",   // CGNAT (RFC 6598)
+  "127.0.0.0/8",     // Loopback
+  "169.254.0.0/16",  // Link-local
+  "172.16.0.0/12",   // Private
+  "192.0.0.0/24",    // IETF protocol assignments (RFC 6890)
+  "192.0.2.0/24",    // Documentation (TEST-NET-1)
+  "192.168.0.0/16",  // Private
+  "198.18.0.0/15",   // Benchmarking
+  "198.51.100.0/24", // Documentation (TEST-NET-2)
+  "203.0.113.0/24",  // Documentation (TEST-NET-3)
+  "224.0.0.0/4",     // Multicast
+  "240.0.0.0/4",     // Reserved
 ]
 
+// IPv6 blocked ranges
+const BLOCKED_V6_CIDRS = [
+  "::/128",          // Unspecified
+  "::1/128",         // Loopback
+  "fc00::/7",        // Unique-local
+  "fe80::/10",       // Link-local
+]
+
+// Combined list for iteration
+const BLOCKED_CIDRS = [...BLOCKED_V4_CIDRS, ...BLOCKED_V6_CIDRS]
+
 export function hasPrivateIP(host: string): boolean {
-  if (isIP(host)) return BLOCKED_NETS.some(p => host.startsWith(p))
+  const ipFamily = isIP(host)
+  if (!ipFamily) return false
+
+  for (const cidr of BLOCKED_CIDRS) {
+    if (ipInCIDR(host, cidr)) return true
+  }
+
+  // Also check IPv4-mapped IPv6 against IPv4 CIDRs
+  if (ipFamily === 6) {
+    const mappedMatch = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)
+    if (mappedMatch) {
+      return hasPrivateIP(mappedMatch[1]!)
+    }
+  }
+
   return false
 }
 
 export async function isPrivateHostname(host: string): Promise<boolean> {
   try {
     const addrs = await dns.resolve(host)
-    return addrs.some(a => BLOCKED_NETS.some(p => a.startsWith(p)))
+    return addrs.some(a => hasPrivateIP(a))
   } catch {
     return true // can't resolve = unsafe
   }
@@ -73,6 +222,7 @@ export function createWebFetchTool(): AgentTool {
           ? args.format
           : "markdown"
 
+      // Validate and check initial URL
       let url = args.url
       try {
         const parsed = new URL(url)
@@ -86,11 +236,11 @@ export function createWebFetchTool(): AgentTool {
         if (parsed.username || parsed.password) {
           return { content: safeStringify({ error: "URL with credentials is not allowed" }), isError: true }
         }
-        if (hasPrivateIP(parsed.hostname)) {
-          return { content: safeStringify({ error: `Access to internal network is not allowed: ${parsed.hostname}` }), isError: true }
-        }
-        if (!isIP(parsed.hostname) && await isPrivateHostname(parsed.hostname)) {
-          return { content: safeStringify({ error: `Hostname resolves to internal network: ${parsed.hostname}` }), isError: true }
+
+        // Initial SSRF check
+        const ssrfError = await checkSSRF(parsed.hostname, url)
+        if (ssrfError) {
+          return { content: safeStringify({ error: ssrfError }), isError: true }
         }
       } catch {
         return { content: safeStringify({ error: `Invalid URL: ${url}` }), isError: true }
@@ -104,31 +254,71 @@ export function createWebFetchTool(): AgentTool {
         const { signal, cleanup } = ctx.signal ? anySignal(ctx.signal, controller.signal) : { signal: controller.signal, cleanup: () => {} }
 
         const t0 = Date.now()
-        let resp: Response
-        try {
-          resp = await fetch(url, {
-            signal,
-            redirect: "follow",
-            headers: {
-              "User-Agent": "Mozilla/5.0 (compatible; Deepreef/1.0; +https://covalo.dev)",
-              Accept: acceptHeader(format),
-            },
-          })
-        } finally {
-          clearTimeout(timer)
-          cleanup()
+
+        // Manual redirect handling for per-hop SSRF validation
+        let currentUrl = url
+        let redirectCount = 0
+        let resp: Response | null = null
+
+        while (redirectCount <= MAX_REDIRECTS) {
+          try {
+            resp = await fetch(currentUrl, {
+              signal,
+              redirect: "manual",
+              headers: {
+                "User-Agent": "Mozilla/5.0 (compatible; Deepreef/1.0; +https://covalo.dev)",
+                Accept: acceptHeader(format),
+              },
+            })
+          } finally {
+            clearTimeout(timer)
+            cleanup()
+          }
+
+          // Handle redirect (3xx)
+          if (resp.status >= 300 && resp.status < 400) {
+            const location = resp.headers.get("location")
+            if (!location) {
+              return { content: safeStringify({ error: `Redirect without Location header: ${resp.status}` }), isError: true }
+            }
+
+            redirectCount++
+            if (redirectCount > MAX_REDIRECTS) {
+              return { content: safeStringify({ error: `Too many redirects (max ${MAX_REDIRECTS})` }), isError: true }
+            }
+
+            // Resolve relative redirect URL
+            const redirectUrl = new URL(location, currentUrl)
+            currentUrl = redirectUrl.toString()
+
+            // SSRF check on redirect target
+            const ssrfError = await checkSSRF(redirectUrl.hostname, currentUrl)
+            if (ssrfError) {
+              return { content: safeStringify({ error: `Redirect target ${ssrfError}` }), isError: true }
+            }
+
+            // Continue loop to follow redirect
+            continue
+          }
+
+          // Non-redirect response: proceed
+          break
         }
 
-        // SSRF: validate final URL after any redirects
-        const finalUrl = resp.redirected ? new URL(resp.url) : new URL(url)
-        if (hasPrivateIP(finalUrl.hostname) ||
-            (!isIP(finalUrl.hostname) && await isPrivateHostname(finalUrl.hostname))) {
-          return { content: safeStringify({ error: `URL resolves to internal network: ${finalUrl.hostname}` }), isError: true }
+        if (!resp) {
+          return { content: safeStringify({ error: "No response received" }), isError: true }
+        }
+
+        // SSRF: validate final URL hostname
+        const finalHostname = new URL(currentUrl).hostname
+        const ssrfError = await checkSSRF(finalHostname, currentUrl)
+        if (ssrfError) {
+          return { content: safeStringify({ error: `Final URL ${ssrfError}` }), isError: true }
         }
 
         if (!resp.ok) {
           return {
-            content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url }),
+            content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: currentUrl }),
             isError: true,
           }
         }
@@ -170,7 +360,7 @@ export function createWebFetchTool(): AgentTool {
             bytes,
             code: resp.status,
             durationMs: elapsed,
-            url,
+            url: currentUrl,
           }),
           isError: false,
         }
@@ -181,6 +371,32 @@ export function createWebFetchTool(): AgentTool {
         return { content: safeStringify({ error: `Fetch error: ${e instanceof Error ? e.message : String(e)}` }), isError: true }
       }
     },
+  }
+}
+
+/**
+ * Check a hostname/IP for SSRF (private/reserved ranges).
+ * Returns an error string if blocked, or null if allowed.
+ */
+async function checkSSRF(hostname: string, url: string): Promise<string | null> {
+  // IP address check
+  if (isIP(hostname)) {
+    if (hasPrivateIP(hostname)) {
+      return `Access to internal network is not allowed: ${hostname}`
+    }
+    return null
+  }
+
+  // Hostname: resolve DNS and check all addresses
+  try {
+    const addrs = await dns.resolve(hostname)
+    const blocked = addrs.filter(a => hasPrivateIP(a))
+    if (blocked.length > 0) {
+      return `Hostname ${hostname} resolves to internal network: ${blocked.join(", ")}`
+    }
+    return null
+  } catch {
+    return `Cannot resolve hostname: ${hostname}`
   }
 }
 

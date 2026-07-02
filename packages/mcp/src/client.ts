@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 import { terminateProcessTree, normalizePlatform } from "@covalo/tools"
 import type { DiagnosticLogger } from "./diagnostics.js"
 import { noopDiagnosticLogger } from "./diagnostics.js"
+import { EventEmitter } from "node:events"
 
 export interface McpTool {
   name: string
@@ -33,9 +34,15 @@ interface JsonRpcRequest {
 
 interface JsonRpcResponse {
   jsonrpc: "2.0"
-  id: string | number
+  id?: string | number  // undefined for notifications
   result?: unknown
   error?: { code: number; message: string; data?: unknown }
+}
+
+interface JsonRpcNotification {
+  jsonrpc: "2.0"
+  method: string
+  params?: unknown
 }
 
 const REQUEST_TIMEOUT = 30_000
@@ -48,7 +55,7 @@ function rejectAllPending(pending: Map<string | number, { resolve: (v: unknown) 
   pending.clear()
 }
 
-export class McpClient {
+export class McpClient extends EventEmitter {
   private proc: ChildProcess | null = null
   private buffer = ""
   private pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
@@ -59,6 +66,7 @@ export class McpClient {
   private platform: ReturnType<typeof normalizePlatform>
 
   constructor(name: string, logger: DiagnosticLogger = noopDiagnosticLogger) {
+    super()
     this.name = name
     this.logger = logger
     this.platform = normalizePlatform()
@@ -93,6 +101,7 @@ export class McpClient {
 
     this.proc.on("exit", (code) => {
       this._connected = false
+      this.flushBuffer()
       rejectAllPending(this.pending, new Error(`MCP server exited with code ${code}`))
     })
 
@@ -220,27 +229,70 @@ export class McpClient {
     const lines = this.buffer.split("\n")
     this.buffer = lines.pop() ?? ""
     for (const line of lines) {
-      if (!line.trim()) continue
-      try {
-        const resp = JSON.parse(line) as JsonRpcResponse
-        const handler = this.pending.get(resp.id)
-        if (handler) {
-          clearTimeout(handler.timer)
-          this.pending.delete(resp.id)
-          if (resp.error) {
-            if (this.logger.isEnabled("warn")) {
-              this.logger.warn("mcp.request.error", { mcpServer: this.name, method: resp.id, errorClass: "JsonRpcError" })
-            }
-            handler.reject(new Error(`MCP error ${resp.error.code}: ${resp.error.message}`))
-          } else {
-            handler.resolve(resp.result)
+      this.processMessageLine(line)
+    }
+  }
+
+  private processMessageLine(line: string): void {
+    if (!line.trim()) return
+    try {
+      const resp = JSON.parse(line) as JsonRpcResponse
+
+      // C3: Handle JSON-RPC notifications (no id, has method)
+      if (resp.id === undefined && typeof (resp as unknown as JsonRpcNotification).method === "string") {
+        const notification = resp as unknown as JsonRpcNotification
+        this.handleNotification(notification.method, notification.params)
+        return
+      }
+
+      // C4: response with undefined id that is not a notification — skip
+      if (resp.id === undefined) return
+
+      const handler = this.pending.get(resp.id)
+      if (handler) {
+        clearTimeout(handler.timer)
+        this.pending.delete(resp.id)
+        if (resp.error) {
+          if (this.logger.isEnabled("warn")) {
+            this.logger.warn("mcp.request.error", { mcpServer: this.name, method: resp.id, errorClass: "JsonRpcError" })
           }
-        }
-      } catch {
-        if (this.logger.isEnabled("debug")) {
-          this.logger.debug("mcp.parse.error", { mcpServer: this.name, length: line.length })
+          handler.reject(new Error(`MCP error ${resp.error.code}: ${resp.error.message}`))
+        } else {
+          handler.resolve(resp.result)
         }
       }
+    } catch {
+      if (this.logger.isEnabled("debug")) {
+        this.logger.debug("mcp.parse.error", { mcpServer: this.name, length: line.length })
+      }
+    }
+  }
+
+  /**
+   * Handle a JSON-RPC notification by emitting an event.
+   */
+  private handleNotification(method: string, params: unknown): void {
+    if (this.logger.isEnabled("debug")) {
+      this.logger.debug("mcp.notification", { mcpServer: this.name, method })
+    }
+    this.emit("notification", { method, params })
+    this.emit(method, params)
+  }
+
+  /**
+   * Flush any remaining data in the buffer (for messages without trailing newline).
+   */
+  private flushBuffer(): void {
+    if (this.buffer.trim()) {
+      try {
+        JSON.parse(this.buffer)
+        this.processMessageLine(this.buffer)
+      } catch {
+        if (this.logger.isEnabled("debug")) {
+          this.logger.debug("mcp.flush.incomplete", { mcpServer: this.name, length: this.buffer.length })
+        }
+      }
+      this.buffer = ""
     }
   }
 }

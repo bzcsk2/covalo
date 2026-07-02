@@ -171,6 +171,7 @@ export interface CaseScore {
   supervisorScore: number;
   finalScore: number;
   scoreIneligible: boolean;
+  verifierSkipped?: boolean;
 }
 
 export interface PolicyGateResult {

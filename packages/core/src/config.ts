@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, renameSync, mkdtempSync } from "node:fs"
 import { resolve, join, dirname } from "node:path"
+import { randomUUID } from "node:crypto"
 import { LastConfigSchema, RoleConfigSchema } from "./schemas/config.js"
 import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL } from "./types.js"
 import type { ModelTarget } from "./model-target.js"
@@ -416,9 +417,9 @@ export function saveProjectApiKey(provider: string, value: string): void {
   }
   const content = lines.join("\n") + "\n"
 
-  // Atomic write: temp file + rename
+  // Atomic write: temp file + rename with unique name to prevent concurrent collisions
   const tmpDir = dirname(filePath)
-  const tmpFile = join(tmpDir, `.api-key.tmp.${process.pid}`)
+  const tmpFile = join(tmpDir, `.api-key.tmp.${process.pid}.${randomUUID()}`)
   writeFileSync(tmpFile, content, "utf-8")
   try { chmodSync(tmpFile, 0o600) } catch {}
   renameSync(tmpFile, filePath)
@@ -444,8 +445,9 @@ export function deleteProjectApiKey(provider: string): void {
   }
   const content = lines.join("\n") + "\n"
 
+  // Atomic write with unique tmp file
   const tmpDir = dirname(filePath)
-  const tmpFile = join(tmpDir, `.api-key.tmp.${process.pid}`)
+  const tmpFile = join(tmpDir, `.api-key.tmp.${process.pid}.${randomUUID()}`)
   writeFileSync(tmpFile, content, "utf-8")
   try { chmodSync(tmpFile, 0o600) } catch {}
   renameSync(tmpFile, filePath)

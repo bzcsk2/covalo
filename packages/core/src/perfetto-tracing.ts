@@ -38,6 +38,8 @@ let spanIdCounter = 0
 const events: TraceEvent[] = []
 const pendingSpans = new Map<string, PendingSpan>()
 const MAX_EVENTS = 50_000
+let startIndex = 0
+let totalDropped = 0
 
 function getTimestamp(): number {
   return (Date.now() - startTimeMs) * 1000
@@ -48,26 +50,44 @@ function generateSpanId(): string {
 }
 
 function evictOldestEvents(): void {
-  if (events.length < MAX_EVENTS) return
-  const dropped = events.splice(0, MAX_EVENTS / 2)
-  events.unshift({
-    name: "trace_truncated",
-    cat: "__metadata",
-    ph: "i",
-    ts: dropped[dropped.length - 1]?.ts ?? 0,
-    pid: 1,
-    tid: 0,
-    args: { dropped_events: dropped.length },
-  })
+  const currentCount = events.length - startIndex
+  if (currentCount < MAX_EVENTS) return
+  const dropCount = Math.floor(MAX_EVENTS / 2)
+  startIndex += dropCount
+  totalDropped += dropCount
+  // Periodically compact array to prevent unbounded growth
+  if (startIndex > MAX_EVENTS) {
+    const validLength = events.length - startIndex
+    for (let i = 0; i < validLength; i++) {
+      events[i] = events[startIndex + i]!
+    }
+    events.length = validLength
+    startIndex = 0
+  }
 }
 
 function buildTraceDocument(): string {
+  const validEvents = startIndex > 0 ? events.slice(startIndex) : events
+  const traceEvents = totalDropped > 0
+    ? [
+        {
+          name: "trace_truncated",
+          cat: "__metadata",
+          ph: "i" as const,
+          ts: validEvents[0]?.ts ?? 0,
+          pid: 1,
+          tid: 0,
+          args: { dropped_events: totalDropped },
+        },
+        ...validEvents,
+      ]
+    : validEvents
   return JSON.stringify({
-    traceEvents: events,
+    traceEvents,
     metadata: {
       session_id: sessionId,
       trace_start_time: new Date(startTimeMs).toISOString(),
-      total_event_count: events.length,
+      total_event_count: validEvents.length,
     },
   })
 }

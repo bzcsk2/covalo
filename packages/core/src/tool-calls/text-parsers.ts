@@ -264,8 +264,10 @@ function parseJsonToolObjects(text: string): ParsedEmbeddedToolCalls {
 
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "{") continue
-    const slice = text.slice(i)
-    if (!TOOL_JSON_KEY_HINT.test(slice)) continue
+    // Bounded check for key hints instead of full slice
+    const lookaheadEnd = Math.min(i + 200, text.length)
+    const lookahead = text.slice(i, lookaheadEnd)
+    if (!TOOL_JSON_KEY_HINT.test(lookahead)) continue
 
     const extracted = extractBalancedJson(text, i)
     if (!extracted) continue
@@ -381,17 +383,29 @@ export function stripEmbeddedToolCalls(content: string): string {
 }
 
 function stripLikelyToolJsonObjects(text: string): string {
-  let result = text
-  for (let i = 0; i < result.length; i++) {
-    if (result[i] !== "{") continue
-    const slice = result.slice(i)
-    if (!TOOL_JSON_KEY_HINT.test(slice)) continue
-    const extracted = extractBalancedJson(result, i)
-    if (!extracted) continue
-    result = result.slice(0, i) + result.slice(extracted.end)
-    i--
+  const spans: TextSpan[] = []
+  let i = 0
+  while (i < text.length) {
+    if (text[i] !== "{") { i++; continue }
+    const lookaheadEnd = Math.min(i + 200, text.length)
+    const lookahead = text.slice(i, lookaheadEnd)
+    if (!TOOL_JSON_KEY_HINT.test(lookahead)) { i++; continue }
+    const extracted = extractBalancedJson(text, i)
+    if (!extracted) { i++; continue }
+    spans.push({ start: i, end: extracted.end })
+    i = extracted.end
   }
-  return stripResidualToolChannelMarkup(result)
+  if (spans.length === 0) {
+    return stripResidualToolChannelMarkup(text)
+  }
+  let out = ""
+  let cursor = 0
+  for (const span of mergeSpans(spans)) {
+    out += text.slice(cursor, span.start)
+    cursor = span.end
+  }
+  out += text.slice(cursor)
+  return stripResidualToolChannelMarkup(out)
 }
 
 /** 写入会话 history 前的 assistant 正文净化。 */

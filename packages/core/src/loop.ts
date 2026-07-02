@@ -541,7 +541,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               }
               // persist messages with tool results for crash recovery
               sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-            } catch {
+            } catch (err) {
+              logger?.warn("loop.tool_batch_error", {
+                error: err instanceof Error ? err.message : String(err),
+                turnCount,
+              })
               // P1: StreamingToolExecutor handles settling remaining tools internally.
               // No blind batch补写 here — it would duplicate results for already-completed tools.
             }
@@ -615,7 +619,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                     }
                   }
                   sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-                } catch {
+                } catch (err) {
+                  logger?.warn("loop.tool_batch_error_secondary", {
+                    error: err instanceof Error ? err.message : String(err),
+                    turnCount,
+                  })
                   // StreamingToolExecutor handles settling remaining tools internally
                 }
                 yield { role: "status", content: "tools_completed" }

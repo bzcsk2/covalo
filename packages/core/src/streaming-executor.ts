@@ -211,8 +211,11 @@ export class StreamingToolExecutor {
       }
 
       yield* flushSharedBatch(this, sharedBatch)
-    } catch {
+    } catch (err) {
       // CL-50: On generator abort, settle any remaining unsettled tool calls.
+      logger?.warn("tool.batch.interrupted_or_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      })
       for (let index = 0; index < toolCalls.length; index++) {
         if (!isSettled(index)) {
           const tc = toolCalls[index]

@@ -228,6 +228,7 @@ export class DeepSeekClient implements ChatClient {
 
     const reader = resp.body.getReader()
     let fallbackRequested = false
+    let onAbortReject: (() => void) | undefined
     const onAbort = () => { void reader.cancel(opts.signal?.reason).catch(() => {}) }
     opts.signal?.addEventListener("abort", onAbort, { once: true })
     const abortPromise = new Promise<never>((_, reject) => {
@@ -236,11 +237,8 @@ export class DeepSeekClient implements ChatClient {
         reject(opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError"))
         return
       }
-      opts.signal.addEventListener(
-        "abort",
-        () => reject(opts.signal?.reason ?? new DOMException("The operation was aborted.", "AbortError")),
-        { once: true },
-      )
+      onAbortReject = () => reject(opts.signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"))
+      opts.signal.addEventListener("abort", onAbortReject, { once: true })
     })
     try {
       const decoder = new TextDecoder("utf-8")
@@ -466,6 +464,7 @@ export class DeepSeekClient implements ChatClient {
       if (!fallbackRequested && diagnosticsEnabled) requestLogger.info("api.stream.done", { finishReason: null, durationMs: Date.now() - startedAt, ttftMs })
     } finally {
       opts.signal?.removeEventListener("abort", onAbort)
+      if (onAbortReject) opts.signal?.removeEventListener("abort", onAbortReject)
       await reader.cancel().catch(() => {})
       responseController?.abort()
       reader.releaseLock()

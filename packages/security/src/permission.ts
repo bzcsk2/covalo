@@ -35,6 +35,14 @@ export class PermissionEngine {
   private denyRules: DenyRule[] = []
   private allowRules: AllowRule[] = []
 
+  /** Default decision by tier. Unknown tiers default to "ask" (fail-closed). */
+  private defaultDecisionByTier: Record<string, PermissionDecision> = {
+    exec: "ask",
+    write: "allow",
+    edit: "allow",
+    read: "allow",
+  }
+
   addDenyRule(rule: DenyRule): void {
     this.denyRules.push(rule)
   }
@@ -68,6 +76,19 @@ export class PermissionEngine {
   clear(): void {
     this.denyRules = []
     this.allowRules = []
+  }
+
+  /**
+   * Override the default decision for a given tier.
+   * By default: exec=ask, write=allow, edit=allow, read=allow.
+   * Unknown tiers default to "ask" for fail-closed safety.
+   */
+  setDefaultDecision(tier: string, decision: PermissionDecision): void {
+    this.defaultDecisionByTier[tier] = decision
+  }
+
+  getDefaultDecision(tier: string): PermissionDecision {
+    return this.defaultDecisionByTier[tier] ?? "ask"
   }
 
   isAllowed(toolName: string, args: Record<string, unknown>, tier: string): boolean {
@@ -105,8 +126,12 @@ export class PermissionEngine {
       return { decision: "allow", rule }
     }
 
-    if (tier === "exec") {
+    const defaultDecision = this.getDefaultDecision(tier)
+    if (defaultDecision === "ask") {
       return { decision: "ask", reason: `Tool "${toolName}" requires confirmation (tier: ${tier})` }
+    }
+    if (defaultDecision === "deny") {
+      return { decision: "deny", reason: `Tool "${toolName}" is denied by default for tier: ${tier}` }
     }
 
     return { decision: "allow" }

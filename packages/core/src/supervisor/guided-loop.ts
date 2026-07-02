@@ -320,8 +320,9 @@ async function collectSupervisorStreamText(
   messages: ChatMessage[],
   target: ModelTarget,
   signal?: AbortSignal,
-): Promise<{ text: string; error?: string }> {
-  let output = ""
+): Promise<{ text: string; reasoning: string; error?: string }> {
+  let text = ""
+  let reasoning = ""
   try {
     const stream = client.chatCompletionsStream(messages, {
       apiKey: target.apiKey ?? "",
@@ -335,21 +336,22 @@ async function collectSupervisorStreamText(
 
     for await (const event of stream) {
       if (event.type === "text_delta") {
-        output += event.delta
+        text += event.delta
       } else if (event.type === "reasoning_delta") {
-        output += event.delta
+        reasoning += event.delta
       } else if (event.type === "error") {
-        return { text: output, error: event.message }
+        return { text, reasoning, error: event.message }
       }
     }
   } catch (err) {
     return {
-      text: output,
+      text,
+      reasoning,
       error: err instanceof Error ? err.message : String(err),
     }
   }
 
-  return { text: output }
+  return { text, reasoning }
 }
 
 /**

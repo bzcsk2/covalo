@@ -41,11 +41,14 @@ describe("native sandbox fixture verifier contract", () => {
   beforeAll(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "covalo-verifier-contract-"));
     process.env.COVALO_ROOT = tmpDir;
+    // Direct verifier execution required for these fixtures running without sandbox
+    process.env.COVALO_ALLOW_DIRECT_VERIFIER = "1";
   });
 
   afterAll(() => {
     rmSync(tmpDir, { recursive: true, force: true });
     delete process.env.COVALO_ROOT;
+    delete process.env.COVALO_ALLOW_DIRECT_VERIFIER;
   });
 
   it("all sandbox fixtures are registered", () => {

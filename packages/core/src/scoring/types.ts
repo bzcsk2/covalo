@@ -83,6 +83,8 @@ export interface SupervisorRunAssessment {
   summary: string
   dimensions?: Partial<Record<AgentScoringDimension, number>>
   completed?: boolean
+  /** Whether `completed` was explicitly present in the LLM output (vs absent = undefined) */
+  completedKnown?: boolean
   verificationPassed?: boolean
   safetyIssue?: boolean
   promptStrategies?: AgentPromptStrategyAdjustment[]

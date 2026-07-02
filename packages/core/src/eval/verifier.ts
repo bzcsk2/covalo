@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, relative, isAbsolute } from "node:path";
 import type { EvalCaseManifest, VerifierResult, FileAssertion } from "./types";
 import type { SandboxProvider, SandboxCommand } from "../sandbox/types";
 
@@ -104,11 +104,82 @@ async function runCommandViaProvider(
   };
 }
 
+/**
+ * Check whether direct command verifier execution is allowed.
+ * Default is off (fail-closed). Set COVALO_ALLOW_DIRECT_VERIFIER=1 to enable.
+ */
+function isDirectVerifierAllowed(): boolean {
+  return process.env.COVALO_ALLOW_DIRECT_VERIFIER === "1";
+}
+
+/**
+ * Validate and resolve a verifier script path.
+ * Returns the resolved absolute path if valid, or an error string.
+ */
+function resolveVerifierScriptPath(
+  workspaceDir: string,
+  scriptPath: string,
+): { resolved: string } | { error: string } {
+  if (!scriptPath || typeof scriptPath !== "string") {
+    return { error: "scriptPath must be a non-empty string" };
+  }
+
+  // Reject NUL character
+  if (scriptPath.includes("\0")) {
+    return { error: "scriptPath contains NUL character" };
+  }
+
+  // Reject shell metacharacters
+  // eslint-disable-next-line no-control-regex
+  const shellMeta = /[;&|<>`]|\$\(|\n|\r/;
+  if (shellMeta.test(scriptPath)) {
+    return { error: "scriptPath contains shell metacharacters" };
+  }
+
+  const resolved = resolve(workspaceDir, scriptPath);
+  const rel = relative(workspaceDir, resolved);
+
+  // Must be contained within workspaceDir
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    return { error: `scriptPath must be within workspace directory` };
+  }
+
+  return { resolved };
+}
+
+/**
+ * Warn via process.stderr when direct verifier override is used.
+ */
+function emitDirectVerifierWarning(kind: string): void {
+  // Use stderr to avoid interfering with structured output
+  process.stderr.write(
+    `[covalo] WARN: Direct ${kind} verifier execution enabled by COVALO_ALLOW_DIRECT_VERIFIER=1. ` +
+    `This mode is intended only for trusted local evals.\n`,
+  );
+}
+
 async function runCommandDirect(
   command: string,
   manifest: EvalCaseManifest,
   workspaceDir: string,
 ): Promise<VerifierResult> {
+  // Fail-closed: no sandbox provider → disabled by default
+  if (!isDirectVerifierAllowed()) {
+    return {
+      passed: false,
+      verdict: "error",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      details: [
+        "Direct command verifier disabled; configure sandbox provider or " +
+        "set COVALO_ALLOW_DIRECT_VERIFIER=1 for trusted local evals.",
+      ],
+    };
+  }
+
+  emitDirectVerifierWarning("command");
+
   const timeout = manifest.verifier.timeoutMs ?? 60_000;
   try {
     const { execSync } = await import("node:child_process");
@@ -121,7 +192,10 @@ async function runCommandDirect(
     });
 
     const stdout = output?.toString() ?? "";
-    const details: string[] = ["Command executed successfully"];
+    const details: string[] = [
+      "Command executed successfully",
+      "Direct verifier execution enabled by COVALO_ALLOW_DIRECT_VERIFIER=1",
+    ];
 
     const fileResults = await runFileAssertions(
       manifest.verifier.fileAssertions ?? [],
@@ -215,11 +289,26 @@ async function runScriptVerifier(
     };
   }
 
+  // Validate and resolve scriptPath — prevents shell injection
+  const pathResult = resolveVerifierScriptPath(workspaceDir, scriptPath);
+  if ("error" in pathResult) {
+    return {
+      passed: false,
+      verdict: "error",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      details: [`Invalid scriptPath: ${pathResult.error}`],
+    };
+  }
+  const resolvedScriptPath = pathResult.resolved;
+
   const provider = _sandboxProvider;
   if (provider) {
     const timeout = manifest.verifier.timeoutMs ?? 60_000;
+    // Use validated resolved path for sandbox provider
     const result = await provider.run({
-      command: `bun run ${scriptPath}`,
+      command: `bun run ${resolvedScriptPath}`,
       cwd: workspaceDir,
       timeoutMs: timeout,
       allowNetwork: false,
@@ -247,9 +336,26 @@ async function runScriptVerifier(
     };
   }
 
+  // Fail-closed: no sandbox provider → disabled by default
+  if (!isDirectVerifierAllowed()) {
+    return {
+      passed: false,
+      verdict: "error",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      details: [
+        "Direct script verifier disabled; configure sandbox provider or " +
+        "set COVALO_ALLOW_DIRECT_VERIFIER=1 for trusted local evals.",
+      ],
+    };
+  }
+
+  emitDirectVerifierWarning("script");
+
   try {
-    const { execSync } = await import("node:child_process");
-    const output = execSync(`bun run ${scriptPath}`, {
+    const { execFileSync } = await import("node:child_process");
+    const output = execFileSync("bun", ["run", resolvedScriptPath], {
       cwd: workspaceDir,
       encoding: "utf-8",
       maxBuffer: 10 * 1024 * 1024,

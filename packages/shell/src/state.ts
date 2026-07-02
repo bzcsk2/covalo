@@ -49,7 +49,8 @@ export class AppState {
   }
 
   private notify(): void {
-    for (const cb of this.listeners) {
+    // Snapshot to prevent concurrent modification issues
+    for (const cb of [...this.listeners]) {
       try { cb(this.snapshot) } catch (e) { console.error("AppState listener error:", e) }
     }
   }

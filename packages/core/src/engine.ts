@@ -824,6 +824,9 @@ Follow the current workflow phase. Do not perform Worker tasks yourself.`
   }
 
   async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor", mode?: WorkflowMode, workflowPhase?: WorkflowPhase): AsyncGenerator<LoopEvent> {
+    // C1: Wait for context policy to load before proceeding
+    await this.contextPolicyLoadPromise
+
     const diagnosticsEnabled = this.logger.isEnabled("error")
     const submitStartedAt = diagnosticsEnabled ? Date.now() : 0
     const submitId = diagnosticsEnabled ? randomUUID() : undefined
@@ -1523,7 +1526,7 @@ Do not change goal status.`
       }
 
       return {
-        status: "completed" as const,
+        status: workerCancelled ? "cancelled" as const : workerFailed ? "failed" as const : "completed" as const,
         id: `subagent_${randomUUID().slice(0, 8)}`,
         subagent_type: def.name,
         description: options.description,

@@ -139,7 +139,9 @@ export async function evaluatePermission(
       toolName: tc.function.name, args, tier: handler.approval,
       permissionDecision: "ask",
     })
-  } catch { hookDecision = "deny" }
+  } catch {
+    hookDecision = "deny"
+  }
 
   if (hookDecision === "allow") return "allow"
   if (hookDecision === "deny") return "deny"

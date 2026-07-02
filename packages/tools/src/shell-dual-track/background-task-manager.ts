@@ -47,6 +47,8 @@ export interface BackgroundTask {
   /** spawn 时的根 PID */
   rootPid: number | null
   backend: ShellBackendId
+  /** hard timeout timer，用于超时后清理 */
+  hardTimer?: ReturnType<typeof setTimeout> | null
 }
 
 /** 任务状态摘要（返回给调用方，不含 child 引用） */
@@ -280,6 +282,7 @@ export class BackgroundTaskManager extends EventEmitter {
     child.stderr?.on("data", (data: Buffer) => this.appendOutput(task, data, "[stderr] "))
 
     child.on("close", (code) => {
+      if (task.hardTimer) { clearTimeout(task.hardTimer); task.hardTimer = null }
       if (task.status === "running") {
         task.status = code === 0 ? "completed" : "failed"
         task.exitCode = code
@@ -291,6 +294,7 @@ export class BackgroundTaskManager extends EventEmitter {
     })
 
     child.on("error", (err) => {
+      if (task.hardTimer) { clearTimeout(task.hardTimer); task.hardTimer = null }
       if (task.status === "running") {
         task.status = "failed"
         task.error = `进程启动失败: ${err.message}`
@@ -301,7 +305,7 @@ export class BackgroundTaskManager extends EventEmitter {
       }
     })
 
-    setTimeout(() => {
+    task.hardTimer = setTimeout(() => {
       if (task.status === "running") {
         task.status = "timeout"
         task.error = `执行超时 (${formatElapsed(hardTimeoutMs)})`
@@ -403,6 +407,7 @@ export class BackgroundTaskManager extends EventEmitter {
     task.status = "killed"
     task.endTime = Date.now()
     task.error = "被用户终止"
+    if (task.hardTimer) { clearTimeout(task.hardTimer); task.hardTimer = null }
     this.appendOutput(task, Buffer.from("[terminated by user]\n"), "")
     this.killTaskProcesses(task)
     this.closeLogStream(task)
@@ -433,6 +438,8 @@ export class BackgroundTaskManager extends EventEmitter {
       if (task.status === "running") {
         this.killTaskProcesses(task)
       }
+      if (task.hardTimer) { clearTimeout(task.hardTimer); task.hardTimer = null }
+      this.closeLogStream(task)
     }
     for (const timer of this.cleanupTimers.values()) {
       clearTimeout(timer)

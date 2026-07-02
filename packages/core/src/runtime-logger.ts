@@ -130,7 +130,21 @@ class RuntimeLogSink {
       this.flushTimer = null
     }
     if (this.pendingOverflow) {
-      this.pendingOverflow.push(...this.queue)
+      // Trim pendingOverflow before appending new records to bound memory
+      const maxOverflowRecords = this.maxQueueSize
+      if (this.pendingOverflow.length >= maxOverflowRecords) {
+        const excess = this.pendingOverflow.length - maxOverflowRecords
+        this.pendingOverflow.splice(0, excess)
+        this.droppedCount += excess
+      }
+      const capacity = maxOverflowRecords - this.pendingOverflow.length
+      if (this.queue.length > capacity) {
+        this.droppedCount += this.queue.length - capacity
+        this.queue = this.queue.slice(this.queue.length - capacity)
+      }
+      for (let i = 0; i < this.queue.length; i++) {
+        this.pendingOverflow.push(this.queue[i])
+      }
       this.queue = []
       this.bufferBytes = 0
       return

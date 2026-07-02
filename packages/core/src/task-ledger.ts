@@ -62,6 +62,11 @@ const WRITE_TOOLS = new Set(["write_file", "edit", "NotebookEdit"])
 const READ_TOOLS = new Set(["read_file"])
 const SHELL_TOOLS = new Set(["bash"])
 
+/** 集合上限防止内存泄漏 */
+const MAX_COMMANDS_RUN = 200
+const MAX_CHANGED_FILES = 500
+const MAX_BLOCKERS = 100
+
 /** 多步骤任务关键词启发式 */
 const PLAN_HINTS = [
   /\b(refactor|migrate|rewrite|reorganize)\b/i,
@@ -335,6 +340,9 @@ export class TaskLedgerTracker {
   recordFileChange(filePath: string): void {
     const normalized = filePath.replace(/\\/g, "/")
     if (!this.changedFiles.includes(normalized)) {
+      if (this.changedFiles.length >= MAX_CHANGED_FILES) {
+        this.changedFiles.shift()
+      }
       this.changedFiles.push(normalized)
     }
     this.verificationPending = true
@@ -347,6 +355,9 @@ export class TaskLedgerTracker {
     result: { content?: string; metadata?: Record<string, unknown> },
   ): void {
     const entry: CommandRunEntry = { commandHash: hashCommand(command), success }
+    if (this.commandsRun.length >= MAX_COMMANDS_RUN) {
+      this.commandsRun.shift()
+    }
     this.commandsRun.push(entry)
 
     if (this.isVerificationCommand(command)) {
@@ -382,6 +393,9 @@ export class TaskLedgerTracker {
   /** 添加阻塞项 */
   addBlocker(message: string): void {
     if (!this.blockers.includes(message)) {
+      if (this.blockers.length >= MAX_BLOCKERS) {
+        this.blockers.shift()
+      }
       this.blockers.push(message)
     }
   }

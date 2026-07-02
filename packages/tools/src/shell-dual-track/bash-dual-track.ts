@@ -390,8 +390,8 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
       }
     }
 
-    const cleanup = () => {
-      if (sigtermTimer) {
+    const cleanup = (keepKillTimer = false) => {
+      if (!keepKillTimer && sigtermTimer) {
         clearTimeout(sigtermTimer)
         sigtermTimer = null
       }
@@ -430,8 +430,25 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
     const hardTimer = setTimeout(() => {
       if (escalated || done) return
       timedOut = true
-      killChild(true)
-      finish(124)
+      killChild(true) // SIGTERM first; the 5s SIGKILL backup timer remains active
+      done = true
+      cleanup(true) // keepKillTimer — don't clear the SIGKILL timer
+      if (opts.signal) {
+        opts.signal.removeEventListener("abort", onAbort)
+      }
+      const stdoutFinal = finalizeBounded(stdoutBuf)
+      const stderrFinal = finalizeBounded(stderrBuf)
+      resolvePromise({
+        mode: "foreground",
+        backend: opts.backend.id,
+        command: opts.command,
+        cwd: opts.cwd,
+        stdout: stdoutFinal.text,
+        stderr: stderrFinal.text,
+        exitCode: 124,
+        timedOut: true,
+        classifiedAs: classifyShellCommand(opts.command),
+      })
     }, opts.timeoutMs)
 
     let softTimer: ReturnType<typeof setTimeout> | null = null
@@ -513,6 +530,11 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
       if (escalated || done) return
       if (softTimer) clearTimeout(softTimer)
       clearTimeout(hardTimer)
+      // Process closed (SIGTERM worked or it exited); clean up SIGKILL timer
+      if (sigtermTimer) {
+        clearTimeout(sigtermTimer)
+        sigtermTimer = null
+      }
       finish(code ?? 0)
     })
   })

@@ -77,19 +77,91 @@ export type ModelRestoreFn = () => Promise<void>
 export type ApiKeyCheckFn = (modelTarget: string) => string | null
 
 /**
+ * Extract a balanced JSON object starting at openBraceIndex.
+ */
+function extractBalancedJson(text: string, openBraceIndex: number): { json: string; end: number } | null {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = openBraceIndex; i < text.length; i++) {
+    const ch = text[i]!
+    if (inString) {
+      if (escaped) { escaped = false; continue }
+      if (ch === "\\") { escaped = true; continue }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === "{") depth++
+    else if (ch === "}") {
+      depth--
+      if (depth === 0) return { json: text.slice(openBraceIndex, i + 1), end: i + 1 }
+    }
+  }
+  return null
+}
+
+/**
+ * Coerce a value to boolean, accepting common LLM string variants.
+ * Returns undefined when the value cannot be coered (absent or unrecognized).
+ */
+function coerceBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    const lower = value.toLowerCase().trim()
+    if (lower === "true" || lower === "yes" || lower === "pass") return true
+    if (lower === "false" || lower === "no" || lower === "fail") return false
+  }
+  return undefined
+}
+
+/**
  * Try to parse a JSON object from a text response.
+ * Tries all fenced blocks first, then all balanced JSON objects, then full trim.
  */
 function tryParseJson(text: string): Record<string, unknown> | null {
-  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-  const jsonStr = match ? match[1]!.trim() : text.trim()
+  // 1. Try all fenced JSON blocks
+  const fenceRe = /```(?:json)?\s*\n?([\s\S]*?)```/g
+  let match: RegExpExecArray | null
+  while ((match = fenceRe.exec(text)) !== null) {
+    const candidate = match[1]!.trim()
+    if (!candidate) continue
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  // 2. Try all balanced JSON objects
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue
+    const extracted = extractBalancedJson(text, i)
+    if (!extracted) continue
+    try {
+      const parsed = JSON.parse(extracted.json)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  // 3. Try full trim
+  const trimmed = text.trim()
   try {
-    const parsed = JSON.parse(jsonStr)
+    const parsed = JSON.parse(trimmed)
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>
     }
   } catch {
-    // fallback
+    // noop
   }
+
   return null
 }
 
@@ -99,10 +171,14 @@ function tryParseJson(text: string): Record<string, unknown> | null {
 function tryParseSupervisorAssessment(text: string): SupervisorRunAssessment | null {
   const parsed = tryParseJson(text)
   if (!parsed) return null
+  const rawCompleted = parsed.completed
+  const completed = coerceBoolean(rawCompleted) ?? false
+  const completedKnown = "completed" in parsed
   return {
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
-    completed: parsed.completed === true,
-    verificationPassed: parsed.verificationPassed === true,
+    completed,
+    completedKnown,
+    verificationPassed: coerceBoolean(parsed.verificationPassed) ?? false,
     safetyIssue: parsed.safetyIssue === true,
     dimensions: parsed.dimensions && typeof parsed.dimensions === "object"
       ? parsed.dimensions as Partial<Record<string, number>>

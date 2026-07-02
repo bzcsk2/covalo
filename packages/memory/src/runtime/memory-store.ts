@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, renameSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { homedir } from "node:os"
+import { randomUUID } from "node:crypto"
 
 export interface MemoryStoreEntry<T = unknown> {
   key: string
@@ -17,6 +18,8 @@ export interface MemoryUpdateOp {
 
 export class MemoryStore {
   private baseDir: string
+  /** Per-key lock chain to prevent concurrent set/update/delete races on the same scope/key */
+  private locks = new Map<string, Promise<void>>()
 
   constructor(baseDir?: string) {
     this.baseDir = baseDir ?? resolve(homedir(), ".covalo", "memory")
@@ -48,6 +51,29 @@ export class MemoryStore {
     this.validatePathComponent(key, "key")
   }
 
+  /**
+   * Per-key async lock to serialize concurrent set/update/delete on the same scope/key.
+   * Uses a promise chain so queued operations execute strictly in order.
+   */
+  private async withKeyLock<T>(scope: string, key: string, fn: () => Promise<T>): Promise<T> {
+    const lockKey = `${scope}\0${key}`
+    const prev = this.locks.get(lockKey) ?? Promise.resolve()
+    let release!: () => void
+    const next = new Promise<void>((resolve) => { release = resolve })
+    // Chain: wait for previous, run fn, then release
+    this.locks.set(lockKey, prev.then(() => next, () => next))
+    await prev
+    try {
+      return await fn()
+    } finally {
+      release()
+      // Clean up lock entry only if it's still the current chain tail
+      if (this.locks.get(lockKey) === next) {
+        this.locks.delete(lockKey)
+      }
+    }
+  }
+
   async get<T = unknown>(scope: string, key: string): Promise<T | null> {
     this.validateAccess(scope, key)
     try {
@@ -59,48 +85,66 @@ export class MemoryStore {
   }
 
   async set<T = unknown>(scope: string, key: string, value: T): Promise<T> {
-    this.validateAccess(scope, key)
-    const path = this.filePath(scope, key)
-    const data = JSON.stringify(value, null, 2)
-    const tmp = path + ".tmp"
-    writeFileSync(tmp, data, "utf8")
-    try {
-      const { renameSync } = await import("node:fs")
-      renameSync(tmp, path)
-    } catch {
-      writeFileSync(path, data, "utf8")
-      try { unlinkSync(tmp) } catch {}
-    }
-    return value
+    return this.withKeyLock(scope, key, async () => {
+      this.validateAccess(scope, key)
+      const path = this.filePath(scope, key)
+      const data = JSON.stringify(value, null, 2)
+      // Use unique temp file to prevent cross-key or concurrent collisions
+      const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
+      writeFileSync(tmp, data, "utf8")
+      try {
+        renameSync(tmp, path)
+      } catch {
+        writeFileSync(path, data, "utf8")
+        try { unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+      }
+      return value
+    })
   }
 
   async update<T = unknown>(scope: string, key: string, ops: MemoryUpdateOp[]): Promise<T> {
-    this.validateAccess(scope, key)
-    let current = await this.get<Record<string, unknown>>(scope, key) ?? {} as Record<string, unknown>
-    for (const op of ops) {
-      if (op.op === "set") {
-        this.setNested(current, op.path, op.value)
-      } else if (op.op === "delete") {
-        this.deleteNested(current, op.path)
-      } else if (op.op === "append") {
-        const arr = this.getNested(current, op.path) as unknown[]
-        if (!Array.isArray(arr)) {
-          this.setNested(current, op.path, [op.value])
-        } else {
-          arr.push(op.value)
+    return this.withKeyLock(scope, key, async () => {
+      this.validateAccess(scope, key)
+      // Read inside the lock to prevent lost updates
+      let current = await this.get<Record<string, unknown>>(scope, key) ?? {} as Record<string, unknown>
+      for (const op of ops) {
+        if (op.op === "set") {
+          this.setNested(current, op.path, op.value)
+        } else if (op.op === "delete") {
+          this.deleteNested(current, op.path)
+        } else if (op.op === "append") {
+          const arr = this.getNested(current, op.path) as unknown[]
+          if (!Array.isArray(arr)) {
+            this.setNested(current, op.path, [op.value])
+          } else {
+            arr.push(op.value)
+          }
         }
       }
-    }
-    return this.set(scope, key, current) as Promise<T>
+      // Write back inside the same lock
+      const path = this.filePath(scope, key)
+      const data = JSON.stringify(current, null, 2)
+      const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
+      writeFileSync(tmp, data, "utf8")
+      try {
+        renameSync(tmp, path)
+      } catch {
+        writeFileSync(path, data, "utf8")
+        try { unlinkSync(tmp) } catch {}
+      }
+      return current as T
+    })
   }
 
   async delete(scope: string, key: string): Promise<void> {
-    this.validateAccess(scope, key)
-    try {
-      unlinkSync(this.filePath(scope, key))
-    } catch {
-      // Already deleted
-    }
+    return this.withKeyLock(scope, key, async () => {
+      this.validateAccess(scope, key)
+      try {
+        unlinkSync(this.filePath(scope, key))
+      } catch {
+        // Already deleted
+      }
+    })
   }
 
   async list<T = unknown>(scope: string): Promise<T[]> {

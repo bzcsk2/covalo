@@ -62,14 +62,24 @@ export function scoreToGrade(score: number): AgentScoreGrade {
 }
 
 export function normalizeRubric(rubric: AgentScoreRubric = DEFAULT_AGENT_SCORE_RUBRIC): AgentScoreRubric {
+  // Build full dimensions: merge custom overrides on top of defaults
+  const dimensions: Record<string, { weight: number; description: string }> = {}
+  for (const dim of AGENT_SCORING_DIMENSIONS) {
+    const custom = rubric.dimensions[dim]
+    const def = DEFAULT_AGENT_SCORE_RUBRIC.dimensions[dim]
+    dimensions[dim] = custom ? { ...def, ...custom } : { ...def }
+  }
+
+  // Compute total from the full set of dimensions
   const total = AGENT_SCORING_DIMENSIONS.reduce(
-    (sum, dim) => sum + (rubric.dimensions[dim]?.weight ?? 0),
+    (sum, dim) => sum + (dimensions[dim]?.weight ?? 0),
     0,
   )
   if (total <= 0) return DEFAULT_AGENT_SCORE_RUBRIC
-  const dimensions = { ...rubric.dimensions }
+
+  // Normalize
   for (const dim of AGENT_SCORING_DIMENSIONS) {
-    const current = dimensions[dim] ?? DEFAULT_AGENT_SCORE_RUBRIC.dimensions[dim]
+    const current = dimensions[dim]
     dimensions[dim] = {
       ...current,
       weight: current.weight / total,

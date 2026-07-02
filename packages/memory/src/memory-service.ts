@@ -120,6 +120,10 @@ export class MemoryService {
   private viewerServer?: { close: (cb: () => void) => void }
   private _ready = false
   private logLines: string[] = []
+  /** C9: Idempotent start tracking */
+  private _started = false
+  private _startPromise?: Promise<void>
+  private _intervalFailCount = 0
 
   constructor(userConfig: MemoryServiceConfig = {}) {
     this.userConfig = userConfig
@@ -133,6 +137,20 @@ export class MemoryService {
    * search indices, timers.
    */
   async start(): Promise<void> {
+    // C9: Idempotent start — skip if already started or start is in flight
+    if (this._started) return
+    if (this._startPromise) return this._startPromise
+
+    this._startPromise = this._doStart()
+    try {
+      await this._startPromise
+      this._started = true
+    } finally {
+      this._startPromise = undefined
+    }
+  }
+
+  private async _doStart(): Promise<void> {
     const config = this.config
     const embeddingConfig = loadEmbeddingConfig()
     const fallbackConfig = loadFallbackConfig()
@@ -198,6 +216,7 @@ export class MemoryService {
   }
 
   async stop(): Promise<void> {
+    await this._startPromise // Wait for any in-flight start
     for (const t of this.timers) clearInterval(t)
     this.timers = []
     this.healthMonitor?.stop()
@@ -205,6 +224,7 @@ export class MemoryService {
     this.indexPersistence?.stop()
     await this.indexPersistence?.save().catch(() => {})
     this._ready = false
+    this._started = false
   }
 
   getSdk(): MemoryRuntimeSdk { return this.sdk }

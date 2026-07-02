@@ -96,17 +96,18 @@ function getObjectiveSignals(workspaceDir: string): ObjectiveSignals {
 
     const changedFiles = diffNames ? diffNames.split("\n").filter(Boolean).length : 0;
 
-    const diffSize = execSync("git diff 2>&1 | wc -l", {
+    const diffOutput = execSync("git diff 2>&1", {
       cwd: workspaceDir,
       encoding: "utf-8",
       stdio: "pipe",
-    }).toString().trim();
+    }).toString();
+    const diffSize = diffOutput ? diffOutput.split(/\r?\n/).filter(Boolean).length : 0;
 
     const cleanGitDiff = !diffNames;
 
     return {
       changedFiles,
-      diffSize: parseInt(diffSize, 10) || 0,
+      diffSize: diffSize || 0,
       toolFailureCount: 0,
       verificationCommandsRun: 0,
       cleanGitDiff,
@@ -137,10 +138,16 @@ function computeScore(
   const SW = 0.1;
 
   let verifierScore = 0;
+  let verifierSkipped = false;
   if (verifierResult) {
     if (verifierResult.verdict === "pass") verifierScore = 100;
     else if (verifierResult.verdict === "error") verifierScore = 0;
     else verifierScore = 0;
+  } else {
+    // verifier was not run (skipped) — treat as neutral instead of failure
+    verifierSkipped = true;
+    // When skipped, renormalize without verifier weight
+    // Use only objective + supervisor weights
   }
 
   let objectiveScore = 50;
@@ -166,27 +173,38 @@ function computeScore(
     }
   }
 
-  let finalScore =
-    verifierScore * VW + objectiveScore * OW + supervisorScore * SW;
+  let finalScore: number;
+  if (verifierSkipped) {
+    // Renormalize without verifier weight
+    const remainingWeight = OW + SW;
+    if (remainingWeight > 0) {
+      finalScore = (objectiveScore * OW + supervisorScore * SW) / remainingWeight;
+    } else {
+      finalScore = 0;
+    }
+  } else {
+    finalScore = verifierScore * VW + objectiveScore * OW + supervisorScore * SW;
 
-  if (verifierResult && verifierResult.verdict === "fail") {
-    finalScore = Math.min(finalScore, 40);
-  }
-  if (verifierResult && verifierResult.verdict === "error") {
-    finalScore = 0;
+    if (verifierResult && verifierResult.verdict === "fail") {
+      finalScore = Math.min(finalScore, 40);
+    }
+    if (verifierResult && verifierResult.verdict === "error") {
+      finalScore = 0;
+    }
   }
 
   const hasPolicyFailures = policyGates.some(g => !g.passed);
 
   return {
-    verifierWeight: VW,
-    objectiveWeight: OW,
-    supervisorWeight: SW,
+    verifierWeight: verifierSkipped ? 0 : VW,
+    objectiveWeight: verifierSkipped ? OW / (OW + SW) : OW,
+    supervisorWeight: verifierSkipped ? SW / (OW + SW) : SW,
     verifierScore,
     objectiveScore,
     supervisorScore,
     finalScore: hasPolicyFailures ? 0 : Math.round(finalScore * 100) / 100,
     scoreIneligible: hasPolicyFailures,
+    verifierSkipped,
   };
 }
 
@@ -485,14 +503,13 @@ async function runSingleCase(
           await writeCaseArtifact(caseDir, "action-certificate.json", JSON.stringify(completed, null, 2));
         }
       } else {
-        const prevCwd = process.cwd();
-        process.chdir(workspaceDir);
         _currentCaseWorkspace = workspaceDir;
         try {
+          // C5: process.chdir removed — cwd is passed via executeWorker context
+          // or embedded in the prompt alone. All execSync calls already have { cwd }.
           workerOutput = await options.executeWorker(workerPrompt);
         } finally {
           _currentCaseWorkspace = null;
-          process.chdir(prevCwd);
         }
         const workerFinishedAt = new Date().toISOString();
         emitObs("eval.case.worker.done", "info", { caseId, outputLength: workerOutput.length });

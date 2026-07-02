@@ -44,8 +44,9 @@ export class DualSession {
   private logger: RuntimeLogger
   /** 已采用的 advice 键（workflowId:iteration），用于防止重复采用 */
   private adoptedAdviceKeys: Set<string> = new Set()
-  /** 已执行的工具调用 ID，用于防止重复执行 */
+  /** 已执行的工具调用 ID，用于防止重复执行（上限 5000 防止内存泄漏） */
   private executedToolCallIds: Set<string> = new Set()
+  private static readonly MAX_EXECUTED_TOOL_CALL_IDS = 5000
 
   constructor(options: DualSessionOptionsExtended = {}) {
     const sessionId = options.sessionId ?? randomUUID()
@@ -196,9 +197,18 @@ export class DualSession {
   }
 
   /**
-   * 记录工具调用 ID（防止重复执行）
+   * 记录工具调用 ID（防止重复执行）。
+   * 达到上限时驱逐最旧的条目（Set 迭代顺序即插入顺序）。
    */
   recordToolCallExecution(toolCallId: string): void {
+    // Evict oldest entries when at capacity
+    if (this.executedToolCallIds.size >= DualSession.MAX_EXECUTED_TOOL_CALL_IDS) {
+      const entries = [...this.executedToolCallIds]
+      const toRemove = entries.slice(0, Math.floor(DualSession.MAX_EXECUTED_TOOL_CALL_IDS / 4))
+      for (const id of toRemove) {
+        this.executedToolCallIds.delete(id)
+      }
+    }
     this.executedToolCallIds.add(toolCallId)
   }
 

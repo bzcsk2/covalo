@@ -3,7 +3,7 @@ import type { BridgedHook } from "./hook-bridge.js"
 import { parseEccHooks } from "./hook-bridge.js"
 import type { ResolvedContentPack, ContentPackDiagnostic } from "./types.js"
 import { spawn } from "node:child_process"
-import { resolve } from "node:path"
+import { resolve, relative, isAbsolute } from "node:path"
 
 export interface EccHookAdapterOptions {
   hookManager: HookManager
@@ -285,13 +285,222 @@ export function clearEccHookState(cp: ResolvedContentPack): void {
 }
 
 /**
+ * Check whether unsafe (sh -c) plugin hook execution is allowed.
+ * Default is off (fail-closed). Set COVALO_ALLOW_UNSAFE_PLUGIN_HOOKS=1 to enable.
+ */
+function isUnsafePluginHookAllowed(): boolean {
+  return process.env.COVALO_ALLOW_UNSAFE_PLUGIN_HOOKS === "1"
+}
+
+/**
+ * Safely parse a hook command into executable + args for spawn().
+ *
+ * In safe mode:
+ * - Rejects shell metacharacters
+ * - Allows $CLAUDE_PLUGIN_ROOT/... or ${CLAUDE_PLUGIN_ROOT}/... prefix
+ * - Allows relative paths (resolved against pluginRoot, must be contained)
+ * - Returns { executable, args } for spawn(executable, args, { shell: false })
+ *
+ * In unsafe mode (env override), returns null to signal "use sh -c as-is".
+ */
+function parseHookCommand(
+  command: string,
+  pluginRoot: string,
+): { executable: string; args: string[] } | { error: string } | null {
+  // Unsafe mode: skip parsing, caller will use sh -c
+  if (isUnsafePluginHookAllowed()) {
+    return null
+  }
+
+  if (!command || typeof command !== "string") {
+    return { error: "Hook command must be a non-empty string" }
+  }
+
+  // Reject NUL character
+  if (command.includes("\0")) {
+    return { error: "Hook command contains NUL character" }
+  }
+
+  // Reject shell metacharacters
+  const shellMeta = /[;&|<>`]|\$\(|\n|\r/
+  if (shellMeta.test(command)) {
+    return { error: "Hook command contains shell metacharacters; rejected in safe mode" }
+  }
+
+  // Handle $CLAUDE_PLUGIN_ROOT/... prefix (without shell substitution — we resolve it)
+  let resolvedPath: string | null = null
+  let restArgs: string[] = []
+
+  const dollarVarMatch = command.match(/^\$CLAUDE_PLUGIN_ROOT(\/.+)$/)
+  const dollarBraceMatch = command.match(/^\$\{CLAUDE_PLUGIN_ROOT\}(\/.+)$/)
+
+  if (dollarVarMatch) {
+    resolvedPath = resolve(pluginRoot, dollarVarMatch[1])
+    restArgs = []
+  } else if (dollarBraceMatch) {
+    resolvedPath = resolve(pluginRoot, dollarBraceMatch[1])
+    restArgs = []
+  } else {
+    // Plain command — split into argv-style tokens (simple split on whitespace,
+    // not shell-style parsing, since shell metacharacters are already rejected)
+    const tokens = command.split(/\s+/).filter(Boolean)
+    if (tokens.length === 0) {
+      return { error: "Empty hook command" }
+    }
+    const first = tokens[0]
+    const rest = tokens.slice(1)
+
+    // If first token is a relative path (contains / or starts with ./)
+    if (first.includes("/") || first.startsWith(".")) {
+      resolvedPath = resolve(pluginRoot, first)
+      restArgs = rest
+    } else {
+      // Simple command name like "node", "python3" — allow as-is (must be in PATH)
+      resolvedPath = first
+      restArgs = rest
+    }
+  }
+
+  // If we resolved a path, check containment within pluginRoot
+  if (resolvedPath && (resolvedPath.includes("/") || resolvedPath.startsWith("."))) {
+    const absPath = resolve(pluginRoot, resolvedPath)
+    const finalPath = isAbsolute(resolvedPath) ? resolvedPath : absPath
+    const rel = relative(pluginRoot, finalPath)
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      return { error: `Hook command resolves outside plugin root: ${command}` }
+    }
+    resolvedPath = finalPath
+  }
+
+  return {
+    executable: resolvedPath ?? "sh",
+    args: restArgs,
+  }
+}
+
+/**
  * Execute a hook command with security constraints:
  * - cwd fixed to workspace root
  * - minimal environment (PATH only)
  * - timeout enforcement (child process is killed on timeout)
  * - stdout/stderr length caps
+ * - In safe mode (default): uses spawn(argv) instead of sh -c, rejects shell metacharacters
+ * - In unsafe mode (COVALO_ALLOW_UNSAFE_PLUGIN_HOOKS=1): uses sh -c for backward compat
  */
 async function executeHookCommandSafe(
+  command: string,
+  workspaceRoot: string,
+  pluginRoot: string,
+  timeoutMs: number,
+  stdoutMax: number,
+  stderrMax: number,
+): Promise<{ code: number | null; stdout: string; stderr: string; error?: string }> {
+  // Try to parse the command safely
+  const parsed = parseHookCommand(command, pluginRoot)
+
+  // If parsing returned an error, fail closed
+  if (parsed && "error" in parsed) {
+    return { code: null, stdout: "", stderr: "", error: parsed.error }
+  }
+
+  // If parsed is null, use legacy sh -c mode (unsafe override)
+  if (parsed === null) {
+    return executeHookCommandUnsafe(command, workspaceRoot, pluginRoot, timeoutMs, stdoutMax, stderrMax)
+  }
+
+  // Safe mode: use spawn(executable, args, { shell: false })
+  return executeHookCommandSpawn(parsed.executable, parsed.args, workspaceRoot, pluginRoot, timeoutMs, stdoutMax, stderrMax)
+}
+
+/**
+ * Execute a hook command using spawn(executable, args, { shell: false }) — safe mode.
+ */
+async function executeHookCommandSpawn(
+  executable: string,
+  args: string[],
+  workspaceRoot: string,
+  pluginRoot: string,
+  timeoutMs: number,
+  stdoutMax: number,
+  stderrMax: number,
+): Promise<{ code: number | null; stdout: string; stderr: string; error?: string }> {
+  return new Promise((resolve) => {
+    let stdout = ""
+    let stderr = ""
+    let timedOut = false
+    let settled = false
+
+    const child = spawn(executable, args, {
+      cwd: workspaceRoot,
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        CLAUDE_PLUGIN_ROOT: pluginRoot,
+        HOME: process.env.HOME ?? "",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      detached: true,
+    })
+
+    const killTree = () => {
+      try { process.kill(-child.pid!, "SIGTERM") } catch { /* already dead */ }
+      setTimeout(() => {
+        try { process.kill(-child.pid!, "SIGKILL") } catch { /* already dead */ }
+      }, 1000)
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      killTree()
+      settle({
+        code: null,
+        stdout,
+        stderr,
+        error: `Hook command timed out after ${timeoutMs}ms: ${executable} ${args.join(" ")}`,
+      })
+    }, timeoutMs)
+
+    const settle = (result: { code: number | null; stdout: string; stderr: string; error?: string }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { child.kill("SIGKILL") } catch { /* no-op */ }
+      resolve(result)
+    }
+
+    child.stdout?.on("data", (data: Buffer) => {
+      if (stdout.length < stdoutMax) {
+        stdout += data.toString("utf8").slice(0, stdoutMax - stdout.length)
+      }
+    })
+
+    child.stderr?.on("data", (data: Buffer) => {
+      if (stderr.length < stderrMax) {
+        stderr += data.toString("utf8").slice(0, stderrMax - stderr.length)
+      }
+    })
+
+    child.on("close", (code) => {
+      if (!timedOut) {
+        if (stdout.length >= stdoutMax) stdout += "\n[output truncated]"
+        if (stderr.length >= stderrMax) stderr += "\n[output truncated]"
+        settle({ code, stdout, stderr })
+      }
+    })
+
+    child.on("error", (err) => {
+      if (!timedOut) {
+        settle({ code: null, stdout, stderr, error: err.message })
+      }
+    })
+  })
+}
+
+/**
+ * Execute a hook command using sh -c (legacy unsafe mode).
+ * Only used when COVALO_ALLOW_UNSAFE_PLUGIN_HOOKS=1 is set.
+ */
+async function executeHookCommandUnsafe(
   command: string,
   workspaceRoot: string,
   pluginRoot: string,
@@ -309,7 +518,6 @@ async function executeHookCommandSafe(
       cwd: workspaceRoot,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
-        // ECC hook commands rely on CLAUDE_PLUGIN_ROOT for script resolution
         CLAUDE_PLUGIN_ROOT: pluginRoot,
         HOME: process.env.HOME ?? "",
       },
@@ -318,9 +526,7 @@ async function executeHookCommandSafe(
     })
 
     const killTree = () => {
-      // Kill the process group to terminate all descendants
       try { process.kill(-child.pid!, "SIGTERM") } catch { /* already dead */ }
-      // Grace period for descendants, then force kill
       setTimeout(() => {
         try { process.kill(-child.pid!, "SIGKILL") } catch { /* already dead */ }
       }, 1000)

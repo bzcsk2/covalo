@@ -310,6 +310,13 @@ describe("verifier edge cases", () => {
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, "app.ts"), "const greeting: string = 'hello';", "utf-8");
     writeFileSync(join(tmpDir, "secret.txt"), "hidden content", "utf-8");
+    // Direct verifier execution requires explicit opt-in
+    process.env.COVALO_ALLOW_DIRECT_VERIFIER = "1";
+  });
+
+  afterAll(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.COVALO_ALLOW_DIRECT_VERIFIER;
   });
 
   afterAll(() => {
