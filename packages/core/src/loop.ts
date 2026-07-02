@@ -336,6 +336,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     resetToolCallSeq()  // Reset per-turn sequence for ID normalization
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
+      yield { role: "done", metadata: { reason: "interrupted" } }
       return
     }
 
@@ -372,6 +373,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       }
     }
 
+    try {
     streamLoop:
     for await (const event of client.chatCompletionsStream(ctx.buildMessages(), {
       apiKey: config.apiKey,
@@ -392,6 +394,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     })) {
       if (isInterrupted()) {
         yield { role: "status", content: "interrupted" }
+        yield { role: "done", metadata: { reason: "interrupted" } }
         return
       }
 
@@ -692,10 +695,29 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           break
       }
     }
+    } catch (err) {
+      // L1/L3: 统一处理流式 throw（AbortError / 网络错误 / JSON 解析错误）
+      // 原先 for await 无 try-catch，throw 会直接击穿循环
+      if (isInterrupted() || (err instanceof Error && (err.name === "AbortError" || signal.aborted))) {
+        yield { role: "status", content: "interrupted" }
+        yield { role: "done", metadata: { reason: "interrupted" } }
+        return
+      }
+      // 转换为 streamError，走下方重试路径（与 emit error 事件一致）
+      streamError = {
+        role: "error",
+        content: err instanceof Error ? err.message : String(err),
+        severity: "error" as const,
+        metadata: { ...(err instanceof Error ? { name: err.name } : {}), source: "throw" },
+      }
+      yield streamError
+      sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: streamError })
+    }
 
     if (streamError) {
       if (isInterrupted()) {
         yield { role: "status", content: "interrupted" }
+        yield { role: "done", metadata: { reason: "interrupted" } }
         return
       }
       if (toolCalls.length > 0) {
@@ -713,6 +735,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       if (diagnosticsEnabled) logger.warn("loop.stream.retry", { consecutiveErrors, turnCount })
       if (consecutiveErrors >= 3) {
         yield { role: "error", content: `Stream failed after ${consecutiveErrors} consecutive attempts`, severity: "error" as const }
+        yield { role: "done", metadata: { reason: "error_limit" } }
         return
       }
       continue
