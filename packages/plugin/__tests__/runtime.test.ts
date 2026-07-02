@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { PluginRuntime } from "../src/runtime.js"
-import { mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
@@ -202,6 +202,116 @@ describe("Plugin Runtime", () => {
 
     // dispose 应派发 { role: "shutdown" } 事件
     expect(receivedEvents).toContain("shutdown")
+    expect(runtime.getStatus().initialized).toBe(false)
+  })
+
+  it("P3: dispose calls plugin shutdown callback when hookManager present", async () => {
+    const markerPath = join(pluginDir, "shutdown-with-hooks.txt")
+    const pluginPath = join(pluginDir, "plugin-with-shutdown-hooks.ts")
+    writeFileSync(
+      pluginPath,
+      `import { writeFileSync } from "node:fs"
+       export default {
+         id: "plugin-with-shutdown-hooks",
+         server: () => ({ greet: () => "hi" }),
+         shutdown: async () => {
+           writeFileSync(${JSON.stringify(markerPath)}, "called")
+         }
+       }`,
+    )
+
+    mkdirSync(join(pluginDir, ".covalo"), { recursive: true })
+    writeFileSync(join(pluginDir, ".covalo", "plugins.json"), JSON.stringify([pluginPath]))
+
+    const fakeHookManager = {
+      addHooks: () => {},
+      runOnLoopEvent: async () => {},
+      drain: async () => {},
+      removeHooks: () => {},
+      onHookError: undefined,
+    }
+    const runtime = new PluginRuntime({
+      workspaceRoot: pluginDir,
+      configPath: join(pluginDir, ".covalo", "plugins.json"),
+      hookManager: fakeHookManager as unknown as import("@covalo/security").HookManager,
+    })
+
+    await runtime.init()
+    await runtime.dispose()
+
+    expect(existsSync(markerPath)).toBe(true)
+    expect(readFileSync(markerPath, "utf8")).toBe("called")
+  })
+
+  it("P3: dispose calls plugin shutdown callback even without hookManager", async () => {
+    const markerPath = join(pluginDir, "shutdown-no-hooks.txt")
+    const pluginPath = join(pluginDir, "plugin-with-shutdown-no-hooks.ts")
+    writeFileSync(
+      pluginPath,
+      `import { writeFileSync } from "node:fs"
+       export default {
+         id: "plugin-with-shutdown-no-hooks",
+         server: () => ({ greet: () => "hi" }),
+         shutdown: async () => {
+           writeFileSync(${JSON.stringify(markerPath)}, "called")
+         }
+       }`,
+    )
+
+    mkdirSync(join(pluginDir, ".covalo"), { recursive: true })
+    writeFileSync(join(pluginDir, ".covalo", "plugins.json"), JSON.stringify([pluginPath]))
+
+    const runtime = new PluginRuntime({
+      workspaceRoot: pluginDir,
+      configPath: join(pluginDir, ".covalo", "plugins.json"),
+    })
+
+    await runtime.init()
+    await runtime.dispose()
+
+    expect(existsSync(markerPath)).toBe(true)
+    expect(readFileSync(markerPath, "utf8")).toBe("called")
+  })
+
+  it("P3: plugin shutdown error does not block other plugins or cleanup", async () => {
+    const markerPath = join(pluginDir, "shutdown-after-error.txt")
+    const badPluginPath = join(pluginDir, "bad-plugin.ts")
+    const goodPluginPath = join(pluginDir, "good-plugin.ts")
+    writeFileSync(
+      badPluginPath,
+      `export default {
+         id: "bad-plugin",
+         server: () => ({ greet: () => "hi" }),
+         shutdown: () => { throw new Error("boom") }
+       }`,
+    )
+    writeFileSync(
+      goodPluginPath,
+      `import { writeFileSync } from "node:fs"
+       export default {
+         id: "good-plugin",
+         server: () => ({ greet: () => "hi" }),
+         shutdown: async () => {
+           writeFileSync(${JSON.stringify(markerPath)}, "called")
+         }
+       }`,
+    )
+
+    mkdirSync(join(pluginDir, ".covalo"), { recursive: true })
+    writeFileSync(join(pluginDir, ".covalo", "plugins.json"), JSON.stringify([badPluginPath, goodPluginPath]))
+
+    const runtime = new PluginRuntime({
+      workspaceRoot: pluginDir,
+      configPath: join(pluginDir, ".covalo", "plugins.json"),
+    })
+
+    await runtime.init()
+    await runtime.dispose()
+
+    // bad-plugin 抛错后 good-plugin 仍应被执行
+    expect(existsSync(markerPath)).toBe(true)
+    expect(readFileSync(markerPath, "utf8")).toBe("called")
+    // 清理仍完成
     expect(runtime.getStatus().initialized).toBe(false)
   })
 })

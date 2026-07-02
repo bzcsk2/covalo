@@ -475,7 +475,8 @@ export class PluginRuntime {
    * 现改为 async，按以下顺序编排：
    * 1. 派发 { role: "shutdown" } loop event，触发 ECC onShutdown hooks；
    * 2. drain 等待 in-flight hooks 完成；
-   * 3. 逐一调用 plugin 的可选 shutdown 回调（向后兼容，未实现则跳过）；
+   * 3. 调用每个 plugin 的可选 shutdown 回调（向后兼容，未实现则跳过）；
+   *    注意：plugin shutdown 不依赖 hookManager 是否存在。
    * 4. 移除 ECC hook adapters、清状态、dispose hookRegistry；
    * 5. 重置内部数组。
    */
@@ -489,22 +490,24 @@ export class PluginRuntime {
       } catch {
         // best-effort: shutdown 事件失败不阻止清理
       }
+    }
 
-      // 3. 调用每个 plugin 的可选 shutdown 回调
-      for (const loaded of this.loadedPlugins) {
-        const shutdown = (loaded.mod as { shutdown?: unknown }).shutdown
-        if (typeof shutdown === "function") {
-          try {
-            const result = shutdown.call(loaded.mod)
-            if (result instanceof Promise) {
-              await result
-            }
-          } catch {
-            // best-effort: 单个 plugin shutdown 失败不阻止其他清理
+    // 3. 调用每个 plugin 的可选 shutdown 回调（不依赖 hookManager）
+    for (const loaded of this.loadedPlugins) {
+      const shutdown = (loaded.mod as { shutdown?: unknown }).shutdown
+      if (typeof shutdown === "function") {
+        try {
+          const result = shutdown.call(loaded.mod)
+          if (result instanceof Promise) {
+            await result
           }
+        } catch {
+          // best-effort: 单个 plugin shutdown 失败不阻止其他清理
         }
       }
+    }
 
+    if (this.options.hookManager) {
       // 4. 移除 ECC hook adapters、清状态、dispose hookRegistry
       for (const adapter of this.eccHookAdapters) {
         this.options.hookManager.removeHooks(adapter)

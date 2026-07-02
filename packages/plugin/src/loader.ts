@@ -82,12 +82,9 @@ function validatePlugin(mod: unknown, spec: string): { plugin?: PluginModule; er
     return { error: { type: "server_not_function", spec } }
   }
 
-  return {
-    plugin: {
-      id: record.id,
-      server: record.server as PluginServer,
-    },
-  }
+  // P3: 保留原模块对象而非只构造 { id, server }，使 plugin 上声明的
+  // shutdown 等额外字段能被 PluginRuntime.dispose() 调用到。
+  return { plugin: record as unknown as PluginModule }
 }
 
 export async function loadPlugins(items: PluginConfigItem[]): Promise<PluginLoadResult> {

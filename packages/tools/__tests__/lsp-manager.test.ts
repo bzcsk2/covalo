@@ -250,4 +250,50 @@ describe("LspManager", () => {
       manager.request("textDocument/hover", {}, testFile),
     ).rejects.toThrow("No LSP server available")
   })
+
+  it("LSP-2: DocumentInfo tracks serverKey and clears only matching docs on server shutdown", async () => {
+    // 准备两个 workspace，各自有独立的 .covalo/lsp.json 配置 typescript
+    const ws1 = mkdtempSync(join(tmpdir(), "lsp-ws1-"))
+    const ws2 = mkdtempSync(join(tmpdir(), "lsp-ws2-"))
+    mkdirSync(join(ws1, ".covalo"), { recursive: true })
+    mkdirSync(join(ws2, ".covalo"), { recursive: true })
+    writeFileSync(join(ws1, ".covalo", "lsp.json"), JSON.stringify({
+      languages: { typescript: { command: process.execPath, args: [fakeLspPath] } },
+    }))
+    writeFileSync(join(ws2, ".covalo", "lsp.json"), JSON.stringify({
+      languages: { typescript: { command: process.execPath, args: [fakeLspPath] } },
+    }))
+
+    const manager1 = new LspManager(ws1)
+    const manager2 = new LspManager(ws2)
+    try {
+      const file1 = join(ws1, "a.ts")
+      const file2 = join(ws2, "b.ts")
+      writeFileSync(file1, "const x = 1")
+      writeFileSync(file2, "const y = 2")
+
+      // 在两个 workspace 各打开一个文件，触发 server 启动和 DocumentInfo 创建
+      await manager1.request("textDocument/hover", {
+        textDocument: { uri: pathToFileURL(file1).href },
+        position: { line: 0, character: 6 },
+      }, file1)
+      await manager2.request("textDocument/hover", {
+        textDocument: { uri: pathToFileURL(file2).href },
+        position: { line: 0, character: 6 },
+      }, file2)
+
+      // 各自有一个 server 和一个 document
+      expect(manager1.getStatus().documents).toBe(1)
+      expect(manager2.getStatus().documents).toBe(1)
+
+      // 关闭 ws1 的 server，应只清理 ws1 的 documents
+      await manager1.shutdownAll()
+      expect(manager1.getStatus().documents).toBe(0)
+      // ws2 的 documents 不受影响
+      expect(manager2.getStatus().documents).toBe(1)
+    } finally {
+      await manager1.shutdownAll().catch(() => {})
+      await manager2.shutdownAll().catch(() => {})
+    }
+  }, 20000)
 })
