@@ -7,17 +7,45 @@ import type { PendingInstruction } from "./loop.js"
 
 // ─── Tool Call ID Normalize ───
 
-let toolCallSeq = 0
+/**
+ * L8: Tool call ID normalizer（per-engine 实例）。
+ *
+ * 原先是模块级全局变量 toolCallSeq，多个并发的 runLoop（subagent 场景）
+ * 会共享同一个计数器，per-turn reset 语义在并发场景下被破坏。
+ *
+ * 现在改为 factory 模式：每个 engine/loop 持有独立实例，互不影响。
+ * randomUUID() 已保证全局唯一性，seq 仅用于人类可读排序。
+ */
+export interface ToolCallIdNormalizer {
+  normalize(rawId: string | undefined, toolName: string): string
+  reset(): void
+}
+
+export function createToolCallIdNormalizer(): ToolCallIdNormalizer {
+  let seq = 0
+  return {
+    normalize(rawId, toolName) {
+      if (rawId && rawId.trim()) return rawId.trim()
+      return `${toolName}-${++seq}-${randomUUID()}`
+    },
+    reset() {
+      seq = 0
+    },
+  }
+}
+
+// 向后兼容：保留模块级默认实例的导出（仅供未迁移的调用方使用）。
+// 新代码应使用 createToolCallIdNormalizer() 创建独立实例。
+const defaultNormalizer = createToolCallIdNormalizer()
 
 /** CL-51: Normalize tool call ID: ensure non-empty, stable, unique per turn. */
 export function normalizeToolCallId(rawId: string | undefined, toolName: string): string {
-  if (rawId && rawId.trim()) return rawId.trim()
-  return `${toolName}-${++toolCallSeq}-${randomUUID()}`
+  return defaultNormalizer.normalize(rawId, toolName)
 }
 
 /** CL-51: Reset per-turn sequence counter. */
 export function resetToolCallSeq(): void {
-  toolCallSeq = 0
+  defaultNormalizer.reset()
 }
 
 // ─── Duplicate Tool-Call Detector ───

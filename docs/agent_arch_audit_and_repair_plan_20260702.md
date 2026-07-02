@@ -15,21 +15,21 @@
 | P0 | M1-fix | context/manager.ts | 修复后不重新计算预算，破坏 budget 不变量 | ✅ 已修复 (PR #17 验收返工) |
 | P0 | L1-fix | loop.ts | ctx.buildMessages() 在 stream try 内，确定性错误被当流式错误重试 | ✅ 已修复 (PR #17 验收返工) |
 | P0 | L2-fix | loop.ts | 新增 done 路径不写入 sessionWriter，replay/恢复不一致 | ✅ 已修复 (PR #17 验收返工) |
-| P1 | P1-A | engine.ts | submit() try 前的 ctx.buildMessages() 抛错时 finally 不执行；且移动后需保证 guard block 路径仍持久化 messages | 🔄 本阶段修复 |
-| P1 | P1-B | engine.ts | submit() 外层生命周期信封不完整，isSubmitting 设置后仍有大量代码在 catch/finally 之外 | 🔄 本阶段修复（P1 核心） |
-| P1 | P1-C | engine.ts | shutdown() 不 dispose BackgroundTaskManager，后台进程泄漏 | 🔄 本阶段修复 |
-| P1 | P1-D | engine.ts | loadSession() 不清理旧 session 的 BackgroundTaskManager | 🔄 本阶段修复（原 8.2） |
+| P1 | P1-A | engine.ts | submit() try 前的 ctx.buildMessages() 抛错时 finally 不执行；且移动后需保证 guard block 路径仍持久化 messages | ✅ 已修复 (PR #18) |
+| P1 | P1-B | engine.ts | submit() 外层生命周期信封不完整，isSubmitting 设置后仍有大量代码在 catch/finally 之外 | ✅ 已修复 (PR #18) |
+| P1 | P1-C | engine.ts | shutdown() 不 dispose BackgroundTaskManager，后台进程泄漏 | ✅ 已修复 (PR #18) |
+| P1 | P1-D | engine.ts | loadSession() 不清理旧 session 的 BackgroundTaskManager | ✅ 已修复 (PR #18) |
 | P2 | F0-1 | engine.ts | CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine 未接入运行时 | ⏳ 后续阶段 |
 | P2 | G1 | governance/branch-budget.ts | 工具名集合与 TaskLedger 不交集 | ⏳ 后续阶段 |
 | P2 | G2 | governance/mode-decision.ts | recovery_pending 无法触发 forced | ⏳ 后续阶段 |
 | P2 | C1 | checkpoint/checkpoint-engine.ts | 未接入运行时 | ⏳ 后续阶段 |
-| P2 | LSP-1 | lsp/lsp-client.ts | starting 状态可永久卡死 | ⏳ 后续阶段 |
+| P2 | LSP-1 | lsp/lsp-client.ts | starting 状态可永久卡死 | ✅ 本阶段修复 |
 | P2 | LSP-2 | lsp/manager.ts | DocumentInfo 未绑定 serverKey | ⏳ 后续阶段 |
-| P2 | LSP-3 | lsp/* | LSP 双版本并存（旧版 lsp-client.ts 与新版 lsp/lsp-client.ts） | ⏳ 后续阶段 |
+| P2 | LSP-3 | lsp/* | LSP 双版本并存（旧版 lsp-client.ts 与新版 lsp/lsp-client.ts） | ✅ 本阶段修复 |
 | P2 | P3 | plugin/runtime.ts | 无统一 shutdown 编排 | ⏳ 后续阶段 |
-| P2 | M2 | memory/runtime/memory-store.ts | parse-error 永久阻塞 | ⏳ 后续阶段 |
+| P2 | M2 | memory/runtime/memory-store.ts | parse-error 永久阻塞 | ✅ 已核查无需修复（try/finally 已存在） |
 | P2 | G5 | governance/branch-budget-path.ts | mergeBudgetPathMap 用 max 而非 sum | ⏳ 后续阶段 |
-| P2 | L8 | loop-helpers.ts | resetToolCallSeq 模块级全局，subagent 并发共享 | ⏳ 后续阶段 |
+| P2 | L8 | loop-helpers.ts | resetToolCallSeq 模块级全局，subagent 并发共享 | ✅ 本阶段修复 |
 
 > 编号说明：L=Loop、M=Memory/Message、G=Governance、C=Checkpoint、LSP=Language Server、F=Framework、P=Plugin/Lifecycle。
 > LSP 相关统一使用 `LSP-N` 编号；engine 生命周期相关统一使用 `P1-A/B/C/D` 编号，避免与优先级列重复造成混乱。
@@ -277,36 +277,54 @@
 
 ---
 
-## 四、后续阶段（P2+）规划
+## 四、P2 阶段修复详情（已完成）
 
-### 4.1 F0-1: 接入 CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine
+### 4.1 L8: resetToolCallSeq 并发安全（已修复）
 
-这三个 governance 组件已实现但未接入运行时。需要：
-- 确定接入点（engine.ts 或 loop.ts）。
-- 定义与 effectivePolicy 的关系。
-- 添加集成测试。
+**问题**：`toolCallSeq` 是模块级全局，多个并发的 runLoop（subagent 场景）会共享同一个计数器。`randomUUID()` 已保证全局唯一性，但 per-turn reset 语义在并发场景下被破坏。
 
-### 4.2 G1: 统一工具名集合
+**修复**：将 `normalizeToolCallId` / `resetToolCallSeq` 改为 factory 模式（`createToolCallIdNormalizer()`），每个 loop 持有独立实例。保留模块级默认实例的导出以向后兼容未迁移的调用方。
 
-BranchBudgetTracker 的工具名集合与 TaskLedger 的工具名集合不交集，可能导致预算追踪遗漏。
+**文件**：
+- `packages/core/src/loop-helpers.ts` — 新增 `ToolCallIdNormalizer` 接口和 `createToolCallIdNormalizer()` factory
+- `packages/core/src/loop.ts` — 创建 per-loop 实例，替代全局调用
 
-### 4.3 LSP 修复（LSP-1 / LSP-2 / LSP-3）
+### 4.2 LSP-3: LSP 双版本统一（已修复）
 
-- **LSP-1**: `lsp-client.ts` starting 状态可永久卡死（无超时）。
-- **LSP-2**: `manager.ts` DocumentInfo 未绑定 serverKey，`findClientForLanguage` 忽略 workspaceRoot。
-- **LSP-3**: LSP 双版本并存（旧版 `lsp-client.ts` 与新版 `lsp/lsp-client.ts`），需先决定保留哪个。
+**问题**：旧版 `packages/tools/src/lsp-client.ts`（包装器）与新版 `packages/tools/src/lsp/lsp-client.ts`（`LspClient` 类）并存，`lsp.ts` 通过包装器调用 `LspClient`，增加了一层不必要的间接性。
 
-### 4.4 M2: memory-store parse-error 恢复
+**修复**：删除旧版包装器 `lsp-client.ts`，`lsp.ts` 直接使用 `LspClient` 类。原 `runLspRequest` 的逻辑（start → initialize → 单次请求 → shutdown）内联到 `lsp.ts` 的 `execute` 方法中。
 
-MemoryStore 的 `withKeyLock` 在 parse-error 时永久阻塞，不释放锁。
+**文件**：
+- `packages/tools/src/lsp-client.ts` — 已删除
+- `packages/tools/src/lsp.ts` — import 改为直接引用 `LspClient`，内联请求逻辑
 
-### 4.5 G5: mergeBudgetPathMap 求和
+### 4.3 LSP-1: starting 状态 guard timer（已修复）
 
-`mergeBudgetPathMap` 用 `Math.max` 而非求和，可能低估实际编辑次数。需确认 `bindWorkspaceRoot` 重复调用的幂等性后修复。
+**问题**：`LspClient.start()` 将 state 置为 `"starting"` 后，若调用方只调 `start()` 不调 `initialize()`，state 会永久停留 `"starting"`，后续请求会被静默拒绝。
 
-### 4.6 L8: resetToolCallSeq 并发安全
+**修复**：在 `start()` 末尾启动 30 秒的 starting guard timer（watchdog）。若 `initialize()` 在超时内未成功将 state 转为 `"running"`，timer 回调调用 `kill()` 终止子进程、清理 connection、拒绝 pending requests。`initialize()` 成功后 clear timer。timer 调用 `unref()` 避免阻止进程退出。
 
-`toolCallSeq` 是模块级全局，多个并发的 runLoop（subagent 场景）会共享同一个计数器。当前 `randomUUID()` 已保证全局唯一性，但 per-turn reset 语义在并发场景下被破坏。
+**文件**：
+- `packages/tools/src/lsp/lsp-client.ts` — 新增 `STARTING_GUARD_TIMEOUT_MS` 常量、`startingGuardTimer` 字段、`start()` 末尾启动 timer、`initialize()` 成功后 clear timer
+
+### 4.4 M2: memory-store parse-error 恢复（已核查无需修复）
+
+**原审计描述**：MemoryStore 的 `withKeyLock` 在 parse-error 时永久阻塞，不释放锁。
+
+**核查结果**：与现状不符。`withKeyLock` 已有完整的 `try { return await fn() } finally { release() }` 保护，parse-error 不会导致锁泄漏。无需修复。
+
+### 4.5 后续阶段（P3+）规划
+
+以下项目推迟到后续阶段：
+
+- **F0-1**: 接入 CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine — 需确定接入点、定义与 effectivePolicy 的关系、添加集成测试。
+- **G1**: 统一工具名集合 — BranchBudgetTracker 与 TaskLedger 的工具名集合不交集。
+- **G2**: recovery_pending 无法触发 forced。
+- **C1**: checkpoint-engine 未接入运行时。
+- **LSP-2**: manager.ts DocumentInfo 未绑定 serverKey。
+- **P3**: plugin/runtime 无统一 shutdown 编排。
+- **G5**: mergeBudgetPathMap 用 max 而非 sum。
 
 ---
 

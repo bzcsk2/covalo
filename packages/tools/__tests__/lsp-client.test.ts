@@ -269,4 +269,59 @@ describe("LspClient", () => {
       client.request("textDocument/hover", {}),
     ).rejects.toThrow("not ready")
   })
+
+  it("LSP-1: kills client if start() is not followed by initialize() within guard timeout", async () => {
+    // 用极短的 guard timeout 触发 watchdog
+    client = new LspClient({
+      command: process.execPath,
+      args: [fakeLspPath],
+      cwd,
+      rootPath: cwd,
+      language: "typescript",
+      timeoutMs: 5000,
+      startingGuardTimeoutMs: 20,
+    })
+
+    await client.start()
+    expect(client.getState()).toBe("starting")
+
+    // 不调用 initialize()，等待 watchdog 触发
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(client.getState()).toBe("stopped")
+  }, 5000)
+
+  it("LSP-1: stale guard timer does not kill a newly started client (same instance)", async () => {
+    // 同一个实例：start(short guard) → kill（应清理 timer）→ 再 start(long guard)
+    // 若 kill() 没清理旧 timer，旧 timer 到期时会看到 state==="starting" 并误杀新进程。
+    client = new LspClient({
+      command: process.execPath,
+      args: [fakeLspPath],
+      cwd,
+      rootPath: cwd,
+      language: "typescript",
+      timeoutMs: 5000,
+      startingGuardTimeoutMs: 40,
+    })
+    await client.start()
+    client.kill() // kill 应清理旧 timer
+    expect(client.getState()).toBe("stopped")
+
+    // 调大第二次 start 的 guard timeout，使新 timer 不会在观察窗口内触发
+    ;(client as any).options.startingGuardTimeoutMs = 2000
+
+    // 立即重新 start（新 timer=2000ms）
+    await client.start()
+    expect(client.getState()).toBe("starting")
+
+    // 等待超过旧 timer 的 40ms，但远小于新 timer 的 2000ms
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    // 若旧 timer 没被清理，此时 state 会被 kill 成 "stopped"
+    // 若旧 timer 已被清理，state 仍是 "starting"（新 timer 还没到期）
+    expect(client.getState()).toBe("starting")
+
+    // 正常 initialize，确认新 client 可用
+    await client.initialize()
+    expect(client.getState()).toBe("running")
+  }, 10000)
 })

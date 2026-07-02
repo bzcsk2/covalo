@@ -7,6 +7,9 @@ import type { SupportedPlatform } from "../platform/shell-backend.js"
 
 const INITIALIZE_TIMEOUT_MS = 10000
 const SHUTDOWN_TIMEOUT_MS = 5000
+// LSP-1: starting 状态 guard timer，防止调用方只调 start() 不调 initialize()
+// 导致 state 永久停留 "starting"。initialize() 成功后会 clear 该 timer。
+const STARTING_GUARD_TIMEOUT_MS = 30000
 
 export type LspServerState =
   | "idle"
@@ -25,6 +28,12 @@ export interface LspClientOptions {
   initializationOptions?: Record<string, unknown>
   settings?: Record<string, unknown>
   timeoutMs?: number
+  /**
+   * LSP-1: starting 状态 guard timer 超时（毫秒）。
+   * 若 start() 后未在此时长内成功 initialize()，client 会被 kill。
+   * 主要供测试注入；生产默认 STARTING_GUARD_TIMEOUT_MS。
+   */
+  startingGuardTimeoutMs?: number
 }
 
 export interface LspClientHealth {
@@ -50,6 +59,8 @@ export class LspClient {
   private pending = new Map<number, PendingRequest>()
   private diagnostics = new Map<string, unknown[]>()
   private startedAt = 0
+  // LSP-1: starting 状态 watchdog，防止 initialize() 不被调用导致永久 starting
+  private startingGuardTimer: ReturnType<typeof setTimeout> | null = null
   private stderr = ""
   private serverCapabilities: Record<string, unknown> = {}
   private diagnosticRegistrations = new Map<string, { id: string; method: string }>()
@@ -76,6 +87,9 @@ export class LspClient {
     if (this.state === "running" || this.state === "starting") {
       return
     }
+
+    // LSP-1: 清理可能残留的旧 guard timer，避免 stale timer 误杀新启动的进程。
+    this.clearStartingGuardTimer()
 
     this.state = "starting"
     this.startedAt = Date.now()
@@ -107,9 +121,34 @@ export class LspClient {
 
       this.setupConnectionHandlers()
       this.connection.listen()
+
+      // LSP-1: 启动 starting guard timer。若 initialize() 在超时内未成功
+      // 将 state 转为 "running"，则 kill 子进程，避免调用方只调 start()
+      // 不调 initialize() 导致 state 永久停留 "starting"。
+      // 使用 kill()：会终止进程树、清理 connection、拒绝 pending requests。
+      const guardTimeout = this.options.startingGuardTimeoutMs ?? STARTING_GUARD_TIMEOUT_MS
+      this.startingGuardTimer = setTimeout(() => {
+        if (this.state === "starting") {
+          this.startingGuardTimer = null
+          this.kill()
+        }
+      }, guardTimeout)
+      // unref 避免阻止进程退出
+      this.startingGuardTimer.unref?.()
     } catch (error) {
       this.state = "unhealthy"
       throw error
+    }
+  }
+
+  /**
+   * LSP-1: 统一清理 starting guard timer。
+   * 在所有离开 "starting" 状态的路径上调用，避免 stale timer 误杀后续 start()。
+   */
+  private clearStartingGuardTimer(): void {
+    if (this.startingGuardTimer) {
+      clearTimeout(this.startingGuardTimer)
+      this.startingGuardTimer = null
     }
   }
 
@@ -208,6 +247,8 @@ export class LspClient {
 
     this.serverCapabilities = result?.capabilities ?? {}
     this.state = "running"
+    // LSP-1: initialize 成功，clear starting guard timer
+    this.clearStartingGuardTimer()
     await this.connection.sendNotification("initialized", {})
 
     if (this.options.settings) {
@@ -341,6 +382,8 @@ export class LspClient {
   }
 
   kill(): void {
+    // LSP-1: 清理 starting guard timer，避免 stale timer 误杀后续 start()
+    this.clearStartingGuardTimer()
     if (this.child) {
       terminateProcessTree(this.child, true, this.platform)
       this.child = null
@@ -355,6 +398,8 @@ export class LspClient {
   }
 
   private handleExit(code: number | null, signal: NodeJS.Signals | null): void {
+    // LSP-1: 清理 starting guard timer
+    this.clearStartingGuardTimer()
     if (this.state === "shutdown") {
       this.state = "stopped"
       return
@@ -370,6 +415,8 @@ export class LspClient {
   }
 
   private handleError(error: Error): void {
+    // LSP-1: 清理 starting guard timer
+    this.clearStartingGuardTimer()
     this.state = "unhealthy"
     this.stderr += `\n${error.message}`
   }

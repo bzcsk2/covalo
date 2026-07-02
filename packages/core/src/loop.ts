@@ -10,7 +10,7 @@ import { createDeepSeekCapabilities } from "./provider-thinking.js"
 import { calculateCost } from "./pricing.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 import {
-  normalizeToolCallId, resetToolCallSeq,
+  createToolCallIdNormalizer,
   createDuplicateDetector,
   injectPendingInstruction,
 } from "./loop-helpers.js"
@@ -144,6 +144,9 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   let turnCount = 0
   let consecutiveErrors = 0
   const recentToolCalls = createDuplicateDetector()
+  // L8: per-loop 独立的 tool call ID normalizer 实例，避免 subagent 并发时
+  // 共享模块级全局 seq 导致 per-turn reset 语义被破坏
+  const toolCallIdNormalizer = createToolCallIdNormalizer()
   let totalToolCalls = 0
 
   /** DRF-40: 记录工具结果到 TaskLedger */
@@ -342,7 +345,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     turnCount++
     earlyStop?.newTurn()
     if (diagnosticsEnabled) logger.debug("loop.turn.start", { turnCount, thinkingMode })
-    resetToolCallSeq()  // Reset per-turn sequence for ID normalization
+    toolCallIdNormalizer.reset()  // L8: per-loop 实例 reset per-turn sequence
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
       yield emitDone("interrupted")
@@ -457,7 +460,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           break
 
         case "tool_call_end": {
-          const normalizedId = normalizeToolCallId(event.id, event.name)
+          const normalizedId = toolCallIdNormalizer.normalize(event.id, event.name)
           const tc: ToolCall = {
             id: normalizedId,
             type: "function",
