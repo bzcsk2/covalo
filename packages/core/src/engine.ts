@@ -347,6 +347,17 @@ export class ReasonixEngine implements CoreEngine {
     if (!SessionLoader.validateSessionId(sessionId)) {
       throw new Error(`Invalid session ID: ${sessionId}`)
     }
+    // P1-fix: 切换 session 前 dispose 旧 session 的 BackgroundTaskManager。
+    // 原先 loadSession 不清理旧 session 的 manager，导致旧 session 的后台 shell
+    // 子进程、hard timer、log 写流驻留在 managersBySession Map 中直到进程退出。
+    if (this.sessionId !== sessionId) {
+      try {
+        const { disposeBackgroundTaskManagerFor } = await import("@covalo/tools")
+        disposeBackgroundTaskManagerFor(this.sessionId)
+      } catch {
+        // best-effort: 不阻塞 session 切换
+      }
+    }
     this.sessionId = sessionId
     this.ctx.log.clear()
     this.toolExecutor.setSessionId(sessionId)
@@ -591,6 +602,18 @@ export class ReasonixEngine implements CoreEngine {
       // ADV-BUG-05: Log session drain errors
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.session_drain_error", { error: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // P1-fix: dispose BackgroundTaskManager for this session。
+    // 原先生产代码从不调用 dispose，导致后台 shell 子进程、hard timer、
+    // log 写流在进程退出或 session 切换时泄漏。
+    try {
+      const { disposeBackgroundTaskManagerFor } = await import("@covalo/tools")
+      disposeBackgroundTaskManagerFor(this.sessionId)
+    } catch (e) {
+      if (this.logger.isEnabled("warn")) {
+        this.logger.warn("engine.shutdown.bg_task_dispose_error", { error: e instanceof Error ? e.message : String(e) })
       }
     }
 
@@ -950,7 +973,10 @@ Do not change goal status.`
         }
       }
     }
-    this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
+    // P1-fix (A): buildMessages() 从 try 块之前移入 try 块内部。
+    // 原先若 buildMessages() 在此处抛错（prefix/scratch 超窗、aggressive
+    // truncation 后仍超窗），finally 不会执行，isSubmitting 保持 true、
+    // activeAbortController 不清理，后续 submit 被永久阻塞。
     if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, role: role ?? "unspecified", mode: mode ?? "unspecified", inputLength: userInput.length })
 
     // Packet lifecycle: generate runId for loop mode
@@ -1052,6 +1078,9 @@ Do not change goal status.`
         // Break out of try to trigger finally cleanup
         return;
       }
+
+      // P1-fix (A): buildMessages() 移入 try 块，确保 finally 能清理
+      this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
 
       // SFR-30: 使用 resolveEffectiveTools 统一计算有效工具列表
       const effectiveRole: "worker" | "supervisor" = role ?? (agentName === "supervisor" ? "supervisor" : "worker")
@@ -1261,6 +1290,24 @@ Do not change goal status.`
         } catch {
           // Packet lifecycle is optional
         }
+      }
+    } catch (err) {
+      // P1-fix (B): submit 总 catch — 把任何 throw 转为 error + done 事件。
+      // 原先 submit() 只有 try/finally 无 catch，throw 直接传播给 async generator
+      // 消费者，TUI 难以处理。现在统一转为 error 事件，确保 finally 仍执行清理。
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (this.logger.isEnabled("error")) {
+        this.logger.error("submit.uncaught_error", err instanceof Error ? err : new Error(String(err)), { submitId })
+      }
+      yield {
+        role: "error",
+        content: `Submit failed: ${errMsg}`,
+        severity: "error" as const,
+        metadata: { source: "submit", submitId },
+      }
+      yield {
+        role: "done",
+        metadata: { reason: "submit_error" } as Record<string, unknown>,
       }
     } finally {
       // Packet lifecycle: emit completed phase

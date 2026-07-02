@@ -488,3 +488,24 @@ export function __resetBackgroundTaskManagers(): void {
   }
   managersBySession.clear()
 }
+
+/**
+ * P1-fix: 释放指定 session 的 BackgroundTaskManager。
+ *
+ * 仅在 manager 存在时 dispose 并从缓存删除，避免：
+ *  - engine.shutdown() 时后台 shell 子进程、hard timer、log 写流泄漏
+ *  - engine.loadSession() 切换 session 时旧 session 的 manager 驻留
+ *
+ * 与 getBackgroundTaskManagerFor 不同：若 session 从未创建过 manager，
+ * 本函数不会创建新实例（避免仅为 dispose 而实例化空 manager）。
+ */
+export function disposeBackgroundTaskManagerFor(sessionId: string): void {
+  const m = managersBySession.get(sessionId)
+  if (!m) return
+  try {
+    m.dispose()
+  } catch {
+    // best-effort: dispose 失败不应阻塞 shutdown / loadSession
+  }
+  managersBySession.delete(sessionId)
+}

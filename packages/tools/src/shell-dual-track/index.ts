@@ -17,6 +17,7 @@ export type { ShellClass } from "./shell-runtime-classifier.js"
 export {
   BackgroundTaskManager,
   getBackgroundTaskManagerFor,
+  disposeBackgroundTaskManagerFor,
   __resetBackgroundTaskManagers,
 } from "./background-task-manager.js"
 export type {

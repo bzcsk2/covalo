@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import {
   BackgroundTaskManager,
   getBackgroundTaskManagerFor,
+  disposeBackgroundTaskManagerFor,
   __resetBackgroundTaskManagers,
 } from "../src/shell-dual-track/background-task-manager.js"
 import { createDualTrackBashTool, sleepCommand, spawnTestShell } from "../src/shell-dual-track/bash-dual-track.js"
@@ -290,5 +291,45 @@ describe("createBashTool dualTrack option", () => {
     expect(p.mode).toBe("foreground")
     expect(p.backend).toBe("sandbox")
     expect(p.stdout.trim()).toBe("dual-sandbox-ok")
+  })
+})
+
+// P1-fix: disposeBackgroundTaskManagerFor 回归测试
+describe("P1-fix: disposeBackgroundTaskManagerFor", () => {
+  beforeEach(() => {
+    __resetBackgroundTaskManagers()
+  })
+
+  afterEach(() => {
+    __resetBackgroundTaskManagers()
+  })
+
+  it("disposes existing manager and removes it from cache", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "p1-dispose-"))
+    const sessionId = "p1-dispose-test"
+    // 通过 getBackgroundTaskManagerFor 创建实例
+    const mgr = getBackgroundTaskManagerFor(sessionId, workDir)
+    expect(mgr).toBeDefined()
+    // 再次获取应返回同一实例
+    expect(getBackgroundTaskManagerFor(sessionId, workDir)).toBe(mgr)
+
+    // dispose 后再获取应返回新实例
+    disposeBackgroundTaskManagerFor(sessionId)
+    const mgr2 = getBackgroundTaskManagerFor(sessionId, workDir)
+    expect(mgr2).not.toBe(mgr)
+
+    rmSync(workDir, { recursive: true, force: true })
+  })
+
+  it("is a no-op when session has no manager (does not create new instance)", () => {
+    // session 从未创建过 manager
+    disposeBackgroundTaskManagerFor("never-existed-session")
+    // 不应抛错，也不应在缓存中创建条目
+    // 验证：getBackgroundTaskManagerFor 后应返回全新实例（而非被 dispose 留下的）
+    const workDir = mkdtempSync(join(tmpdir(), "p1-noop-"))
+    const mgr = getBackgroundTaskManagerFor("never-existed-session", workDir)
+    expect(mgr).toBeDefined()
+    expect(mgr.list()).toHaveLength(0)
+    rmSync(workDir, { recursive: true, force: true })
   })
 })
