@@ -32,4 +32,19 @@ api-key
 Covalo*.md
 .worktrees/
 
+# npm pack artifacts
+*.tgz
+
+# Backup directories
+src.bak/
+
+# Runtime test artifacts
+.covalo-test-accept/
+
+# Runtime session files
+.deepreef/
+
+# Runtime dual-session snapshots
+etc/passwd/
+
 

@@ -23,64 +23,14 @@ import {
 } from "./shell-runtime-classifier.js"
 import { getBackgroundTaskManagerFor } from "./background-task-manager.js"
 import { isDestructiveShellCommand, validateShellCommand } from "./shell-security.js"
+import { truncateOutput, pushBounded, finalizeBounded, createProgressThrottle, type BoundedBuffer } from "../shell-output-buffer.js"
 
 const DEFAULT_TIMEOUT = 30_000
 const DEFAULT_MAX_CHARS = 200_000
 
-function truncateOutput(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text
-  return text.slice(-maxChars) + `\n... [truncated: ${text.length - maxChars} more chars]`
-}
-
 export interface DualTrackBashOptions {
   /** 工具名称，默认 bash */
   name?: string
-}
-
-interface BoundedBuffer {
-  text: string
-  max: number
-  dropped: number
-}
-
-function pushBounded(buf: BoundedBuffer, chunk: string): void {
-  buf.text += chunk
-  if (buf.text.length > buf.max * 2) {
-    const excess = buf.text.length - buf.max
-    buf.text = buf.text.slice(excess)
-    buf.dropped += excess
-  }
-}
-
-function finalizeBounded(buf: BoundedBuffer): { text: string; dropped: number } {
-  if (buf.dropped > 0) {
-    return {
-      text: buf.text.slice(-buf.max) + `\n... [dropped ${buf.dropped} earlier chars]`,
-      dropped: buf.dropped,
-    }
-  }
-  if (buf.text.length > buf.max) {
-    return {
-      text: buf.text.slice(-buf.max) + `\n... [truncated: ${buf.text.length - buf.max} more chars]`,
-      dropped: buf.text.length - buf.max,
-    }
-  }
-  return { text: buf.text, dropped: 0 }
-}
-
-function createProgressThrottle(report?: (update: ToolProgressUpdate) => void): (update: ToolProgressUpdate) => void {
-  if (!report) return () => {}
-  let lastContent = ""
-  let lastTs = 0
-  const MIN_INTERVAL = 200
-  return (update) => {
-    const now = Date.now()
-    if (update.content !== lastContent && now - lastTs >= MIN_INTERVAL) {
-      lastContent = update.content
-      lastTs = now
-      report(update)
-    }
-  }
 }
 
 /**

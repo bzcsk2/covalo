@@ -11,7 +11,6 @@
  *
  * @module
  */
-export * as locale from "./locale.js";
 export * as system from "./system.js";
 export * as agents from "./agents.js";
 export * as workflow from "./workflow.js";

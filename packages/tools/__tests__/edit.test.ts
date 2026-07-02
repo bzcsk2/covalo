@@ -4,7 +4,6 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createHash } from "node:crypto"
-import { hashAnchoredReplaceOnce } from "../src/hash-edit.js"
 import { fuzzyReplaceOnce } from "../src/fuzzy-edit.js"
 import { createEditTool } from "../src/edit.js"
 import { recordRead, clearReadTracker } from "../src/stale-read.js"
@@ -16,71 +15,6 @@ function sha256(s: string): string {
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "covalo-edit-test-"))
 }
-
-describe("hashAnchoredReplaceOnce", () => {
-  it("should replace exact match", async () => {
-    const dir = tempDir()
-    const file = join(dir, "test.txt")
-    writeFileSync(file, "Hello world")
-
-    const res = await hashAnchoredReplaceOnce(file, "world", "there")
-    expect(res).not.toBeNull()
-    expect(res!.replacedCount).toBe(1)
-    expect(readFileSync(file, "utf-8")).toBe("Hello there")
-    await rm(dir, { recursive: true })
-  })
-
-  it("should replace multi-line text", async () => {
-    const dir = tempDir()
-    const file = join(dir, "test.txt")
-    writeFileSync(file, "line1\nline2\nline3\nline4")
-
-    const res = await hashAnchoredReplaceOnce(file, "line2\nline3", "B\nC")
-    expect(res).not.toBeNull()
-    expect(readFileSync(file, "utf-8")).toBe("line1\nB\nC\nline4")
-    await rm(dir, { recursive: true })
-  })
-
-  it("should return null when oldString not found", async () => {
-    const dir = tempDir()
-    const file = join(dir, "test.txt")
-    writeFileSync(file, "Hello world")
-
-    const res = await hashAnchoredReplaceOnce(file, "nope", "there")
-    expect(res).toBeNull()
-    expect(readFileSync(file, "utf-8")).toBe("Hello world")
-    await rm(dir, { recursive: true })
-  })
-
-  it("should return null when oldHash does not match", async () => {
-    const dir = tempDir()
-    const file = join(dir, "test.txt")
-    writeFileSync(file, "Hello world")
-
-    const res = await hashAnchoredReplaceOnce(file, "world", "there", "badhash")
-    expect(res).toBeNull()
-    expect(readFileSync(file, "utf-8")).toBe("Hello world")
-    await rm(dir, { recursive: true })
-  })
-
-  it("should succeed when oldHash matches", async () => {
-    const dir = tempDir()
-    const file = join(dir, "test.txt")
-    writeFileSync(file, "Hello world")
-
-    const h = sha256("world")
-    const res = await hashAnchoredReplaceOnce(file, "world", "there", h)
-    expect(res).not.toBeNull()
-    expect(res!.replacedCount).toBe(1)
-    expect(readFileSync(file, "utf-8")).toBe("Hello there")
-    await rm(dir, { recursive: true })
-  })
-
-  it("should return null for empty oldString", async () => {
-    const res = await hashAnchoredReplaceOnce("/nonexistent", "", "x")
-    expect(res).toBeNull()
-  })
-})
 
 describe("fuzzyReplaceOnce", () => {
   it("exact match", () => {
@@ -445,55 +379,54 @@ describe("CL-12: Hash edit sampling and stream close", () => {
   })
 
   it("does not read entire file for binary sampling", async () => {
-    // Create a 1MB file with known content
     const filePath = join(dir, "large.txt")
     const line = "Hello world, this is a test file with some content. "
-    // Build enough content to exceed 8KB
     const largeContent = line.repeat(5000) + "\n---OLD_MARKER---\n" + line.repeat(5000)
     writeFileSync(filePath, largeContent, "utf-8")
 
-    const result = await hashAnchoredReplaceOnce(filePath, "---OLD_MARKER---", "---NEW_MARKER---")
-    expect(result).not.toBeNull()
-    expect(result!.replacedCount).toBe(1)
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: "large.txt", old_string: "---OLD_MARKER---", new_string: "---NEW_MARKER---" }, ctx)
+    expect(r.isError).toBe(false)
     const final = readFileSync(filePath, "utf-8")
     expect(final).toContain("---NEW_MARKER---")
   })
 
-  it("rejects binary file with no temp file left behind", async () => {
+  it("rejects binary file", async () => {
     const filePath = join(dir, "binary.bin")
-    // Write bytes that include invalid UTF-8 sequences
     const buf = Buffer.alloc(100)
-    // Fill with 0xFF which is invalid UTF-8 (will be replaced with U+FFFD)
     buf.fill(0xff)
     buf.write("text", 90, "utf-8")
     writeFileSync(filePath, buf)
 
-    await expect(hashAnchoredReplaceOnce(filePath, "text", "NEW")).rejects.toThrow("Binary file detected")
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: "binary.bin", old_string: "text", new_string: "NEW" }, ctx)
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error || "").toMatch(/binary|encoding/i)
   })
 
-  it("returns null when old_string not found and cleans up", async () => {
+  it("returns error when old_string not found", async () => {
     const filePath = join(dir, "nomatch.txt")
     writeFileSync(filePath, "Hello world", "utf-8")
 
-    const result = await hashAnchoredReplaceOnce(filePath, "NONEXISTENT", "NEW")
-    expect(result).toBeNull()
-
-    // File unchanged
-    const content = readFileSync(filePath, "utf-8")
-    expect(content).toBe("Hello world")
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: "nomatch.txt", old_string: "NONEXISTENT", new_string: "NEW" }, ctx)
+    expect(r.isError).toBe(true)
+    expect(readFileSync(filePath, "utf-8")).toBe("Hello world")
   })
 
-  it("rejects empty old_string", async () => {
-    const result = await hashAnchoredReplaceOnce("/tmp/nonexistent", "", "new")
-    expect(result).toBeNull()
-  })
-
-  it("returns null when oldHash does not match", async () => {
+  it("returns error when oldHash does not match", async () => {
     const filePath = join(dir, "hashcheck.txt")
     writeFileSync(filePath, "Hello world", "utf-8")
 
-    // Wrong hash — should return null
-    const result = await hashAnchoredReplaceOnce(filePath, "Hello", "Hi", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    expect(result).toBeNull()
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: "hashcheck.txt", old_string: "Hello", new_string: "Hi", old_hash: "a".repeat(64) }, ctx)
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error || "").toContain("old_hash mismatch")
   })
 })

@@ -5,8 +5,9 @@ import { safeStringify, hasBinaryEncoding } from "./safe-stringify.js"
 import { normalizePlatform } from "./platform/capabilities.js"
 import { terminateProcessTree } from "./platform/process-tree.js"
 import { resolveShellBackend, type ShellBackendId } from "./platform/shell-backend.js"
-import { matchDeniedShellPattern, validateShellCommand } from "./shell-dual-track/shell-security.js"
+import { validateShellCommand } from "./shell-dual-track/shell-security.js"
 import { createDualTrackBashTool } from "./shell-dual-track/bash-dual-track.js"
+import { truncateOutput, pushBounded, finalizeBounded, createProgressThrottle, type BoundedBuffer } from "./shell-output-buffer.js"
 
 export interface BashToolOptions {
   /** 启用 Shell 双轨执行（short 前台 / long 后台 / auto 软超时升级） */
@@ -96,61 +97,7 @@ function createForegroundBashTool(): AgentTool {
   }
 }
 
-/** @deprecated 内部使用 validateShellCommand；保留导出供测试 */
-export function isDenied(command: string, backend: ShellBackendId): string | null {
-  return matchDeniedShellPattern(command, backend)
-}
 
-interface BoundedBuffer {
-  text: string
-  max: number
-  dropped: number
-}
-
-function truncateOutput(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text
-  return text.slice(-maxChars) + `\n... [truncated: ${text.length - maxChars} more chars]`
-}
-
-function pushBounded(buf: BoundedBuffer, chunk: string): void {
-  buf.text += chunk
-  if (buf.text.length > buf.max * 2) {
-    const excess = buf.text.length - buf.max
-    buf.text = buf.text.slice(excess)
-    buf.dropped += excess
-  }
-}
-
-function finalizeBounded(buf: BoundedBuffer): { text: string; dropped: number } {
-  if (buf.dropped > 0) {
-    return {
-      text: buf.text.slice(-buf.max) + `\n... [dropped ${buf.dropped} earlier chars]`,
-      dropped: buf.dropped,
-    }
-  }
-  if (buf.text.length > buf.max) {
-    return {
-      text: buf.text.slice(-buf.max) + `\n... [truncated: ${buf.text.length - buf.max} more chars]`,
-      dropped: buf.text.length - buf.max,
-    }
-  }
-  return { text: buf.text, dropped: 0 }
-}
-
-function createProgressThrottle(report?: (update: ToolProgressUpdate) => void): (update: ToolProgressUpdate) => void {
-  if (!report) return () => {}
-  let lastContent = ""
-  let lastTs = 0
-  const MIN_INTERVAL = 200
-  return (update) => {
-    const now = Date.now()
-    if (update.content !== lastContent && now - lastTs >= MIN_INTERVAL) {
-      lastContent = update.content
-      lastTs = now
-      report(update)
-    }
-  }
-}
 
 async function runShell(command: string, cwd: string, timeoutMs: number, maxChars: number, signal: AbortSignal | undefined, reportProgress: ((update: ToolProgressUpdate) => void) | undefined, backend: { id: ShellBackendId; executable: string; args: string[] }): Promise<{
   backend: ShellBackendId
