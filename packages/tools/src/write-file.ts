@@ -3,7 +3,7 @@ import { dirname } from "node:path"
 import type { AgentTool } from "@covalo/core"
 import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { checkStale } from "./stale-read.js"
-import { isSensitive } from "./sensitive.js"
+import { isWriteProtected } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -44,8 +44,8 @@ export function createWriteFileTool(): AgentTool {
         return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
       }
 
-      if (isSensitive(path)) {
-        return { content: safeStringify({ error: `Writing to sensitive file is denied: ${args.path}` }), isError: true }
+      if (isWriteProtected(path)) {
+        return { content: safeStringify({ error: `Writing to protected file is denied: ${args.path}` }), isError: true }
       }
 
       // Stale-write check for existing files

@@ -99,6 +99,10 @@ export const ToolsConfigSchema = z.object({
   approvalPolicy: z.enum(["never", "on-request", "on-failure", "always"]),
   sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]),
   dangerousToolsEnabled: z.boolean(),
+  strictMode: z.boolean(),
+  runtimeGuard: z.object({
+    toolOutputGuarding: z.boolean(),
+  }).optional(),
   supervisor: z.object({
     loop: ToolRoleModePolicySchema,
     subagent: ToolRoleModePolicySchema,

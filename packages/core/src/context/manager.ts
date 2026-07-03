@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../types.js"
+import type { ChatMessage, ToolCall } from "../types.js"
 import { AppendOnlyLog } from "./append-log.js"
 import { ImmutablePrefix } from "./immutable.js"
 import { VolatileScratch } from "./scratch.js"
