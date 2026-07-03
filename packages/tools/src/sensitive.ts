@@ -1,31 +1,51 @@
-export const SENSITIVE_FILE_PATTERNS = [
+export const SENSITIVE_READ_PATTERNS = [
   /(^|\/|\\)api-key$/,
   /(^|\/|\\)\.env$/,
-  /(^|\/|\\)\.env\.[^.]+$/,        // .env.production, .env.development
-  /(^|\/|\\)\.env\.local$/,        // .env.local
+  /(^|\/|\\)\.env\.[^.]+$/,
+  /(^|\/|\\)\.env\.local$/,
   /(^|\/|\\)\.git\//,
   /(^|\/|\\)id_rsa$/,
   /(^|\/|\\)id_ed25519$/,
   /(^|\/|\\)\.ssh\//,
   /(^|\/|\\)known_hosts$/,
-  /(^|\/|\\)[^.]+\.pem$/,          // 证书私钥
-  /(^|\/|\\)[^.]+\.key$/,          // 私钥文件
-  /(^|\/|\\)[^.]+\.pfx$/,          // PKCS#12 证书
-  /(^|\/|\\)[^.]+\.p12$/,          // PKCS#12 证书
-  /(^|\/|\\)\.npmrc$/,              // npm 认证 token
-  /(^|\/|\\)credentials\.json$/,    // GCP/云服务凭证
+  /(^|\/|\\)[^.]+\.pem$/,
+  /(^|\/|\\)[^.]+\.key$/,
+  /(^|\/|\\)[^.]+\.pfx$/,
+  /(^|\/|\\)[^.]+\.p12$/,
+  /(^|\/|\\)\.npmrc$/,
+  /(^|\/|\\)credentials\.json$/,
   /(^|\/|\\)service-account\.json$/,
-  /(^|\/|\\)\.aws\/credentials$/,   // AWS 凭证
-  /(^|\/|\\)\.dockercfg$/,          // Docker 认证
+  /(^|\/|\\)\.aws\/credentials$/,
+  /(^|\/|\\)\.dockercfg$/,
   /(^|\/|\\)\.docker\/config\.json$/,
-  /(^|\/|\\)\.netrc$/,              // 通用网络凭证
+  /(^|\/|\\)\.netrc$/,
   /(^|\/|\\)\.htpasswd$/,
-  /(^|\/|\\)token\.json$/,          // OAuth token
+  /(^|\/|\\)token\.json$/,
+]
+
+export const SENSITIVE_WRITE_PATTERNS = [
+  ...SENSITIVE_READ_PATTERNS,
+  /(^|\/|\\)\.git\//,
+  /(^|\/|\\)node_modules\//,
+  /(^|\/|\\)\.covalo\//,
+  /(^|\/|\\)package-lock\.json$/,
+  /(^|\/|\\)yarn\.lock$/,
+  /(^|\/|\\)pnpm-lock\.yaml$/,
+  /(^|\/|\\)opencode\.jsonc?$/,
+  /(^|\/|\\)\.opencode\//,
 ]
 
 export function isSensitive(path: string): boolean {
   const normalized = path.replace(/\\/g, "/")
-  for (const p of SENSITIVE_FILE_PATTERNS) {
+  for (const p of SENSITIVE_READ_PATTERNS) {
+    if (p.test(normalized)) return true
+  }
+  return false
+}
+
+export function isWriteProtected(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/")
+  for (const p of SENSITIVE_WRITE_PATTERNS) {
     if (p.test(normalized)) return true
   }
   return false

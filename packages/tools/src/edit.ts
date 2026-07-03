@@ -4,7 +4,7 @@ import type { AgentTool } from "@covalo/core"
 import { fuzzyReplaceOnce } from "./fuzzy-edit.js"
 import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { checkStale } from "./stale-read.js"
-import { isSensitive } from "./sensitive.js"
+import { isWriteProtected } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 
 function sha256(s: string): string {
@@ -85,8 +85,8 @@ export function createEditTool(): AgentTool {
       const newString = args.new_string
       const oldHash = typeof args.old_hash === "string" && args.old_hash ? args.old_hash : undefined
 
-      if (isSensitive(path)) {
-        return { content: safeStringify({ error: `Editing sensitive file is denied: ${args.path}` }), isError: true }
+      if (isWriteProtected(path)) {
+        return { content: safeStringify({ error: `Editing protected file is denied: ${args.path}` }), isError: true }
       }
 
       let fileStat

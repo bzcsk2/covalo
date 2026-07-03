@@ -48,22 +48,22 @@ export function createWebBrowserTool(): AgentTool {
 
           try {
             const result = await fetchWithManualRedirects(url, signal)
-            if ("error" in result) {
-              return { content: safeStringify({ error: result.error }), isError: true }
-            }
-            const resp = result
-            const finalUrl = resp.url || url
+          if ("error" in result) {
+            return { content: safeStringify({ error: result.error }), isError: true }
+          }
+          const resp = result
+          const finalUrl = resp.url || url
 
-            if (!resp.ok) {
-              return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: finalUrl }), isError: true }
-            }
+          if (!resp.ok) {
+            return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: finalUrl }), isError: true }
+          }
 
             const text = await resp.text()
             const contentType = resp.headers.get("content-type") ?? ""
             const isHtml = contentType.includes("text/html")
             const content = isHtml ? htmlToText(text) : text
 
-            return { content: safeStringify({ content, code: resp.status, url: finalUrl }), isError: false }
+          return { content: safeStringify({ content, code: resp.status, url: finalUrl }), isError: false }
           } finally {
             clearTimeout(timer)
             cleanup()
@@ -175,11 +175,11 @@ async function fetchWithManualRedirects(
 
     if (resp.status >= 300 && resp.status < 400) {
       const location = resp.headers.get("location")
-      if (!location) return { error: `Redirect without Location header: ${resp.status}` }
+      if (!location) return { error: "Redirect without Location header: " + resp.status }
 
       const nextUrl = new URL(location, currentUrl).toString()
       const nextErr = await validateRemoteUrl(nextUrl)
-      if (nextErr) return { error: `Redirect target blocked: ${nextErr}` }
+      if (nextErr) return { error: "Redirect target blocked: " + nextErr }
 
       currentUrl = nextUrl
       continue

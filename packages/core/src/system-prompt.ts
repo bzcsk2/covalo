@@ -2,6 +2,15 @@ import { platform } from "node:os"
 import type { PromptLocale } from "./prompt-locale.js"
 import { getPromptLocale } from "./prompt-locale.js"
 
+function sanitizePromptValue(value: string, maxLen = 300): string {
+  return value
+    .replace(/[{}]/g, "")
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen)
+}
+
 const BASE_PROMPT_ZH = `你是 Covalo，一个终端原生的 AI 编程助手。
 你使用 DeepSeek 作为推理引擎，通过工具调用在命令行中完成软件工程任务。
 
@@ -281,9 +290,9 @@ export function buildSystemPrompt(
   const template = locale === "zh-CN" ? BASE_PROMPT_ZH : BASE_PROMPT_EN
 
   return template
-    .replace("{cwd}", cwd)
-    .replace("{workspaceRoot}", cwd)
-    .replace("{platform}", osPlatform)
-    .replace("{shellBackend}", shellBackend)
+    .replace("{cwd}", sanitizePromptValue(cwd, 1024))
+    .replace("{workspaceRoot}", sanitizePromptValue(cwd, 1024))
+    .replace("{platform}", sanitizePromptValue(osPlatform, 100))
+    .replace("{shellBackend}", sanitizePromptValue(shellBackend, 200))
     .replace("{date}", dateStr)
 }

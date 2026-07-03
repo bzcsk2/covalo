@@ -65,6 +65,29 @@ describe("PermissionEngine", () => {
     expect(engine.decide("read_file", {}, "exec").decision).toBe("ask")
   })
 
+  it("should support wildcard tool names in deny rules", () => {
+    const engine = new PermissionEngine()
+    engine.addDenyRule({ toolName: "git_*", reason: "git tools denied" })
+    expect(engine.decide("git_push", {}, "exec").decision).toBe("deny")
+    expect(engine.decide("git_status", {}, "exec").decision).toBe("deny")
+    expect(engine.decide("grep", {}, "read").decision).toBe("allow")
+  })
+
+  it("should support wildcard tool names in allow rules under strict mode", () => {
+    const engine = new PermissionEngine()
+    engine.setStrictMode(true)
+    engine.addAllowRule({ toolName: "read_*" })
+    expect(engine.decide("read_file", {}, "read").decision).toBe("allow")
+    expect(engine.decide("read_dir", {}, "read").decision).toBe("allow")
+    expect(engine.decide("write_file", {}, "write").decision).toBe("deny")
+  })
+
+  it("should not treat plain string rules as substring matches", () => {
+    const engine = new PermissionEngine()
+    engine.addDenyRule({ toolName: "read" })
+    expect(engine.decide("read_file", {}, "read").decision).toBe("allow")
+  })
+
   it("should support removeDenyRule", () => {
     const engine = new PermissionEngine()
     engine.addDenyRule({ toolName: "bash", reason: "no" })

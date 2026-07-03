@@ -35,7 +35,7 @@ export interface RuntimeGuardPacket extends PacketBase {
 }
 
 // Patterns adapted from FuguNano runtime-guard.ts
-const PROMPT_INJECTION_RE = /\b(?:ignore|override|bypass|forget)\s+(?:all\s+)?(?:(?:previous|prior|above)(?:\s+(?:system|developer))?|system|developer)\s+instructions\b|\breveal\s+(?:the\s+)?system\s+prompt\b/i;
+const PROMPT_INJECTION_RE = /\b(?:ignore|override|bypass|forget|disregard|neglect|skip)\s+(?:all\s+)?(?:(?:previous|prior|above|earlier)(?:\s+(?:system|developer|user))?|system|developer)\s+instructions\b|\breveal\s+(?:the\s+)?(?:system|developer)\s+prompt\b|\b(?:print|output|show|display|leak)\s+(?:the\s+)?(?:system|initial)\s+prompt\b/i;
 const UNTRUSTED_INPUT_RE = /\b(?:untrusted|external|third[-\s]?party|browser|email|issue|pull request|comment|pasted|scraped)\b/i;
 const DESTRUCTIVE_ACTION_RE = /\b(?:rm\s+-rf|git\s+reset\s+--hard|git\s+clean\s+-f|drop\s+database|truncate\s+table|terraform\s+destroy|kubectl\s+delete)\b/i;
 const PRIVILEGED_ACTION_RE = /\b(?:git\s+push|npm\s+publish|pnpm\s+publish|deploy\b|terraform\s+apply|kubectl\s+apply)\b/i;
@@ -114,6 +114,39 @@ export function guardPrompt(prompt: string, sourceRef?: string): GuardResult {
       summary: "Prompt has no source reference for provenance tracking",
       evidence: [],
       recommendedChecks: ["Attach source ref for traceability"],
+    });
+  }
+
+  const hasCritical = findings.some((f) => f.severity === "critical");
+  const hasMajor = findings.some((f) => f.severity === "major");
+  const disposition: RuntimeGuardDisposition = hasCritical ? "block" : hasMajor ? "review" : "allow";
+
+  return { disposition, findings };
+}
+
+export function guardToolOutput(toolName: string, output: string): GuardResult {
+  const findings: GuardFinding[] = [];
+  let idCounter = 0;
+
+  if (SECRET_EXFIL_RE.test(output)) {
+    findings.push({
+      id: `GF${++idCounter}`,
+      kind: "secret_exfiltration",
+      severity: "critical",
+      summary: `Tool output from ${toolName} may contain secrets`,
+      evidence: matchEvidence(output, SECRET_EXFIL_RE),
+      recommendedChecks: ["Redact secrets before returning to model", "Verify tool output handling"],
+    });
+  }
+
+  if (UNTRUSTED_INPUT_RE.test(output)) {
+    findings.push({
+      id: `GF${++idCounter}`,
+      kind: "untrusted_input",
+      severity: "major",
+      summary: `Tool output from ${toolName} contains untrusted content patterns`,
+      evidence: matchEvidence(output, UNTRUSTED_INPUT_RE),
+      recommendedChecks: ["Wrap tool output in data-only block when injecting to context"],
     });
   }
 

@@ -51,6 +51,11 @@ export function createGrepTool(): AgentTool {
         return { content: safeStringify({ error: `Searching sensitive path is denied: ${args.path ?? ctx.cwd}` }), isError: true }
       }
 
+      // Require include filter for broad patterns to avoid excessive scanning
+      if (!include && pattern.length <= 2 && !/^[A-Za-z0-9_]+$/.test(pattern)) {
+        return { content: safeStringify({ error: `Broad search pattern "${pattern}" requires an "include" filter (e.g. include: "*.ts")` }), isError: true }
+      }
+
       let stdout: string
       try {
         stdout = await runSearch(pattern, searchPath, include, ctx.signal)

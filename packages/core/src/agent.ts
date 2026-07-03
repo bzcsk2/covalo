@@ -41,12 +41,14 @@ defaultAgentRegistry.register({
 You have access to a full engineering toolset: read, write, edit files, run bash commands,
 search code, manage tasks, fetch the web, and invoke MCP tools.
 Always verify your changes — re-read files after editing when needed.
-When operating under a Supervisor, execute the assigned tasks faithfully and report results concisely.`,
+When operating under a Supervisor, execute the assigned tasks faithfully and report results concisely.
+Notify the Supervisor when you encounter blockers, uncertainty, or when tasks are complete.`,
   systemPromptByLocale: {
     "zh-CN": `你是 Worker Agent——双 Agent 系统中的主要执行角色。
 你拥有完整的工程工具集：读写编辑文件、运行 bash 命令、搜索代码、管理任务、访问网络和调用 MCP 工具。
 修改后务必验证——必要时重新读取文件确认变更结果。
-在 Supervisor 指导下工作时，忠实地执行分配的任务并简洁地报告结果。`,
+在 Supervisor 指导下工作时，忠实地执行分配的任务并简洁地报告结果。
+遇到阻塞、不确定或任务完成时通知 Supervisor。`,
   },
   toolNames: [...MAIN_MODES.build.toolNames],
 })
@@ -57,8 +59,6 @@ defaultAgentRegistry.register({
   systemPromptByLocale: {
     "zh-CN": "你是 Supervisor Agent。分析目标、制定计划、审查证据、委派执行并提供指导。遵循当前工作流模式规则。",
   },
-  // undefined 表示不在 agent 层额外限制，交由运行时场景策略决定
-  toolNames: undefined,
 })
 
 /** Backward-compatible static snapshot */

@@ -19,9 +19,21 @@ export interface PermissionCheck {
   rule?: DenyRule | AllowRule
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[$()*+.?[\\\]^{|}]/g, "\\$&")
+}
+
+function wildcardToRegExp(pattern: string): RegExp {
+  const escaped = escapeRegExp(pattern)
+    .replace(/\\\*/g, ".*")
+    .replace(/\\\?/g, ".")
+  return new RegExp(`^${escaped}$`)
+}
+
 function matchToolName(rule: string | RegExp, name: string): boolean {
-  if (typeof rule === "string") return rule === name
-  return rule.test(name)
+  if (typeof rule !== "string") return rule.test(name)
+  if (rule.includes("*") || rule.includes("?")) return wildcardToRegExp(rule).test(name)
+  return rule === name
 }
 
 function matchArgs(pattern: Record<string, unknown>, actual: Record<string, unknown>): boolean {
@@ -157,13 +169,6 @@ export class PermissionEngine {
       if (!matchToolName(rule.toolName, toolName)) continue
       if (rule.args && !matchArgs(rule.args, args)) continue
       return { decision: "allow", rule }
-    }
-
-    if (this.strictMode && tier !== "read") {
-      return {
-        decision: "deny",
-        reason: `Tool "${toolName}" is denied in strict mode (tier: ${tier})`,
-      }
     }
 
     const defaultDecision = this.getDefaultDecision(tier)

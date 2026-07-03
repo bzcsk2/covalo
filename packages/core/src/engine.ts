@@ -731,9 +731,8 @@ export class ReasonixEngine implements CoreEngine {
     if (providerChanged) {
       this.client = this.resolveClient()
     }
-    // Reconfigure permission defaults when approvalPolicy changes
-    const partialToolsConfig = (partial as unknown as Record<string, unknown>).tools as { approvalPolicy?: string } | undefined
-    if (partialToolsConfig?.approvalPolicy !== undefined) {
+    const partialToolsConfig = (partial as unknown as Record<string, unknown>).tools as { approvalPolicy?: string; strictMode?: boolean } | undefined
+    if (partialToolsConfig?.approvalPolicy !== undefined || partialToolsConfig?.strictMode !== undefined) {
       this.configurePermissionDefaults()
     }
   }

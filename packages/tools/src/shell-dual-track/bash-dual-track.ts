@@ -8,7 +8,6 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process"
-import { resolve } from "node:path"
 import type { AgentTool, ToolContext, ToolProgressUpdate } from "@covalo/core"
 import { safeStringify, hasBinaryEncoding } from "../safe-stringify.js"
 import { normalizePlatform } from "../platform/capabilities.js"
@@ -24,6 +23,7 @@ import {
 import { getBackgroundTaskManagerFor } from "./background-task-manager.js"
 import { isDestructiveShellCommand, validateShellCommand } from "./shell-security.js"
 import { truncateOutput, pushBounded, finalizeBounded, createProgressThrottle, type BoundedBuffer } from "../shell-output-buffer.js"
+import { resolvePath, PathContainmentError } from "../resolve-path.js"
 
 const DEFAULT_TIMEOUT = 30_000
 const DEFAULT_MAX_CHARS = 200_000
@@ -150,7 +150,15 @@ export function createDualTrackBashTool(options: DualTrackBashOptions = {}): Age
       }
 
       const command = args.command.trim()
-      const cwd = typeof args.cwd === "string" ? resolve(ctx.cwd, args.cwd) : ctx.cwd
+      let cwd: string
+      try {
+        cwd = typeof args.cwd === "string" ? await resolvePath(args.cwd, ctx.cwd) : ctx.cwd
+      } catch (e) {
+        if (e instanceof PathContainmentError) {
+          return { content: safeStringify({ error: `cwd is outside the project directory: ${args.cwd}` }), isError: true }
+        }
+        return { content: safeStringify({ error: `cannot resolve cwd: ${args.cwd}` }), isError: true }
+      }
       bgManager.setWorkDir(cwd)
 
       let backend

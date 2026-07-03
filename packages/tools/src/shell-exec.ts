@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process"
-import { resolve } from "node:path"
 import type { AgentTool, ToolProgressUpdate } from "@covalo/core"
 import { safeStringify, hasBinaryEncoding } from "./safe-stringify.js"
 import { normalizePlatform } from "./platform/capabilities.js"
@@ -8,6 +7,7 @@ import { resolveShellBackend, type ShellBackendId } from "./platform/shell-backe
 import { validateShellCommand } from "./shell-dual-track/shell-security.js"
 import { createDualTrackBashTool } from "./shell-dual-track/bash-dual-track.js"
 import { truncateOutput, pushBounded, finalizeBounded, createProgressThrottle, type BoundedBuffer } from "./shell-output-buffer.js"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
 
 export interface BashToolOptions {
   /** 启用 Shell 双轨执行（short 前台 / long 后台 / auto 软超时升级） */
@@ -52,7 +52,15 @@ function createForegroundBashTool(): AgentTool {
       } catch (error) {
         return { content: safeStringify({ error: error instanceof Error ? error.message : String(error) }), isError: true }
       }
-      const cwd = typeof args.cwd === "string" ? resolve(ctx.cwd, args.cwd) : ctx.cwd
+      let cwd: string
+      try {
+        cwd = typeof args.cwd === "string" ? await resolvePath(args.cwd, ctx.cwd) : ctx.cwd
+      } catch (e) {
+        if (e instanceof PathContainmentError) {
+          return { content: safeStringify({ error: `cwd is outside the project directory: ${args.cwd}` }), isError: true }
+        }
+        return { content: safeStringify({ error: `cannot resolve cwd: ${args.cwd}` }), isError: true }
+      }
       const security = validateShellCommand(command, backend.id, cwd)
       if (!security.ok) {
         return { content: safeStringify({ error: security.error }), isError: true }

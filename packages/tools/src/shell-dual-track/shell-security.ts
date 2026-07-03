@@ -6,21 +6,33 @@ import { resolve } from "node:path"
 import { isSensitive } from "../sensitive.js"
 import type { ShellBackendId } from "../platform/shell-backend.js"
 
-// Recursive root deletion: rm -rf /, rm -rf /*
-// Matches rm with at least one -r flag, where ANY operand token is "/" or "/*".
-// Subdirectories like "src/*" are not denied — only bare "/" or "/*" count.
-// Multi-operand cases: rm -rf build /, rm -rf ./tmp /* are also denied.
-// Uses backtrackable flag groups to handle arbitrary flag order and -- terminator.
+// Recursive root deletion
 const RM_ROOT = /\brm\s+(?:-\S+\s+)*(?:-\S*[rR]\S*\s+)(?:-\S+\s+)*(?:\S+\s+)*\/(?:\*)?(?:\s|$)/
 // Privileged escalation
 const SUDO = /\bsudo\b/
 // Disk formatting / partitioning
 const DISK_FORMAT = /\bmkfs(?:\.[a-zA-Z]+)?\b/
 const DISK_PARTITION = /\bfdisk\b/
-// Raw block-device overwrite: dd with if= is destructive; standalone dd is not
+// Raw block-device overwrite
 const DD_IF = /\bdd\s+if=/
 // Recursive world-writable chmod on root
 const CHMOD_RECURSIVE_ROOT = /\bchmod\s+-R\s+777\s+\//
+// Git destructive
+const GIT_HARD_RESET = /\bgit\s+reset\s+--hard\b/
+const GIT_CLEAN_FORCE = /\bgit\s+clean\s+-f[d]?\b/
+// Pipe remote script output directly to a shell.
+const CURL_PIPE_SHELL = /\bcurl\b[^;\n|]*\|\s*(?:bash|sh)\b/
+const WGET_PIPE_SHELL = /\bwget\b[^;\n|]*\|\s*(?:bash|sh)\b/
+// Network exfil
+const EXFIL_MARKERS = /\b(?:nc\s+|ncat\s+|telnet\s+)(?:\S+\s+){1,2}\d+\b/
+// System config mutation
+const SYSTEMCTL = /\bsystemctl\s+(?:stop|disable|mask)\b/
+const PASSWD = /\bpasswd\b/
+const USERADD = /\buseradd\b/
+const USERMOD = /\busermod\b/
+const CHOWN_RECURSIVE = /\bchown\s+-R\b/
+const MOUNT = /\bmount\b/
+const UMOUNT = /\bumount\b/
 
 const POSIX_DENY_PATTERNS = [
   RM_ROOT,
@@ -29,6 +41,18 @@ const POSIX_DENY_PATTERNS = [
   DD_IF,
   CHMOD_RECURSIVE_ROOT,
   DISK_PARTITION,
+  GIT_HARD_RESET,
+  GIT_CLEAN_FORCE,
+  CURL_PIPE_SHELL,
+  WGET_PIPE_SHELL,
+  EXFIL_MARKERS,
+  SYSTEMCTL,
+  PASSWD,
+  USERADD,
+  USERMOD,
+  CHOWN_RECURSIVE,
+  MOUNT,
+  UMOUNT,
 ]
 
 const POWERSHELL_DENY_PATTERNS = [
@@ -38,6 +62,11 @@ const POWERSHELL_DENY_PATTERNS = [
   /\bClear-Disk\b/i,
   /\bInitialize-Disk\b/i,
   /\bStart-Process\b[^;\n]*-Verb\s+RunAs\b/i,
+  /\bInvoke-Expression\b/i,
+  /\bInvoke-WebRequest\b[^;\n]*\|[^;\n]*Invoke-Expression\b/i,
+  /\bSet-ExecutionPolicy\b/i,
+  /\bAdd-LocalGroupMember\b/i,
+  /\bSet-LocalUser\b/i,
 ]
 
 /**
