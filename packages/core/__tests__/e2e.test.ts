@@ -283,7 +283,10 @@ describe("TT2: E2E tool chains through engine", () => {
     const engine = makeEngine()
     engine.registerTool(createWriteFileTool())
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("empty file")) events.push(e)
+    for await (const e of engine.submit("empty file")) {
+      events.push(e)
+      if (e.role === "permission_ask") engine.respondPermission(true)
+    }
     expect(existsSync(filePath)).toBe(true)
     expect(readFileSync(filePath, "utf-8")).toBe("")
   })

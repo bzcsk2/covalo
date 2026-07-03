@@ -14,10 +14,10 @@ describe("PermissionEngine", () => {
     expect(result.decision).toBe("allow")
   })
 
-  it("should default to 'allow' for write tier", () => {
+  it("should default to 'ask' for write tier", () => {
     const engine = new PermissionEngine()
     const result = engine.decide("edit", {}, "write")
-    expect(result.decision).toBe("allow")
+    expect(result.decision).toBe("ask")
   })
 
   it("should deny matching deny rules", () => {

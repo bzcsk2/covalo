@@ -40,52 +40,21 @@ export function createWebBrowserTool(): AgentTool {
 
         const urlErr = validateUrl(url)
         if (urlErr) return { content: safeStringify({ error: urlErr }), isError: true }
-        const hostname = new URL(url).hostname
-        if (hasPrivateIP(hostname)) {
-          return { content: safeStringify({ error: `URL resolves to private network: ${url}` }), isError: true }
-        }
-        if (!isIP(hostname)) {
-          try {
-            if (await isPrivateHostname(hostname)) {
-              return { content: safeStringify({ error: `URL resolves to private network: ${url}` }), isError: true }
-            }
-          } catch { return { content: safeStringify({ error: `Cannot resolve hostname: ${url}` }), isError: true } }
-        }
 
         try {
           const controller = new AbortController()
           const timer = setTimeout(() => controller.abort(), timeoutMs)
           const { signal, cleanup } = ctx.signal ? anySignal(ctx.signal, controller.signal) : { signal: controller.signal, cleanup: () => {} }
 
-          let resp: Response
-          try {
-            resp = await fetch(url, { signal, redirect: "follow" })
-          } finally {
-            clearTimeout(timer)
-            cleanup()
+          const result = await fetchWithManualRedirects(url, signal)
+          if ("error" in result) {
+            return { content: safeStringify({ error: result.error }), isError: true }
           }
-
+          const resp = result
           const finalUrl = resp.url || url
-          if (validateUrl(finalUrl)) {
-            return { content: safeStringify({ error: `Redirected to forbidden URL: ${finalUrl}` }), isError: true }
-          }
-          // Re-check SSRF on final URL after redirect
-          const finalHostname = new URL(finalUrl).hostname
-          if (finalHostname !== hostname) {
-            if (hasPrivateIP(finalHostname)) {
-              return { content: safeStringify({ error: `Redirected to private network: ${finalUrl}` }), isError: true }
-            }
-            if (!isIP(finalHostname)) {
-              try {
-                if (await isPrivateHostname(finalHostname)) {
-                  return { content: safeStringify({ error: `Redirected to private network: ${finalUrl}` }), isError: true }
-                }
-              } catch { return { content: safeStringify({ error: `Cannot resolve redirected hostname: ${finalUrl}` }), isError: true } }
-            }
-          }
 
           if (!resp.ok) {
-            return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status }), isError: true }
+            return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: finalUrl }), isError: true }
           }
 
           const text = await resp.text()
@@ -93,7 +62,7 @@ export function createWebBrowserTool(): AgentTool {
           const isHtml = contentType.includes("text/html")
           const content = isHtml ? htmlToText(text) : text
 
-          return { content: safeStringify({ content, code: resp.status, url }), isError: false }
+          return { content: safeStringify({ content, code: resp.status, url: finalUrl }), isError: false }
         } catch (e) {
           if (e instanceof Error && e.name === "AbortError") {
             return { content: safeStringify({ error: "Navigation timed out" }), isError: true }
@@ -180,6 +149,42 @@ const PRIVATE_HOSTNAMES = new Set([
   "localhost", "localhost.localdomain", "localhost6", "ip6-localhost",
   "metadata.google.internal", "169.254.169.254",
 ])
+
+const MAX_BROWSER_REDIRECTS = 5
+
+/**
+ * Fetch with manual redirect following and per-hop SSRF validation.
+ * Each redirect target is validated before the request is made.
+ */
+async function fetchWithManualRedirects(
+  rawUrl: string,
+  signal: AbortSignal,
+): Promise<Response | { error: string }> {
+  let currentUrl = rawUrl
+
+  for (let i = 0; i <= MAX_BROWSER_REDIRECTS; i++) {
+    const urlErr = await validateRemoteUrl(currentUrl)
+    if (urlErr) return { error: urlErr }
+
+    const resp = await fetch(currentUrl, { signal, redirect: "manual" })
+
+    if (resp.status >= 300 && resp.status < 400) {
+      const location = resp.headers.get("location")
+      if (!location) return { error: `Redirect without Location header: ${resp.status}` }
+
+      const nextUrl = new URL(location, currentUrl).toString()
+      const nextErr = await validateRemoteUrl(nextUrl)
+      if (nextErr) return { error: `Redirect target blocked: ${nextErr}` }
+
+      currentUrl = nextUrl
+      continue
+    }
+
+    return resp
+  }
+
+  return { error: `Too many redirects (max ${MAX_BROWSER_REDIRECTS})` }
+}
 
 function isPrivateHostnameSync(hostname: string): boolean {
   return PRIVATE_HOSTNAMES.has(hostname) || hostname.endsWith(".local") || hostname.endsWith(".internal")
