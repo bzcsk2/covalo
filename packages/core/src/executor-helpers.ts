@@ -117,7 +117,6 @@ export function resolveDenyMessage(
 export interface SettleLedger {
   settle: (tc: ToolCall, index: number, result: ToolResult) => boolean
   isSettled: (index: number) => boolean
-  unsettledIndices: () => number[]
 }
 
 /**
@@ -139,11 +138,6 @@ export function createSettleLedger(
     },
     isSettled(index) {
       return settled.has(index)
-    },
-    unsettledIndices() {
-      const indices: number[] = []
-      // We don't know the total count here, so callers track via toolCalls.length
-      return indices
     },
   }
 }
