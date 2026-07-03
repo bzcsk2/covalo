@@ -46,23 +46,28 @@ export function createWebBrowserTool(): AgentTool {
           const timer = setTimeout(() => controller.abort(), timeoutMs)
           const { signal, cleanup } = ctx.signal ? anySignal(ctx.signal, controller.signal) : { signal: controller.signal, cleanup: () => {} }
 
-          const result = await fetchWithManualRedirects(url, signal)
-          if ("error" in result) {
-            return { content: safeStringify({ error: result.error }), isError: true }
+          try {
+            const result = await fetchWithManualRedirects(url, signal)
+            if ("error" in result) {
+              return { content: safeStringify({ error: result.error }), isError: true }
+            }
+            const resp = result
+            const finalUrl = resp.url || url
+
+            if (!resp.ok) {
+              return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: finalUrl }), isError: true }
+            }
+
+            const text = await resp.text()
+            const contentType = resp.headers.get("content-type") ?? ""
+            const isHtml = contentType.includes("text/html")
+            const content = isHtml ? htmlToText(text) : text
+
+            return { content: safeStringify({ content, code: resp.status, url: finalUrl }), isError: false }
+          } finally {
+            clearTimeout(timer)
+            cleanup()
           }
-          const resp = result
-          const finalUrl = resp.url || url
-
-          if (!resp.ok) {
-            return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: finalUrl }), isError: true }
-          }
-
-          const text = await resp.text()
-          const contentType = resp.headers.get("content-type") ?? ""
-          const isHtml = contentType.includes("text/html")
-          const content = isHtml ? htmlToText(text) : text
-
-          return { content: safeStringify({ content, code: resp.status, url: finalUrl }), isError: false }
         } catch (e) {
           if (e instanceof Error && e.name === "AbortError") {
             return { content: safeStringify({ error: "Navigation timed out" }), isError: true }
