@@ -143,6 +143,9 @@ export class ReasonixEngine implements CoreEngine {
   /** prefix.build 缓存：避免每次 submit 重复重建（P3-4-2） */
   private prefixCacheKey = ""
 
+  /** SPEC-G: 上次 build prefix 时的 system prompt 文本，用于检测 prompt 变化 */
+  private lastSystemPromptKey = ""
+
   /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve */
   private pendingPermission: { resolve: (v: boolean) => void; toolName: string; args: Record<string, unknown> } | null = null
 
@@ -388,6 +391,22 @@ export class ReasonixEngine implements CoreEngine {
     }
     const engine = new ReasonixEngine(config, undefined, sessionId)
     await engine._loadSessionMessages(sessionId)
+
+    // SPEC-I: restore taskLedger and verificationGate from checkpoint
+    if (engine.checkpointEngine) {
+      const v2 = await engine.checkpointEngine.loadV2()
+      if (v2) {
+        if (v2.taskLedger) {
+          engine.taskLedger = new TaskLedgerTracker(v2.taskLedger.goal)
+          engine.taskLedger.applySnapshot(v2.taskLedger)
+          engine.injectTaskLedgerContext(engine.taskLedger)
+        }
+        if (v2.verificationGate) {
+          engine.verificationGateState = { ...v2.verificationGate }
+        }
+      }
+    }
+
     return engine
   }
 
@@ -691,6 +710,8 @@ export class ReasonixEngine implements CoreEngine {
           trigger: "final_draft",
           branchBudget: this.branchBudgetTracker,
           lastStopReason: "aborted",
+          taskLedger: this.taskLedger?.snapshot(),
+          verificationGate: this.verificationGateState,
         })
       }
     } catch (e) {
@@ -999,7 +1020,12 @@ Do not change goal status.`
           : ""
     const layers = [baseLayer, roleLayer, modeLayer, activeSkillsPrompt].filter(Boolean)
     const systemPrompt = layers.join("\n\n")
-    this.ctx.prefix.build(systemPrompt)
+
+    // SPEC-G: 仅在 system prompt 实际变化时重建 prefix，避免无谓刷新
+    if (this.ctx.prefix.messages.length === 0 || this.lastSystemPromptKey !== systemPrompt) {
+      this.ctx.prefix.build(systemPrompt)
+      this.lastSystemPromptKey = systemPrompt
+    }
 
     this.ctx.startTurn()
 

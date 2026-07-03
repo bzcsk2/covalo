@@ -52,6 +52,9 @@ export interface RecoverySignal {
   consumed: boolean
 }
 
+import type { TaskLedger } from "../task-ledger.js"
+import type { VerificationGateState } from "../governance/verification-gate.js"
+
 /** v2 增强 checkpoint 的运行时状态部分 */
 export interface RuntimeCheckpointV2 {
   runtimeVersion: typeof RUNTIME_CHECKPOINT_VERSION
@@ -61,6 +64,8 @@ export interface RuntimeCheckpointV2 {
   recentTools: ToolHistoryEntry[]
   recentFailures: FailureHistoryEntry[]
   verificationPending: boolean
+  verificationGate?: VerificationGateState
+  taskLedger?: TaskLedger
   recoverySignals: RecoverySignal[]
   lastTrigger: CheckpointSaveTrigger
   lastStopReason?: StopReason

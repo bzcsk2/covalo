@@ -10,6 +10,8 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 
 import { BranchBudgetTracker } from "../governance/branch-budget.js"
+import type { VerificationGateState } from "../governance/verification-gate.js"
+import { TaskLedger } from "../task-ledger.js"
 import {
   buildMinimalCheckpointEnvelope,
   type SessionCheckpointEnvelope,
@@ -42,6 +44,8 @@ export interface CheckpointSaveInput {
   verificationPending?: boolean
   appendRecoverySignal?: RecoverySignal
   lastStopReason?: StopReason
+  taskLedger?: TaskLedger
+  verificationGate?: VerificationGateState
 }
 
 const MAX_RECENT_TOOLS = 20
@@ -222,6 +226,14 @@ export class CheckpointEngine {
       if (state.recoverySignals.length > MAX_RECOVERY_SIGNALS) {
         state.recoverySignals = state.recoverySignals.slice(-MAX_RECOVERY_SIGNALS)
       }
+    }
+
+    if (input.verificationGate !== undefined) {
+      state.verificationGate = { ...input.verificationGate }
+    }
+
+    if (input.taskLedger !== undefined) {
+      state.taskLedger = { ...input.taskLedger }
     }
   }
 

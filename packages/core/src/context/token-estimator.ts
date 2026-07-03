@@ -11,7 +11,31 @@ export interface FoldDecision {
 }
 
 const MSG_OVERHEAD = 10
-const CHARS_PER_TOKEN = 4
+
+/**
+ * 轻量启发式 token 估算：区分 CJK 与其他字符。
+ * CJK 统一按每 1.5 字符计为一个 token，
+ * 其余按每 4 字符计为一个 token。
+ */
+function estimateTextTokens(text: string): number {
+  let cjk = 0
+  let other = 0
+
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x3000 && code <= 0x303f)
+    ) {
+      cjk++
+    } else {
+      other++
+    }
+  }
+
+  return Math.ceil(cjk / 1.5 + other / 4)
+}
 
 /**
  * Estimate context budget from messages (internal use only).
@@ -21,8 +45,8 @@ export function estimateTokens(messages: Array<{ role?: string; content?: string
   let total = 0
   for (const msg of messages) {
     total += MSG_OVERHEAD
-    if (msg.content) total += Math.ceil(msg.content.length / CHARS_PER_TOKEN)
-    if (msg.reasoning_content) total += Math.ceil(msg.reasoning_content.length / CHARS_PER_TOKEN)
+    if (msg.content) total += estimateTextTokens(msg.content)
+    if (msg.reasoning_content) total += estimateTextTokens(msg.reasoning_content)
   }
   return total
 }
