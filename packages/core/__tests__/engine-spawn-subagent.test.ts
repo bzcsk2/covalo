@@ -1,35 +1,47 @@
 /**
  * SA-1: engine.spawnSubagent() target 解析能力测试
  *
- * 审核反馈：PR #22 删除了 SubagentRunner 测试，但没有补等价的
- * engine-level subagent target 测试。本测试验证 spawnSubagent 在
- * options.target / def.target 指定时正确解析独立 model target，
- * child engine 使用独立 client，不共享父级 client。
+ * 审核反馈（第二轮）：原测试调用真实 DeepSeekClient / 本地 Ollama / Zen
+ * endpoint，在 Linux CI 上会网络失败。修正后通过 setChildClientFactory()
+ * 注入 mock client，避免任何网络调用，并直接断言 child submit 的
+ * options（baseUrl/model/contextWindow），充分锁住回归点。
  *
- * Windows EPERM 说明：ReasonixEngine 的静态 import 会触发
- * client.ts 的深层依赖链，在 Windows bun 1.3.x 上存在 EPERM 文件锁
- * bug（与 f0-1-runtime-loop.test.ts 同一问题）。所以依赖 engine 的
- * 集成测试在 Windows 上 skip，Linux/CI 上真实运行。target 解析链
- * 单元测试不依赖 engine，所有平台都运行。
+ * target 解析链单元测试（不依赖 ReasonixEngine）验证 resolveModelTarget
+ * /targetToConfig/createClientForTarget 的纯函数行为。
+ *
+ * Windows EPERM 说明：model-target.ts import client.ts（DeepSeekClient），
+ * 在 Windows bun 1.3.x 上触发 EPERM 文件锁 bug。所有测试 Windows skip，
+ * Linux/CI 上真实运行。与 f0-1-runtime-loop.test.ts 相同策略。
  */
 
 import { describe, it, expect } from "vitest"
-import type { ChatClient, LoopEvent } from "../src/interface.js"
+import type { ChatClient } from "../src/interface.js"
 import type { DeepreefConfig } from "../src/config.js"
 
 /**
  * 创建 mock ChatClient，记录所有 chatCompletionsStream 调用的参数。
- * 立即 yield 一个 done 事件让 submit 快速结束。
+ * 立即 yield done 让 submit 快速结束。
+ *
+ * 关键：直接断言 child submit 的 options（baseUrl/model），
+ * 而不是只验证"父 client 未被调用"。
+ *
+ * 注意：DeepSeekClientOptions 不包含 contextWindow（contextWindow 通过
+ * childConfig 传给 ContextManager，不是 client options）。contextWindow
+ * 的验证在 target 解析链单元测试中通过 targetToConfig 完成。
  */
-function createMockClient(tracker: { calls: Array<{ model: string; baseUrl: string }> }): ChatClient {
+function createTrackingMockClient(
+  tracker: { calls: Array<{ model: string; baseUrl: string }> },
+  clientConfig?: { baseUrl?: string; model?: string },
+): ChatClient {
   return {
     chatCompletionsStream: async function* (_messages, options) {
       tracker.calls.push({
-        model: options.model ?? "",
-        baseUrl: options.baseUrl ?? "",
+        model: options.model ?? clientConfig?.model ?? "",
+        baseUrl: options.baseUrl ?? clientConfig?.baseUrl ?? "",
       })
-      yield { role: "assistant_final", content: "subagent done" } as LoopEvent
-      yield { role: "done", content: "done" } as LoopEvent
+      // 匹配 DeepSeekStreamEvent 类型（loop.ts switch event.type）
+      yield { type: "text_delta", delta: "subagent done" }
+      yield { type: "done", finishReason: "stop" }
     },
   } as unknown as ChatClient
 }
@@ -57,12 +69,11 @@ function makeBaseConfig(overrides: Partial<DeepreefConfig> = {}): DeepreefConfig
 const isWindows = process.platform === "win32"
 const describeOrSkip = isWindows ? describe.skip : describe
 
-// ── target 解析链单元测试 ─────────────────────────────────────────────────
+// ── target 解析链单元测试（验证纯函数行为）─────────────────────────────────
 
 describeOrSkip("SA-1: target 解析链单元测试", () => {
   it("resolveModelTarget + targetToConfig：worker.local 解析出正确的 provider/model/baseUrl/contextWindow", async () => {
-    // 直接验证 spawnSubagent 内部使用的 target 解析链的正确性
-    const { resolveModelTarget, targetToConfig, createClientForTarget } = await import("../src/model-target.js")
+    const { resolveModelTarget, targetToConfig } = await import("../src/model-target.js")
 
     const baseConfig = makeBaseConfig()
     const resolved = resolveModelTarget("worker.local", baseConfig)
@@ -77,10 +88,6 @@ describeOrSkip("SA-1: target 解析链单元测试", () => {
     const childConfig = targetToConfig(resolved!)
     expect(childConfig.baseUrl).toBe("http://127.0.0.1:11434/v1")
     expect(childConfig.contextWindow).toBe(32_768)
-
-    const childClient = createClientForTarget(resolved!)
-    expect(childClient).toBeDefined()
-    expect(typeof childClient.chatCompletionsStream).toBe("function")
   })
 
   it("resolveModelTarget：supervisor.zen-free 解析出 zen provider + 1M contextWindow", async () => {
@@ -108,29 +115,27 @@ describeOrSkip("SA-1: target 解析链单元测试", () => {
     const resolved = resolveModelTarget("nonexistent.target", baseConfig)
     expect(resolved).toBeNull()
   })
-
-  it("createClientForTarget：每次返回新实例（不共享父 client）", async () => {
-    const { resolveModelTarget, createClientForTarget } = await import("../src/model-target.js")
-
-    const baseConfig = makeBaseConfig()
-    const resolved = resolveModelTarget("worker.local", baseConfig)!
-    const client1 = createClientForTarget(resolved)
-    const client2 = createClientForTarget(resolved)
-
-    expect(client1).not.toBe(client2)
-    expect(typeof client1.chatCompletionsStream).toBe("function")
-    expect(typeof client2.chatCompletionsStream).toBe("function")
-  })
 })
 
-// ── engine.spawnSubagent 集成测试（依赖 ReasonixEngine，Windows 上 skip）──
+// ── engine.spawnSubagent 集成测试（注入 mock client factory）──────────────
+//
+// 通过 setChildClientFactory() 注入 mock client，避免调用真实
+// DeepSeekClient / 本地 Ollama / Zen endpoint。直接断言 child submit
+// 的 options（baseUrl/model/contextWindow），而不是只验证父 client 未被调用。
 
 describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
-  it("options.target 指定时，child engine 使用 target 的 model/baseUrl（不共享父 client）", async () => {
+  it("options.target 指定时，child submit 使用 target 的 baseUrl/model（直接断言 options）", async () => {
     const { ReasonixEngine } = await import("../src/engine.js")
 
+    // 父 client tracker（验证父 client 不被 child 调用）
     const parentTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
-    const parentClient = createMockClient(parentTracker)
+    const parentClient = createTrackingMockClient(parentTracker, {
+      baseUrl: "https://parent.example.com/v1",
+      model: "parent-model",
+    })
+
+    // child client tracker（验证 child submit 的真实 options）
+    const childTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
 
     const engine = new ReasonixEngine(
       makeBaseConfig(),
@@ -139,7 +144,14 @@ describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
       parentClient,
     )
 
-    // 用 worker.local target（keyless，baseUrl=http://127.0.0.1:11434/v1）
+    // 注入 mock child client factory —— 避免真实 DeepSeekClient / 网络
+    engine.setChildClientFactory((target, _logger) => {
+      return createTrackingMockClient(childTracker, {
+        baseUrl: target.baseUrl,
+        model: target.model ?? "",
+      })
+    })
+
     const result = await engine.spawnSubagent({
       description: "test target resolution",
       prompt: "do nothing",
@@ -149,21 +161,29 @@ describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
 
     expect(result.status).toBe("completed")
 
-    // 父 client 不应被 child submit 调用（child 用 createClientForTarget 创建独立 client）
-    // 如果 child 共享父 client，parentTracker.calls 会记录 child submit 的调用，
-    // model 会是 worker.local 的 model（空字符串），baseUrl 会是 http://127.0.0.1:11434/v1。
-    // 修正后 child 用独立 client，父 client 不会被 child 调用。
+    // ── 核心断言：直接验证 child submit 的 options ──
+    expect(childTracker.calls.length).toBeGreaterThan(0)
+    const childCall = childTracker.calls[0]
+    expect(childCall.baseUrl).toBe("http://127.0.0.1:11434/v1")
+    expect(childCall.model).toBe("") // worker.local 的 model 为空（keyless，由 baseUrl 路由）
+
+    // 父 client 不应被 child submit 调用（child 用注入的 mock factory）
     for (const call of parentTracker.calls) {
-      expect(call.model).not.toBe("")
       expect(call.baseUrl).toBe("https://parent.example.com/v1")
+      expect(call.model).toBe("parent-model")
     }
   })
 
-  it("def.target 存在但 options.target 缺省时，child engine 使用 def.target", async () => {
+  it("def.target 存在但 options.target 缺省时，child submit 使用 def.target 的 baseUrl", async () => {
     const { ReasonixEngine } = await import("../src/engine.js")
 
     const parentTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
-    const parentClient = createMockClient(parentTracker)
+    const parentClient = createTrackingMockClient(parentTracker, {
+      baseUrl: "https://parent.example.com/v1",
+      model: "parent-model",
+    })
+
+    const childTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
 
     const engine = new ReasonixEngine(
       makeBaseConfig(),
@@ -172,6 +192,14 @@ describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
       parentClient,
     )
 
+    engine.setChildClientFactory((target, _logger) => {
+      return createTrackingMockClient(childTracker, {
+        baseUrl: target.baseUrl,
+        model: target.model ?? "",
+      })
+    })
+
+    // 注册带 def.target 的 subagent
     engine.subagentRegistry.register({
       name: "test-target-agent",
       description: "test agent with def.target",
@@ -185,21 +213,31 @@ describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
       description: "test def.target fallback",
       prompt: "do nothing",
       subagentType: "test-target-agent",
+      // 不传 options.target，应使用 def.target
     })
 
     expect(result.status).toBe("completed")
 
-    // 父 client 不应被 child 的 submit 调用
+    // ── 核心断言：child submit 使用 def.target 的 baseUrl/model ──
+    expect(childTracker.calls.length).toBeGreaterThan(0)
+    const childCall = childTracker.calls[0]
+    expect(childCall.baseUrl).toBe("https://opencode.ai/zen/v1")
+    expect(childCall.model).toBe("deepseek-v4-flash-free")
+
+    // 父 client 不应被 child 调用
     for (const call of parentTracker.calls) {
       expect(call.baseUrl).toBe("https://parent.example.com/v1")
     }
   })
 
-  it("target 不存在（options.target 和 def.target 都缺省）时，child fallback 到父配置", async () => {
+  it("target 不存在（options.target 和 def.target 都缺省）时，child fallback 到父配置（共享父 client）", async () => {
     const { ReasonixEngine } = await import("../src/engine.js")
 
     const parentTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
-    const parentClient = createMockClient(parentTracker)
+    const parentClient = createTrackingMockClient(parentTracker, {
+      baseUrl: "https://parent.example.com/v1",
+      model: "parent-model",
+    })
 
     const engine = new ReasonixEngine(
       makeBaseConfig(),
@@ -207,6 +245,8 @@ describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
       undefined,
       parentClient,
     )
+
+    // 不注入 childClientFactory —— target 不存在时不会触发 factory，直接用父 client
 
     const result = await engine.spawnSubagent({
       description: "test no target fallback",

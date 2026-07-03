@@ -1249,23 +1249,25 @@ describe("WorkflowCoordinator", () => {
       // 审核反馈：原 canContinue() 对 waiting_user 返回 false，导致
       // runWaitingUser() 进不去，pending question 永远不会创建。
       // 修正后 waiting_user 可进入 runWaitingUser()，await ask() 创建 pending。
+      //
+      // 关键：coordinator.runSupervisorCheck() 从 getState().messages.findLast()
+      // 读取响应（不是从 submit yield），所以 getState() 必须返回 submit()
+      // 最新产生的内容，而不是固定 "stub"。
       const questionService = new QuestionService()
+      let supervisorMessage = ""
       let supervisorCalls = 0
       let workerCalls = 0
+      let workerMessage = ""
       const runtime = {
         getSupervisor: () => ({
           submit: async function* (_input: string, _mode?: string, phase?: string) {
             supervisorCalls++
-            // 第 1 次：supervisor_analyse → 返回 plan
-            // 第 2 次：supervisor_check → 返回 ask_user（legacy string，触发 ask_user 分支）
-            // 第 3 次：supervisor_analyse（reply 后推进）→ 返回 approve with completionAudit
-            let content: string
             if (phase === "supervisor_analyse" && supervisorCalls === 1) {
-              content = "Initial plan"
+              supervisorMessage = "Initial plan"
             } else if (phase === "supervisor_check") {
-              content = "I need to ask_user for clarification about the requirement"
+              supervisorMessage = "I need to ask_user for clarification about the requirement"
             } else {
-              content = JSON.stringify({
+              supervisorMessage = JSON.stringify({
                 version: 1,
                 workflowId: "wf-ask-user",
                 iteration: 1,
@@ -1278,16 +1280,17 @@ describe("WorkflowCoordinator", () => {
                 completionAudit: [{ requirement: "ask_user 闭环", status: "proven", evidence: ["user replied"] }],
               })
             }
-            yield { role: "assistant_final", content }
+            yield { role: "assistant_final", content: supervisorMessage }
           },
-          getState: () => ({ messages: [{ role: "assistant", content: "stub" }] }),
+          getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
         }),
         getWorker: () => ({
           submit: async function* () {
             workerCalls++
-            yield { role: "assistant_final", content: "done" }
+            workerMessage = "done"
+            yield { role: "assistant_final", content: workerMessage }
           },
-          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+          getState: () => ({ messages: [{ role: "assistant", content: workerMessage }] }),
         }),
       }
 
@@ -1331,22 +1334,26 @@ describe("WorkflowCoordinator", () => {
 
     it("WF-1: rejectWorkflowQuestion → blocked", async () => {
       const questionService = new QuestionService()
+      let supervisorMessage = ""
+      let workerMessage = ""
       const runtime = {
         getSupervisor: () => ({
           submit: async function* (_input: string, _mode?: string, phase?: string) {
             if (phase === "supervisor_check") {
-              yield { role: "assistant_final", content: "ask_user for clarification" }
+              supervisorMessage = "ask_user for clarification"
             } else {
-              yield { role: "assistant_final", content: "plan" }
+              supervisorMessage = "plan"
             }
+            yield { role: "assistant_final", content: supervisorMessage }
           },
-          getState: () => ({ messages: [{ role: "assistant", content: "stub" }] }),
+          getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
         }),
         getWorker: () => ({
           submit: async function* () {
-            yield { role: "assistant_final", content: "done" }
+            workerMessage = "done"
+            yield { role: "assistant_final", content: workerMessage }
           },
-          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+          getState: () => ({ messages: [{ role: "assistant", content: workerMessage }] }),
         }),
       }
 

@@ -52,6 +52,7 @@ import {
   type SupervisorGuidanceConfig,
 } from "./supervisor/index.js"
 import { resolveModelTarget, targetToConfig, createClientForTarget } from "./model-target.js"
+import type { ModelTarget } from "./model-target.js"
 export type { ContextPolicy } from "./context/policy.js"
 
 export interface ContextPolicyStatus {
@@ -183,6 +184,18 @@ export class ReasonixEngine implements CoreEngine {
   private delegatedEvents: LoopEvent[] = []
   private delegatedEventWaiters = new Set<() => void>()
   private activeChildEngines = new Set<ReasonixEngine>()
+
+  /**
+   * SA-1: 可测试的 child client factory 注入点。
+   * 生产代码留 undefined → spawnSubagent 用默认 createClientForTarget。
+   * 测试时注入 mock factory → 避免触发真实 DeepSeekClient / 网络。
+   */
+  private childClientFactory?: (target: ModelTarget, logger: RuntimeLogger) => ChatClient
+
+  /** SA-1: 注入 child client factory（测试用） */
+  setChildClientFactory(factory: (target: ModelTarget, logger: RuntimeLogger) => ChatClient): void {
+    this.childClientFactory = factory
+  }
 
   /**
    * @deprecated 使用 AgentProfile 中的 harness 配置代替
@@ -1488,13 +1501,16 @@ Do not change goal status.`
 
     // SA-1: 迁移 SubagentRunner 的 target 解析能力 — 按 target 解析独立 client，
     // 不再无条件共享父级 client。保留 TUI orchestration 事件和 cancel/interrupt 逻辑。
+    // 测试时可通过 setChildClientFactory() 注入 mock factory，避免触发真实 client。
     const targetId = options.target ?? def.target
     const resolvedTarget = targetId
       ? resolveModelTarget(targetId, this.config, this.config.modelTargets)
       : null
     const childConfig = resolvedTarget ? targetToConfig(resolvedTarget) : this.config
     const childClient = resolvedTarget
-      ? createClientForTarget(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name }))
+      ? (this.childClientFactory
+          ? this.childClientFactory(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name }))
+          : createClientForTarget(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name })))
       : this.client
 
     const child = new ReasonixEngine(
