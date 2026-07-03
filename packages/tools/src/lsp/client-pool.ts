@@ -179,7 +179,8 @@ export class LspClientPool {
     await entry.client.shutdown().catch(() => entry.client.kill())
     this.clients.delete(serverKey)
 
-    await this.acquire(language, cwd, server)
+    const { serverKey: newKey } = await this.acquire(language, cwd, server)
+    this.release(newKey)
     return true
   }
 

@@ -75,6 +75,26 @@ describe("LspClientPool", () => {
     pool.release(a2.serverKey)
   })
 
+  it("should be collected by idle sweep after restart", async () => {
+    const { config } = await readLspConfig(ctx.cwd)
+    const server = getLanguageConfig(config, "typescript")!
+
+    const { serverKey } = await pool.acquire("typescript", ctx.cwd, server)
+    pool.release(serverKey)
+    await pool.restart(serverKey)
+
+    expect(pool.getStatus().length).toBe(1)
+
+    // Start idle sweep with very short timeout
+    pool.startIdleSweep(10, 1)
+
+    // Wait for sweep to fire
+    await new Promise(resolve => setTimeout(resolve, 50))
+    pool.stopIdleSweep()
+
+    expect(pool.getStatus().length).toBe(0)
+  })
+
   it("should find server key via findServerKey", async () => {
     const { config } = await readLspConfig(ctx.cwd)
     const server = getLanguageConfig(config, "typescript")!
