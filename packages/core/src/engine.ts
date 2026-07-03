@@ -1275,7 +1275,6 @@ Do not change goal status.`
           ?? harnessProfile.requireVerificationBeforeFinal,
         verificationGateState: this.verificationGateState,
         refreshLedgerContext: () => {
-          this.ctx.scratch.reset()
           this.injectTaskLedgerContext(this.taskLedger)
         },
         // ADV-HAR-06: 根据 effectivePolicy.earlyStop 配置 EarlyStopDetector
