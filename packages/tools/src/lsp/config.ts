@@ -25,6 +25,33 @@ export interface LspConfigResult {
 const DEFAULT_REQUEST_TIMEOUT_MS = 8000
 const DEFAULT_IDLE_TIMEOUT_MS = 300000
 
+export const DEFAULT_LSP_CONFIG: LspConfig = {
+  version: 1,
+  requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+  idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
+  languages: {
+    typescript: { command: "typescript-language-server", args: ["--stdio"] },
+    typescriptreact: { command: "typescript-language-server", args: ["--stdio"] },
+    javascript: { command: "typescript-language-server", args: ["--stdio"] },
+    javascriptreact: { command: "typescript-language-server", args: ["--stdio"] },
+    python: { command: "pyright-langserver", args: ["--stdio"] },
+    go: { command: "gopls", args: [] },
+    rust: { command: "rust-analyzer", args: [] },
+    json: { command: "vscode-langservers-extracted", args: ["--stdio"] },
+    css: { command: "vscode-langservers-extracted", args: ["--stdio"] },
+    html: { command: "vscode-langservers-extracted", args: ["--stdio"] },
+  },
+}
+
+export function mergeConfig(base: LspConfig, override: LspConfig): LspConfig {
+  return {
+    version: override.version ?? base.version,
+    requestTimeoutMs: override.requestTimeoutMs ?? base.requestTimeoutMs,
+    idleTimeoutMs: override.idleTimeoutMs ?? base.idleTimeoutMs,
+    languages: { ...base.languages, ...override.languages },
+  }
+}
+
 export async function readLspConfig(cwd: string, configPath?: string): Promise<LspConfigResult> {
   const envConfigPath = process.env.COVALO_LSP_CONFIG
   const paths = [
@@ -37,13 +64,13 @@ export async function readLspConfig(cwd: string, configPath?: string): Promise<L
     try {
       const content = await readFile(path, "utf8")
       const parsed = JSON.parse(content) as LspConfig
-      return { config: normalizeConfig(parsed), configPath: path }
+      return { config: mergeConfig(DEFAULT_LSP_CONFIG, normalizeConfig(parsed)), configPath: path }
     } catch {
       continue
     }
   }
 
-  return { config: {}, configPath: null }
+  return { config: DEFAULT_LSP_CONFIG, configPath: null }
 }
 
 export function normalizeConfig(raw: LspConfig): LspConfig {

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readLspConfig, normalizeConfig, getLanguageConfig, getRequestTimeout, getIdleTimeout, getInstallHint } from "../src/lsp/config.js"
+import { readLspConfig, normalizeConfig, getLanguageConfig, getRequestTimeout, getIdleTimeout, getInstallHint, DEFAULT_LSP_CONFIG } from "../src/lsp/config.js"
 import { inferLanguage, getFileExtensions, LANGUAGE_EXTENSIONS } from "../src/lsp/language.js"
 import {
   normalizeLocation,
@@ -20,9 +20,11 @@ import {
 describe("LSP Config", () => {
   const cwd = mkdtempSync(join(tmpdir(), "lsp-config-test-"))
 
-  it("should return empty config when no config file exists", async () => {
+  it("should return default config when no config file exists", async () => {
     const result = await readLspConfig(cwd)
-    expect(result.config).toEqual({})
+    expect(result.config.version).toBe(1)
+    expect(result.config.languages?.typescript).toBeDefined()
+    expect(result.config.languages?.python).toBeDefined()
     expect(result.configPath).toBeNull()
   })
 

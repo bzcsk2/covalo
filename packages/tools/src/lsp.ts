@@ -6,8 +6,10 @@ import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { isSensitive } from "./sensitive.js"
 import { LspClient } from "./lsp/lsp-client.js"
-import { readLspConfig, getLanguageConfig, getRequestTimeout, getInstallHint } from "./lsp/config.js"
+import { readLspConfig, getLanguageConfig, getRequestTimeout, getInstallHint, DEFAULT_LSP_CONFIG } from "./lsp/config.js"
 import { inferLanguage } from "./lsp/language.js"
+import { resolveServer } from "./lsp/server-resolver.js"
+import type { LspClientPool } from "./lsp/client-pool.js"
 import {
   normalizeLocationArray,
   normalizeHover,
@@ -78,7 +80,7 @@ const VALID_ACTIONS: LspAction[] = [
   "documentSymbol", "workspaceSymbol",
 ]
 
-export function createLspTool(): AgentTool {
+export function createLspTool(pool?: LspClientPool): AgentTool {
   return {
     name: "LSP",
     description: "Query a configured Language Server Protocol process for definitions, references, hover info, diagnostics, completion, and more. Configure servers in .covalo/lsp.json.",
@@ -115,10 +117,20 @@ export function createLspTool(): AgentTool {
       const action = ALIAS_MAP[rawAction] ?? rawAction
 
       if (action === "server_status") {
-        return { content: safeStringify({ status: "ok", action: "server_status", message: "LSP manager not yet implemented" }), isError: false }
+        if (!pool) return { content: safeStringify({ status: "ok", action: "server_status", servers: [] }), isError: false }
+        return { content: safeStringify({ status: "ok", action: "server_status", servers: pool.getStatus() }), isError: false }
       }
       if (action === "restart_server") {
-        return { content: safeStringify({ status: "ok", action: "restart_server", message: "LSP manager not yet implemented" }), isError: false }
+        if (!pool) return { content: safeStringify({ status: "ok", action: "restart_server", message: "pool not available" }), isError: false }
+        const language = typeof args.language === "string" && args.language.trim()
+          ? args.language.trim()
+          : args.file_path ? inferLanguage(args.file_path as string) : ""
+        if (!language) return { content: safeStringify({ error: "Cannot determine language for restart_server" }), isError: true }
+        const { config } = await readLspConfig(ctx.cwd)
+        const server = getLanguageConfig(config, language)
+        const serverKey = `${language}::${ctx.cwd}::${server?.command ?? ""}`
+        await pool.restart(serverKey).catch(() => {})
+        return { content: safeStringify({ status: "ok", action: "restart_server", restarted: true }), isError: false }
       }
 
       if (typeof args.file_path !== "string") {
@@ -141,21 +153,25 @@ export function createLspTool(): AgentTool {
       }
 
       const { config } = await readLspConfig(ctx.cwd)
-      const server = getLanguageConfig(config, language)
-      if (!server?.command) {
-        const hint = getInstallHint(language)
+      const configuredServer = getLanguageConfig(config, language)
+      const resolverResult = await resolveServer(configuredServer?.command, configuredServer?.args, language, ctx.cwd)
+
+      if (!resolverResult.available) {
         return {
           content: safeStringify({
             status: "error",
-            errorType: "server_not_configured",
-            message: `No LSP server configured for language "${language}".`,
-            installHint: hint,
+            errorType: "server_not_installed",
+            message: `LSP server not found for language "${language}".`,
+            installHint: resolverResult.installHint,
+            configHint: resolverResult.configHint ?? `Create .covalo/lsp.json to customize.`,
             action,
             language,
           }),
           isError: true,
         }
       }
+
+      const server = resolverResult.server
 
       if (action === "workspace_symbols" && typeof args.query !== "string") {
         return { content: safeStringify({ error: "query is required for workspace_symbols" }), isError: true }
@@ -175,27 +191,35 @@ export function createLspTool(): AgentTool {
         : getRequestTimeout(config)
 
       try {
-        // LSP-3: 直接使用 LspClient，不再经过 lsp-client.ts 包装器（已删除）。
-        // 逻辑等价于原 runLspRequest：start → initialize → 单次请求 → shutdown。
-        const client = new LspClient({
-          command: server.command,
-          args: server.args ?? [],
-          cwd: ctx.cwd,
-          rootPath: ctx.cwd,
-          language,
-          timeoutMs,
-        })
-
         let result: unknown
-        try {
-          // 把 start/initialize 也纳入 try/finally：若 initialize() 抛错
-          // （timeout/协议错误），立即 shutdown 而非等 watchdog 30s 后清理。
-          await client.start()
-          await client.initialize()
+        let acquiredClient: LspClient | null = null
+        let acquiredServerKey: string | null = null
 
+        try {
+          if (pool) {
+            const acquired = await pool.acquire(language, ctx.cwd, server)
+            acquiredClient = acquired.client
+            acquiredServerKey = acquired.serverKey
+            const content = await readFile(filePath, "utf8")
+            await pool.ensureDocument(acquiredServerKey, filePath, language, content)
+          } else {
+            const client = new LspClient({
+              command: server.command,
+              args: server.args ?? [],
+              cwd: ctx.cwd,
+              rootPath: ctx.cwd,
+              language,
+              timeoutMs,
+            })
+            acquiredClient = client
+            await client.start()
+            await client.initialize()
+            const content = await readFile(filePath, "utf8")
+            await client.openDocument(filePath, language, content)
+          }
+
+          const client = acquiredClient
           const uri = pathToFileURL(filePath).href
-          const content = await readFile(filePath, "utf8")
-          await client.openDocument(filePath, language, content)
 
           if (action === "diagnostics") {
             await new Promise((resolve) => setTimeout(resolve, Math.min(timeoutMs, 750)))
@@ -222,12 +246,17 @@ export function createLspTool(): AgentTool {
             result = await client.request(ACTION_METHODS[action], params)
           }
         } catch (error) {
-          const stderr = client.getStderr()
-          if (stderr.trim() && error instanceof Error) throw new Error(`${error.message}; server stderr: ${stderr.trim()}`)
+          if (acquiredClient && !pool) {
+            const stderr = acquiredClient.getStderr()
+            if (stderr.trim() && error instanceof Error) throw new Error(`${error.message}; server stderr: ${stderr.trim()}`)
+          }
           throw error
         } finally {
-          // shutdown 失败时降级为 kill，确保子进程被回收
-          await client.shutdown().catch(() => client.kill())
+          if (acquiredServerKey && pool) {
+            pool.release(acquiredServerKey)
+          } else if (acquiredClient && !pool) {
+            await acquiredClient.shutdown().catch(() => acquiredClient!.kill())
+          }
         }
 
         const normalized = normalizeResult(action, result)
