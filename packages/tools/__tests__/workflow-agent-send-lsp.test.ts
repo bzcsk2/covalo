@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
 import { createWorkflowTool } from "../src/workflow.js"
 import { createAgentToolTool } from "../src/agent-tool.js"
 import { createSendMessageTool } from "../src/send-message.js"
@@ -177,13 +178,13 @@ describe("LSP", () => {
     expect(r.isError).toBe(true)
   })
 
-  it("should return an error when no server is configured", async () => {
+  it("should return an error for language with no default server", async () => {
     const tool = createLspTool()
-    writeFileSync(join(ctx.cwd, "test.json"), "{}")
-    const r = await tool.execute({ action: "diagnostics", file_path: "test.json" }, ctx)
+    writeFileSync(join(ctx.cwd, "test.rb"), "puts 42")
+    const r = await tool.execute({ action: "diagnostics", file_path: "test.rb" }, ctx)
     expect(r.isError).toBe(true)
     const p = JSON.parse(r.content as string)
-    expect(p.message).toContain("No LSP server configured")
+    expect(p.message).toContain("LSP server not found for language")
   })
 
   it("should execute a configured LSP hover request", async () => {
@@ -191,7 +192,7 @@ describe("LSP", () => {
     mkdirSync(join(ctx.cwd, ".covalo"), { recursive: true })
     writeFileSync(join(ctx.cwd, "test.ts"), "const answer = 42\n")
     writeFileSync(join(ctx.cwd, ".covalo", "lsp.json"), JSON.stringify({
-      languages: { typescript: { command: process.execPath, args: [join(import.meta.dir, "fixtures", "fake-lsp.mjs")] } },
+      languages: { typescript: { command: process.execPath, args: [join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-lsp.mjs")] } },
     }))
     const r = await tool.execute({ action: "hover", file_path: "test.ts" }, ctx)
     expect(r.isError).toBe(false)

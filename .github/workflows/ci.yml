@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main, master]
   pull_request:
-    branches: [master]
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
         run: bun run typecheck
 
       - name: Run test suite
-        run: bun test packages/core/__tests__/ packages/tui/__tests__/ packages/cli/__tests__/ --timeout 30000
+        run: bun test packages/core/__tests__/ packages/tools/__tests__/ packages/tui/__tests__/ packages/cli/__tests__/ --timeout 30000
         env:
           CI: "true"
 
@@ -43,6 +43,17 @@ jobs:
         run: node ./dist/index.js --help
         env:
           CI: "true"
+
+      - name: LSP real server smoke (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          echo "=== LSP real server smoke ==="
+          npm install -g typescript-language-server typescript 2>&1 | tail -3
+          echo "typescript-language-server: $(which typescript-language-server)"
+          COVALO_LSP_REAL=1 bun test packages/tools/__tests__/lsp-real-servers.test.ts --timeout 30000
+        env:
+          COVALO_LSP_REAL: "1"
 
       - name: Check npm package contents
         run: npm pack --dry-run
