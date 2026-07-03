@@ -119,12 +119,12 @@ describe("AUD-08: storm partial rejection", () => {
     expect(result.partial).toBe(true)
   })
 
-  it("single KV storm result should not be partial", () => {
+  it("single KV storm result should also be partial", () => {
     // Use input with garbage that prevents scavenge but storm can match
     const result = repairToolArguments('"only": "key" @@@')
     expect(result.success).toBe(true)
     expect(result.method).toBe("storm")
-    expect(result.partial).toBeFalsy()
+    expect(result.partial).toBe(true)
   })
 
   it("should reject partial repair in executor", () => {

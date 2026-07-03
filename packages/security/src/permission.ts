@@ -138,6 +138,15 @@ export class PermissionEngine {
   }
 
   decide(toolName: string, args: Record<string, unknown>, tier: string): PermissionCheck {
+    if (this.strictMode) {
+      for (const rule of this.allowRules) {
+        if (!matchToolName(rule.toolName, toolName)) continue
+        if (rule.args && !matchArgs(rule.args, args)) continue
+        return { decision: "allow", rule }
+      }
+      return { decision: "deny", reason: `Strict mode: tool "${toolName}" is not explicitly allowed (tier: ${tier})` }
+    }
+
     for (const rule of this.denyRules) {
       if (!matchToolName(rule.toolName, toolName)) continue
       if (rule.args && !matchArgs(rule.args, args)) continue
