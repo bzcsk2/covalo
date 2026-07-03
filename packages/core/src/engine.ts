@@ -415,13 +415,7 @@ export class ReasonixEngine implements CoreEngine {
       }
     }
     this.sessionId = sessionId
-    // SPEC-A: session boundary — clear all context zones and submit-local state
     this.ctx.log.clear()
-    this.ctx.clearTransientState()
-    this.taskLedger = undefined
-    this.verificationGateState = { continuationCount: 0 }
-    this.supervisorGuidanceState = createSupervisorGuidanceState()
-    this.pendingInstructionQueue = []
     this.toolExecutor.setSessionId(sessionId)
     this.logger = this.logger.child({ sessionId })
     this.rebindSessionWriter(sessionId)
@@ -520,15 +514,16 @@ export class ReasonixEngine implements CoreEngine {
     return this.taskLedger?.snapshot()
   }
 
-  /** DRF-40: 将 TaskLedger 注入可变 scratch 上下文 — 按来源精确替换，避免污染其他来源消息 */
+  /** DRF-40: 将 TaskLedger 注入可变 scratch 上下文 */
   private injectTaskLedgerContext(ledger?: TaskLedgerTracker, includePlanRequest = false): void {
     if (!ledger) return
-    const messages: ChatMessage[] = []
-    if (includePlanRequest && ledger.plan.length === 0) {
-      messages.push({ role: "user", content: planRequestInstruction() })
+    const formatted = ledger.formatForContext()
+    if (formatted.trim()) {
+      this.ctx.scratch.append({ role: "user", content: formatted })
     }
-    messages.push({ role: "user", content: ledger.formatForContext() })
-    this.ctx.scratch.replaceSource("task_ledger", messages)
+    if (includePlanRequest && ledger.plan.length === 0) {
+      this.ctx.scratch.append({ role: "user", content: planRequestInstruction() })
+    }
   }
 
   /** DRF-60: 构建 Supervisor 指导闭环配置 */
@@ -1275,6 +1270,7 @@ Do not change goal status.`
           ?? harnessProfile.requireVerificationBeforeFinal,
         verificationGateState: this.verificationGateState,
         refreshLedgerContext: () => {
+          this.ctx.scratch.reset()
           this.injectTaskLedgerContext(this.taskLedger)
         },
         // ADV-HAR-06: 根据 effectivePolicy.earlyStop 配置 EarlyStopDetector
@@ -1561,8 +1557,6 @@ Do not change goal status.`
       childClient,
       this.logger.child({ delegate: true, subagentType: def.name }),
     )
-    // SPEC-C: child 创建后立即继承父引擎 contextPolicy
-    await child.setContextPolicy(this.getContextPolicy())
     this.activeChildEngines.add(child)
 
     try {
