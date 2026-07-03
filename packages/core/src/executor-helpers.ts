@@ -96,7 +96,14 @@ export function resolveDenyMessage(
   tools: Map<string, AgentTool>,
   permissionEngine?: PermissionEngine,
   args?: Record<string, unknown>,
+  hookManager?: HookManager,
 ): string {
+  // T1: Check if a hook error caused the deny — include the reason
+  if (hookManager?.lastHookDenyReason) {
+    const reason = hookManager.lastHookDenyReason
+    hookManager.lastHookDenyReason = undefined // consume after read
+    return reason
+  }
   const handler = tools.get(tc.function.name)
   if (permissionEngine && handler && args) {
     const check = permissionEngine.decide(tc.function.name, args, handler.approval)

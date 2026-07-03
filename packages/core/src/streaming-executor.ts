@@ -112,7 +112,7 @@ export class StreamingToolExecutor {
 
         const permResult = await evaluatePermission(tc, exec.tools, exec.permissionEngine, exec.hookManager, exec.requestPermission, argsResult.args)
         if (permResult === "deny") {
-          const result = makeToolError(resolveDenyMessage(tc, exec.tools, exec.permissionEngine, argsResult.args))
+          const result = makeToolError(resolveDenyMessage(tc, exec.tools, exec.permissionEngine, argsResult.args, exec.hookManager))
           settle(tc, index, result)
           yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
           continue
@@ -503,7 +503,7 @@ export class StreamingToolExecutor {
     }
     const permResult = await this.checkAskPermission(tc, index, argsResult.args)
     if (permResult === "deny") {
-      const result = makeToolError(resolveDenyMessage(tc, this.tools, this.permissionEngine, argsResult.args))
+      const result = makeToolError(resolveDenyMessage(tc, this.tools, this.permissionEngine, argsResult.args, this.hookManager))
       settle(tc, index, result)
       yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
       return
