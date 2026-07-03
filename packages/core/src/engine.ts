@@ -51,7 +51,7 @@ import {
   loadSupervisorPool,
   type SupervisorGuidanceConfig,
 } from "./supervisor/index.js"
-import { resolveModelTarget } from "./model-target.js"
+import { resolveModelTarget, targetToConfig, createClientForTarget } from "./model-target.js"
 export type { ContextPolicy } from "./context/policy.js"
 
 export interface ContextPolicyStatus {
@@ -1486,11 +1486,22 @@ Do not change goal status.`
       },
     })
 
+    // SA-1: 迁移 SubagentRunner 的 target 解析能力 — 按 target 解析独立 client，
+    // 不再无条件共享父级 client。保留 TUI orchestration 事件和 cancel/interrupt 逻辑。
+    const targetId = options.target ?? def.target
+    const resolvedTarget = targetId
+      ? resolveModelTarget(targetId, this.config, this.config.modelTargets)
+      : null
+    const childConfig = resolvedTarget ? targetToConfig(resolvedTarget) : this.config
+    const childClient = resolvedTarget
+      ? createClientForTarget(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name }))
+      : this.client
+
     const child = new ReasonixEngine(
-      this.config,
+      childConfig,
       undefined,
       undefined,
-      this.client,
+      childClient,
       this.logger.child({ delegate: true, subagentType: def.name }),
     )
     this.activeChildEngines.add(child)

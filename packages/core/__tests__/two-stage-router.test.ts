@@ -52,6 +52,11 @@ describe("getRoutingMode", () => {
     expect(getRoutingMode(8192, "direct")).toBe("direct")
     expect(getRoutingMode(128_000, "two_stage")).toBe("two_stage")
   })
+
+  it("TR-1: auto 走自动检测（小上下文 two_stage，大上下文 direct）", () => {
+    expect(getRoutingMode(8192, "auto")).toBe("two_stage")
+    expect(getRoutingMode(128_000, "auto")).toBe("direct")
+  })
 })
 
 describe("inferToolCategory", () => {
@@ -190,6 +195,30 @@ describe("resolveToolRouting", () => {
       .properties.category.enum
     expect(enumValues).toEqual(expect.arrayContaining(["read", "write"]))
     expect(enumValues).not.toContain("run")
+  })
+
+  it("TR-1: routingOverride=auto 小上下文走 two_stage", () => {
+    const decision = resolveToolRouting({
+      allTools: ALL_BUILTIN_TOOLS,
+      contextWindow: 8192,
+      toolset: "full",
+      routingOverride: "auto",
+    })
+    expect(decision.mode).toBe("two_stage")
+    expect(decision.tools).toHaveLength(1)
+    expect(decision.tools[0].function.name).toBe("select_category")
+  })
+
+  it("TR-1: routingOverride=auto 大上下文走 direct", () => {
+    const decision = resolveToolRouting({
+      allTools: ALL_BUILTIN_TOOLS,
+      contextWindow: 128_000,
+      toolset: "full",
+      sizeClass: "large",
+      routingOverride: "auto",
+    })
+    expect(decision.mode).toBe("direct")
+    expect(decision.tools.length).toBeGreaterThan(1)
   })
 })
 

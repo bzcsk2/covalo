@@ -51,5 +51,4 @@ export class SubagentRegistry {
     return allowed.filter(t => !disallowed.includes(t))
   }
 }
-
-export const defaultSubagentRegistry = new SubagentRegistry()
+// SA-1: defaultSubagentRegistry 已删除（engine 构造函数自建 new SubagentRegistry()）

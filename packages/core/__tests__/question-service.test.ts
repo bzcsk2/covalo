@@ -29,6 +29,36 @@ describe('QuestionService', () => {
       expect(id1).not.toBe(id2)
       expect(id1).toMatch(/^que/)
     })
+
+    it('WF-1: 支持外部传入 requestId', () => {
+      const svc = new QuestionService()
+      const questions: QuestionInfo[] = [
+        { question: 'Pick one', header: 'Choice', options: [{ label: 'A', description: 'Option A' }] }
+      ]
+      const externalId = 'wf-ask-user-1234'
+      svc.ask({ sessionId: 'sess1', questions, requestId: externalId })
+
+      const pending = svc.list()
+      expect(pending).toHaveLength(1)
+      expect(pending[0].id).toBe(externalId)
+    })
+
+    it('WF-1: 外部 requestId 可用于 reply', async () => {
+      const svc = new QuestionService()
+      const questions: QuestionInfo[] = [
+        { question: 'Pick one', header: 'Choice', options: [{ label: 'A', description: 'Option A' }] }
+      ]
+      const externalId = 'wf-ask-user-5678'
+      const promise = svc.ask({ sessionId: 'sess1', questions, requestId: externalId })
+
+      setTimeout(() => {
+        svc.reply({ requestId: externalId, answers: [['A']] })
+      }, 0)
+
+      const answers = await promise
+      expect(answers).toEqual([['A']])
+      expect(svc.list()).toHaveLength(0)
+    })
   })
 
   describe('reply', () => {

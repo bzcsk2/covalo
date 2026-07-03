@@ -14,6 +14,7 @@ import type {
 import { DEFAULT_WORKFLOW_CONFIG } from "./types.js"
 import type { DualAgentRuntime } from "../dual-agent-runtime/dual-runtime.js"
 import type { QuestionService } from "../question/service.js"
+import type { QuestionAnswer } from "../question/types.js"
 import type { LoopEvent } from "../interface.js"
 import { parseSupervisorDecision, parseSupervisorPlan, parseWorkerReport, type BlockerAuditState } from "./structured-protocol.js"
 import type { AgentCommController } from "../agent-comm/controller.js"
@@ -715,6 +716,9 @@ Return your guidance as structured advice.`
     }
 
     try {
+      // WF-1: 把 handleAskUser 生成的 requestId 传给 questionService.ask()，
+      // 使 ask_user 事件的 requestId 与 pending map 的 requestId 一致。
+      // 这样 UI 通过 ask_user 事件拿到的 requestId 可以直接用于 reply/reject。
       await this.questionService.ask({
         sessionId: this.state.workflowId,
         questions: [{
@@ -722,12 +726,39 @@ Return your guidance as structured advice.`
           header: "Workflow needs input",
           options: [],
         }],
+        requestId,
       })
 
       this.transition("supervisor_analyse")
     } catch {
       this.transition("blocked", "User rejected question")
     }
+  }
+
+  /**
+   * WF-1: 回复 workflow 的 waiting_user 问题。
+   * 由 TUI/CLI 在用户回答 supervisor 的 ask_user 后调用。
+   * requestId 必须与 ask_user 事件中的 requestId 一致。
+   */
+  replyWorkflowQuestion(requestId: string, answers: QuestionAnswer[]): void {
+    if (!this.state || !this.questionService) return
+    if (this.state.waitingUserRequestId !== requestId) return
+
+    this.questionService.reply({ requestId, answers })
+    // reply 成功后，runWaitingUser 的 await 会 resolve，
+    // 状态机自动 transition("supervisor_analyse")
+  }
+
+  /**
+   * WF-1: 拒绝 workflow 的 waiting_user 问题。
+   */
+  rejectWorkflowQuestion(requestId: string): void {
+    if (!this.state || !this.questionService) return
+    if (this.state.waitingUserRequestId !== requestId) return
+
+    this.questionService.reject(requestId)
+    // reject 后 runWaitingUser 的 await 会 reject，
+    // 状态机自动 transition("blocked", "User rejected question")
   }
 
   private async *handleAskUser(question: string): AsyncGenerator<WorkflowEvent> {
