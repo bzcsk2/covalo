@@ -89,9 +89,10 @@ describe("repairToolArguments - Truncation", () => {
 
 describe("repairToolArguments - Storm", () => {
   it("should extract single key-value with regex", () => {
-    const result = repairToolArguments('"name": "test"')
+    // Use input with garbage that prevents scavenge but storm can match
+    const result = repairToolArguments('"only": "key" @@@')
     expect(result.success).toBe(true)
-    expect(result.args).toEqual({ name: "test" })
+    expect(result.args).toEqual({ only: "key" })
     expect(result.partial).toBe(true)
   })
 
