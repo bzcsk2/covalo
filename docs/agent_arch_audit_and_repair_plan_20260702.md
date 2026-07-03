@@ -19,10 +19,10 @@
 | P1 | P1-B | engine.ts | submit() 外层生命周期信封不完整，isSubmitting 设置后仍有大量代码在 catch/finally 之外 | ✅ 已修复 (PR #18) |
 | P1 | P1-C | engine.ts | shutdown() 不 dispose BackgroundTaskManager，后台进程泄漏 | ✅ 已修复 (PR #18) |
 | P1 | P1-D | engine.ts | loadSession() 不清理旧 session 的 BackgroundTaskManager | ✅ 已修复 (PR #18) |
-| P2 | F0-1 | engine.ts | CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine 未接入运行时 | ⏳ 后续阶段 |
+| P2 | F0-1 | engine.ts | CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine 未接入运行时 | ✅ P4 阶段修复 |
 | P2 | G1 | governance/branch-budget.ts | 工具名集合与 TaskLedger 不交集 | ✅ P3 阶段修复 |
-| P2 | G2 | governance/mode-decision.ts | recovery_pending 无法触发 forced | ⏳ 后续阶段 |
-| P2 | C1 | checkpoint/checkpoint-engine.ts | 未接入运行时 | ⏳ 后续阶段 |
+| P2 | G2 | governance/mode-decision.ts | recovery_pending 无法触发 forced | ✅ P4 阶段修复 |
+| P2 | C1 | checkpoint/checkpoint-engine.ts | 未接入运行时 | ✅ P4 阶段修复 |
 | P2 | LSP-1 | lsp/lsp-client.ts | starting 状态可永久卡死 | ✅ 本阶段修复 |
 | P2 | LSP-2 | lsp/manager.ts | DocumentInfo 未绑定 serverKey | ✅ P3 阶段修复 |
 | P2 | LSP-3 | lsp/* | LSP 双版本并存（旧版 lsp-client.ts 与新版 lsp/lsp-client.ts） | ✅ 本阶段修复 |

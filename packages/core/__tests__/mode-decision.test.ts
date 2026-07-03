@@ -34,7 +34,7 @@ function context(overrides: Partial<ModeDecisionContext> = {}): ModeDecisionCont
 }
 
 describe("sortSignalsByPrecedence", () => {
-  it("按优先级排序并排除 recovery_pending", () => {
+  it("按优先级排序，recovery_pending 纳入 enter 信号（G2 修复）", () => {
     const signals: ModeSignal[] = [
       "pending_steps",
       "recovery_pending",
@@ -44,8 +44,14 @@ describe("sortSignalsByPrecedence", () => {
     expect(sortSignalsByPrecedence(signals)).toEqual([
       "checkpoint_resumed",
       "pending_steps",
+      "recovery_pending",
       "multi_write",
     ])
+  })
+
+  it("verification_pending 仍被排除（不触发 enter_forced）", () => {
+    const signals: ModeSignal[] = ["verification_pending", "tool_failure"]
+    expect(sortSignalsByPrecedence(signals)).toEqual(["tool_failure"])
   })
 })
 
@@ -244,5 +250,36 @@ describe("ModeDecisionEngine", () => {
       harnessMode: "adaptive",
       state: state({ forcedTaskBearingRoundsSinceEntry: cfg.forcedMinDwellRounds - 1 }),
     }))).toEqual({ action: "keep", mode: "forced" })
+  })
+
+  it("G2: recovery_pending 信号触发 enter_forced", () => {
+    const engine = new ModeDecisionEngine(cfg)
+    engine.submitSignal("branch_budget", "recovery_pending")
+    const decision = engine.evaluate(context({
+      harnessMode: "adaptive",
+      riskLevel: "L0_observation",
+      executionMode: "free",
+    }))
+    expect(decision).toMatchObject({
+      action: "enter_forced",
+      primaryReason: "recovery_pending",
+      enteredBy: ["recovery_pending"],
+    })
+  })
+
+  it("G2: recovery_pending 优先级低于 verification_failure", () => {
+    const engine = new ModeDecisionEngine(cfg)
+    engine.submitSignal("branch_budget", "recovery_pending")
+    engine.submitSignal("verification_gate", "verification_failure")
+    const decision = engine.evaluate(context({
+      harnessMode: "adaptive",
+      riskLevel: "L0_observation",
+      executionMode: "free",
+    }))
+    expect(decision).toMatchObject({
+      action: "enter_forced",
+      primaryReason: "verification_failure",
+      enteredBy: ["verification_failure", "recovery_pending"],
+    })
   })
 })

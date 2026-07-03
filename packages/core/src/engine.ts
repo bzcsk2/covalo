@@ -42,6 +42,9 @@ import type { EffectiveHarnessPolicy, HarnessStrictness } from "./harness/index.
 import { ReadTracker } from "./read-before-write.js"
 import { EarlyStopDetector } from "./early-stop.js"
 import type { VerificationGateState } from "./governance/verification-gate.js"
+import { BranchBudgetTracker } from "./governance/branch-budget.js"
+import { ModeDecisionEngine } from "./governance/mode-decision.js"
+import { CheckpointEngine } from "./checkpoint/checkpoint-engine.js"
 import {
   createSupervisorGuidanceState,
   SupervisorBudgetTracker,
@@ -189,6 +192,11 @@ export class ReasonixEngine implements CoreEngine {
   /** ADV-HAR-02: 当前 submit 解析后的不可变策略（每次 submit 刷新） */
   private effectivePolicy: EffectiveHarnessPolicy | null = null
 
+  /** F0-1: governance/checkpoint 三件套（构造时实例化，submit 中按 effectivePolicy 启停） */
+  private branchBudgetTracker: BranchBudgetTracker = new BranchBudgetTracker()
+  private checkpointEngine: CheckpointEngine
+  private modeDecisionEngine: ModeDecisionEngine = new ModeDecisionEngine()
+
   /** Get context window size */
   getContextWindow(): number {
     return this.ctx.getContextWindow()
@@ -322,6 +330,9 @@ export class ReasonixEngine implements CoreEngine {
 
     // 尝试初始化会话持久化（best-effort，失败则不记录）
     this.rebindSessionWriter(this.sessionId)
+    // F0-1: CheckpointEngine 初始化（sessionDir 与 sessionWriter 同目录）
+    const sessionDir = resolve(process.cwd(), ".covalo", "sessions")
+    this.checkpointEngine = new CheckpointEngine(sessionDir, this.sessionId)
     if (this.logger.isEnabled()) this.logger.info("engine.created", { provider: config.provider, model: config.model })
   }
 
@@ -363,6 +374,11 @@ export class ReasonixEngine implements CoreEngine {
     this.toolExecutor.setSessionId(sessionId)
     this.logger = this.logger.child({ sessionId })
     this.rebindSessionWriter(sessionId)
+    // F0-1: 切换 session 时重建 CheckpointEngine，重置 governance 状态
+    const sessionDir = resolve(process.cwd(), ".covalo", "sessions")
+    this.checkpointEngine = new CheckpointEngine(sessionDir, sessionId)
+    this.branchBudgetTracker.reset()
+    this.modeDecisionEngine.resetSubmittedSignals()
     // TUI-FIX-10: 清除前一 session 的所有 worker
     this.emitOrchestration?.({ role: "orchestration", orchestration: { kind: "worker_remove", workerId: "*" } })
     return this._loadSessionMessages(sessionId)
@@ -614,6 +630,21 @@ export class ReasonixEngine implements CoreEngine {
     } catch (e) {
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.bg_task_dispose_error", { error: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // F0-1: shutdown 时最后落盘一次 checkpoint（trigger: final_draft，无论 free/forced 都落盘）
+    try {
+      if (this.checkpointEngine) {
+        await this.checkpointEngine.save({
+          trigger: "final_draft",
+          branchBudget: this.branchBudgetTracker,
+          lastStopReason: "aborted",
+        })
+      }
+    } catch (e) {
+      if (this.logger.isEnabled("warn")) {
+        this.logger.warn("engine.shutdown.checkpoint_save_error", { error: e instanceof Error ? e.message : String(e) })
       }
     }
 
@@ -947,6 +978,45 @@ Do not change goal status.`
       this.toolExecutor.setReadTracker(undefined)
     }
 
+    // F0-1: 根据 effectivePolicy 配置 governance 三件套
+    // branchBudget: "enforce" → 启用 + 硬拦截；"recover" → 启用 + 仅记录；"observe" → 禁用
+    const branchBudgetMode = this.effectivePolicy.branchBudget
+    this.branchBudgetTracker.setEnabled(branchBudgetMode !== "observe")
+    this.branchBudgetTracker.bindWorkspaceRoot(process.cwd())
+    // checkpoint: "frequent" → 任何 trigger 都落盘；"safe-point" → safe point 落盘；"minimal" → 仅 tool_failed/final_draft
+    // 由 CheckpointEngine.shouldPersistOnTrigger 内部根据 forcedPolicyActive 判定，这里只负责 loadV2 恢复
+    // executionMode: "forced" → 强制 forced；"adaptive" → 自适应决策；"free" → 强制 free
+    // ModeDecisionEngine 在 loop.ts 中每轮 evaluate；engine 层只需把 harnessMode 映射进去
+    // F0-1/B4: 每次 submit 开始时尝试恢复 checkpoint，跨 submit 持久化真正生效。
+    // 恢复的三维计数会延续到本 submit，不会被立即清空（不再调用 resetRoundBudget）。
+    // recoverTriggers 也从快照恢复（跨 submit recovery 去重）。
+    //
+    // F0-1/B6-2: 仅在 adaptive 模式下向 ModeDecisionEngine 提交 checkpoint_resumed signal。
+    // free/forced 模式下 loop.evaluateExecutionMode() 不调用 evaluate()，submitted signal
+    // 不会被消费，会残留到下一次 submit 污染 mode decision。BranchBudget 快照恢复与 mode
+    // signal 解耦——快照恢复对硬拦截/enforce 仍有意义，但 mode signal 只在 adaptive 下提交。
+    const isAdaptiveMode = this.effectivePolicy.executionMode === "adaptive"
+    try {
+      const v2 = await this.checkpointEngine.loadV2()
+      if (v2) {
+        this.branchBudgetTracker.applySnapshot(v2.branchBudget)
+        if (isAdaptiveMode) {
+          this.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+        } else {
+          // 非 adaptive 模式下，pending recovery signals 直接标记为已消费，
+          // 避免 engine 层恢复 checkpoint 后 signal 残留。
+          this.checkpointEngine.markRecoverySignalsConsumed(() => true)
+        }
+        if (this.logger.isEnabled("info")) {
+          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionId, executionMode: this.effectivePolicy.executionMode })
+        }
+      }
+    } catch (e) {
+      if (this.logger.isEnabled("warn")) {
+        this.logger.warn("engine.checkpoint.resume_error", { error: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
     this.verificationGateState = { continuationCount: 0 }
     this.supervisorGuidanceState = createSupervisorGuidanceState()
     if (shouldCreateLedger(userInput)) {
@@ -1163,6 +1233,11 @@ Do not change goal status.`
         toolRouting: this.effectivePolicy?.toolRouting,
         // ADV-HAR-08: 传递 verification 策略供 loop 使用
         verificationPolicy: this.effectivePolicy?.verification,
+        // F0-1: 传入 governance/checkpoint 三件套
+        branchBudgetTracker: this.branchBudgetTracker,
+        checkpointEngine: this.checkpointEngine,
+        modeDecisionEngine: this.modeDecisionEngine,
+        workspaceRoot: process.cwd(),
         allowedToolNames: effectiveMode === "loop"
           ? new Set(toolSpecs.map(spec => spec.function.name))
           : undefined,
