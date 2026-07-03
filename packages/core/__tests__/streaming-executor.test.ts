@@ -388,7 +388,7 @@ describe("StreamingToolExecutor", () => {
     expect(events.find(event => event.role === "error")?.content).toContain("Recursive tool invocation")
   })
 
-  it("should allow a confirmed Workflow to invoke declared exec steps", async () => {
+  it("should deny a Workflow attempting to invoke ask-tier exec steps", async () => {
     const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
     const permissions: PermissionEngine = {
       decide: (name: string) => ({ decision: name === "Workflow" ? "allow" as const : "ask" as const }),
@@ -404,7 +404,7 @@ describe("StreamingToolExecutor", () => {
     const executor = new StreamingToolExecutor(new Map([["Workflow", workflow], ["exec-step", execStep]]), "test-session", process.cwd(), permissions)
     const events: LoopEvent[] = []
     for await (const event of executor.run([{ id: "1", type: "function", function: { name: "Workflow", arguments: "{}" } }], new AbortController().signal, () => {})) events.push(event)
-    expect(events.find(event => event.role === "tool")?.content).toBe("ran")
+    expect(events.find(event => event.role === "error")?.content).toContain("requires direct confirmation")
   })
 
   // ─── P0 Contract Tests ────────────────────────────────────────────

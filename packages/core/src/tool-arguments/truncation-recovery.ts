@@ -26,43 +26,62 @@ export const SALVAGED_TRUNCATED_WRITE_TOOLS = new Set([
 
 /**
  * 工具副作用映射：定义每个工具的副作用级别。
- * 未列出的工具默认为 "none"（保守假设）。
+ * 未列出的工具默认为 "external"（fail-closed：截断参数默认不执行）。
  */
 export const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffect> = {
-  // Workspace 工具
-  "write_file": "workspace",
-  "edit": "workspace",
-  "NotebookEdit": "workspace",
-  "delete_file": "workspace",
-  "move_file": "workspace",
-  "rename_file": "workspace",
-  
-  // Process 工具
-  "run_command": "process",
-  "shell": "process",
-  
-  // Network 工具
-  "web_search": "network",
-  "web_fetch": "network",
-  "http_request": "network",
-  
-  // External 工具
-  "mcp_tool": "external",
-  "subagent": "external",
-  
-  // 只读工具（无副作用）
-  "read_file": "none",
-  "list_directory": "none",
-  "search_files": "none",
-  "grep": "none",
-  "glob": "none",
+  // Workspace
+  write_file: "workspace",
+  edit: "workspace",
+  NotebookEdit: "workspace",
+  Worktree: "workspace",
+
+  // Process / execution
+  bash: "process",
+  Workflow: "process",
+  Cron: "process",
+
+  // Network / browser
+  WebFetch: "network",
+  WebSearch: "network",
+  WebBrowser: "network",
+  PushNotification: "external",
+  SendMessage: "external",
+
+  // External orchestration
+  AgentTool: "external",
+  Skill: "external",
+  Monitor: "external",
+
+  // Task state / local metadata mutation
+  TaskCreate: "workspace",
+  TaskUpdate: "workspace",
+  TaskList: "none",
+  TaskGet: "none",
+  TaskStop: "workspace",
+  PlanMode: "workspace",
+
+  // Read-only / query
+  read_file: "none",
+  list_dir: "none",
+  grep: "none",
+  glob: "none",
+  AskUserQuestion: "none",
+  Lsp: "none",
+
+  // Legacy aliases
+  run_command: "process",
+  shell: "process",
+  web_fetch: "network",
+  web_search: "network",
+  subagent: "external",
+  mcp_tool: "external",
 }
 
 /**
  * 获取工具的副作用级别。
  */
 export function getToolSideEffect(toolName: string): ToolSideEffect {
-  return TOOL_SIDE_EFFECTS[toolName] ?? "none"
+  return TOOL_SIDE_EFFECTS[toolName] ?? "external"
 }
 
 /**

@@ -26,6 +26,8 @@ export class HookManager {
   private hooks: ToolCallHooks[] = []
   private onHookError?: (error: unknown, phase: HookPhase) => void
   private pending: Set<Promise<void>> = new Set()
+  /** T1: Stores the most recent hook failure reason for error reporting (consumed by resolveDenyMessage). */
+  lastHookDenyReason: string | undefined
 
   addHooks(hooks: ToolCallHooks): void {
     this.hooks.push(hooks)
@@ -54,6 +56,9 @@ export class HookManager {
           if (result === "deny" || result === "allow" || result === "ask") return result
         } catch (e) {
           this.onHookError?.(e, "before")
+          // T1: Hook failure = deny, with explicit reason for downstream error reporting
+          const message = e instanceof Error ? e.message : String(e)
+          this.lastHookDenyReason = `beforeToolCall hook failed: ${message}`
           return "deny" // hook failure = deny (fail-safe)
         }
       }

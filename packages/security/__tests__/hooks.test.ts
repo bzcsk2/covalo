@@ -224,4 +224,40 @@ describe("HookManager", () => {
     await hooks.runAfterToolCall("bash", { content: "ok", isError: false })
     await hooks.runOnLoopEvent({ role: "test" })
   })
+
+
+  // ─── T1: Hook fail-safe deny reason ───────────────────────────────
+
+  it("T1: lastHookDenyReason is set when beforeToolCall throws", async () => {
+    const hooks = new HookManager()
+    hooks.addHooks({
+      beforeToolCall: async () => { throw new Error("custom hook failure") },
+    })
+    const result = await hooks.runBeforeToolCall({ toolName: "bash", args: {}, tier: "exec", permissionDecision: "ask" })
+    expect(result).toBe("deny")
+    expect(hooks.lastHookDenyReason).toContain("beforeToolCall hook failed")
+    expect(hooks.lastHookDenyReason).toContain("custom hook failure")
+  })
+
+  it("T1: lastHookDenyReason is undefined on successful hook", async () => {
+    const hooks = new HookManager()
+    hooks.addHooks({
+      beforeToolCall: async () => "allow",
+    })
+    await hooks.runBeforeToolCall({ toolName: "bash", args: {}, tier: "exec", permissionDecision: "ask" })
+    expect(hooks.lastHookDenyReason).toBeUndefined()
+  })
+
+  it("T1: lastHookDenyReason is consumed by resolveDenyMessage", async () => {
+    const hooks = new HookManager()
+    hooks.addHooks({
+      beforeToolCall: async () => { throw new Error("hook error") },
+    })
+    await hooks.runBeforeToolCall({ toolName: "bash", args: {}, tier: "exec", permissionDecision: "ask" })
+    expect(hooks.lastHookDenyReason).toBeTruthy()
+    const reason = hooks.lastHookDenyReason
+    hooks.lastHookDenyReason = undefined
+    expect(reason).toContain("beforeToolCall hook failed")
+    expect(hooks.lastHookDenyReason).toBeUndefined()
+  })
 })

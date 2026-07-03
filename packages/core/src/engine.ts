@@ -298,6 +298,7 @@ export class ReasonixEngine implements CoreEngine {
     this.client = this.resolveClient(customClient)
     this.currentAgent = "build"
     this.permissionEngine = new PermissionEngine()
+    this.configurePermissionDefaults()
     this.hookManager = new HookManager()
     this.subagentRegistry = new SubagentRegistry()
     this.questionService = new QuestionService()
@@ -347,6 +348,37 @@ export class ReasonixEngine implements CoreEngine {
     const sessionDir = resolve(process.cwd(), ".covalo", "sessions")
     this.checkpointEngine = new CheckpointEngine(sessionDir, this.sessionId)
     if (this.logger.isEnabled()) this.logger.info("engine.created", { provider: config.provider, model: config.model })
+  }
+
+  /**
+   * 根据 approvalPolicy 配置权限引擎默认值。
+   * 安全默认：读允许，写/编辑/执行询问。
+   */
+  private configurePermissionDefaults(): void {
+    const toolsConfig = (this.config as unknown as Record<string, unknown>).tools as { approvalPolicy?: string; strictMode?: boolean } | undefined
+    const policy = toolsConfig?.approvalPolicy ?? "on-request"
+    const strictMode = toolsConfig?.strictMode ?? false
+
+    // 设置 strictMode
+    this.permissionEngine.setStrictMode(strictMode)
+
+    // 安全默认：读允许，写/编辑/执行询问
+    this.permissionEngine.setDefaultDecision("read", "allow")
+    this.permissionEngine.setDefaultDecision("write", "ask")
+    this.permissionEngine.setDefaultDecision("edit", "ask")
+    this.permissionEngine.setDefaultDecision("exec", "ask")
+
+    // 明确无审批模式，才放宽写/编辑/执行
+    if (policy === "never") {
+      this.permissionEngine.setDefaultDecision("write", "allow")
+      this.permissionEngine.setDefaultDecision("edit", "allow")
+      this.permissionEngine.setDefaultDecision("exec", "allow")
+    }
+
+    // always：连 read 也走 ask；适合极端审计模式
+    if (policy === "always") {
+      this.permissionEngine.setDefaultDecision("read", "ask")
+    }
   }
 
   static async recover(config: DeepreefConfig, sessionId: string): Promise<ReasonixEngine> {
@@ -686,6 +718,11 @@ export class ReasonixEngine implements CoreEngine {
     // Re-resolve client when provider changes
     if (providerChanged) {
       this.client = this.resolveClient()
+    }
+    // Reconfigure permission defaults when approvalPolicy changes
+    const partialToolsConfig = (partial as unknown as Record<string, unknown>).tools as { approvalPolicy?: string } | undefined
+    if (partialToolsConfig?.approvalPolicy !== undefined) {
+      this.configurePermissionDefaults()
     }
   }
 
@@ -1532,9 +1569,12 @@ Do not change goal status.`
 
         const perm = checkSubagentPermission(tool.name, def.permissionMode)
         if (!perm.allowed) {
+          const reason = perm.bubble
+            ? `${perm.reason ?? `Denied by subagent permission mode: ${def.permissionMode}`}. Bubble approval is not implemented; request was denied.`
+            : (perm.reason ?? `Denied by subagent permission mode: ${def.permissionMode}`)
           child.permissionEngine.addDenyRule({
             toolName: tool.name,
-            reason: perm.reason ?? `Denied by subagent permission mode: ${def.permissionMode}`,
+            reason,
           })
         }
 

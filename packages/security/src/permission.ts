@@ -49,13 +49,22 @@ function matchArgs(pattern: Record<string, unknown>, actual: Record<string, unkn
 export class PermissionEngine {
   private denyRules: DenyRule[] = []
   private allowRules: AllowRule[] = []
+  private strictMode = false
 
   /** Default decision by tier. Unknown tiers default to "ask" (fail-closed). */
   private defaultDecisionByTier: Record<string, PermissionDecision> = {
     exec: "ask",
-    write: "allow",
-    edit: "allow",
+    write: "ask",
+    edit: "ask",
     read: "allow",
+  }
+
+  setStrictMode(enabled: boolean): void {
+    this.strictMode = enabled
+  }
+
+  isStrictMode(): boolean {
+    return this.strictMode
   }
 
   addDenyRule(rule: DenyRule): void {
@@ -95,7 +104,7 @@ export class PermissionEngine {
 
   /**
    * Override the default decision for a given tier.
-   * By default: exec=ask, write=allow, edit=allow, read=allow.
+   * By default: exec=ask, write=ask, edit=ask, read=allow.
    * Unknown tiers default to "ask" for fail-closed safety.
    */
   setDefaultDecision(tier: string, decision: PermissionDecision): void {
@@ -129,6 +138,15 @@ export class PermissionEngine {
   }
 
   decide(toolName: string, args: Record<string, unknown>, tier: string): PermissionCheck {
+    if (this.strictMode) {
+      for (const rule of this.allowRules) {
+        if (!matchToolName(rule.toolName, toolName)) continue
+        if (rule.args && !matchArgs(rule.args, args)) continue
+        return { decision: "allow", rule }
+      }
+      return { decision: "deny", reason: `Strict mode: tool "${toolName}" is not explicitly allowed (tier: ${tier})` }
+    }
+
     for (const rule of this.denyRules) {
       if (!matchToolName(rule.toolName, toolName)) continue
       if (rule.args && !matchArgs(rule.args, args)) continue
@@ -139,6 +157,13 @@ export class PermissionEngine {
       if (!matchToolName(rule.toolName, toolName)) continue
       if (rule.args && !matchArgs(rule.args, args)) continue
       return { decision: "allow", rule }
+    }
+
+    if (this.strictMode && tier !== "read") {
+      return {
+        decision: "deny",
+        reason: `Tool "${toolName}" is denied in strict mode (tier: ${tier})`,
+      }
     }
 
     const defaultDecision = this.getDefaultDecision(tier)

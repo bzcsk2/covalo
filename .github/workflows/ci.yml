@@ -31,8 +31,13 @@ jobs:
       - name: TypeScript typecheck
         run: bun run typecheck
 
+      - name: PR #28 focused tests
+        run: bun test packages/core/__tests__/streaming-executor.test.ts packages/core/__tests__/e2e.test.ts packages/core/__tests__/text-parsers.test.ts packages/core/__tests__/repair.test.ts packages/security/__tests__/hooks.test.ts packages/security/__tests__/permission.test.ts --timeout 30000
+        env:
+          CI: "true"
+
       - name: Run test suite
-        run: bun test packages/core/__tests__/ packages/tools/__tests__/ packages/tui/__tests__/ packages/cli/__tests__/ --timeout 30000
+        run: bun test packages/core/__tests__/ packages/security/__tests__/ packages/tools/__tests__/ packages/tui/__tests__/ packages/cli/__tests__/ --timeout 30000
         env:
           CI: "true"
 

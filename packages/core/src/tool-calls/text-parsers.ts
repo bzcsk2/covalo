@@ -40,6 +40,8 @@ const TOOL_INVOCATION_REGION_RE =
   /(?:<tool[_-]?call>|<invoke\b|<\][a-zA-Z][\w.-]*\[>)([\s\S]*?)(?:<\/tool[_-]?call>|<\/invoke>)/gi
 /** 压缩/展示用的「调用工具」摘要前缀（后常粘连未剥离的嵌入片段） */
 const COMPACT_TOOL_SUMMARY_RE = /\[调用工具:\s*[\w.,\s-]+\]+/g
+/** 非 global 版本，用于 test() 以避免 lastIndex 状态性问题 */
+const COMPACT_TOOL_SUMMARY_PRESENT_RE = /\[调用工具:\s*[\w.,\s-]+\]+/
 
 const TOOL_JSON_KEY_HINT =
   /"(?:name|tool|function_name)"\s*:\s*"|"tool_calls"\s*:\s*\[|"function"\s*:\s*\{/
@@ -362,7 +364,7 @@ export function containsEmbeddedToolCalls(content: string | undefined): boolean 
     || /<invoke\b/i.test(content)
     || /<\][a-zA-Z][\w.-]*\[>/i.test(content)
     || /\[<[a-zA-Z_][\w.-]*>/i.test(content)
-    || COMPACT_TOOL_SUMMARY_RE.test(content)
+    || COMPACT_TOOL_SUMMARY_PRESENT_RE.test(content)
 }
 
 /** 移除正文中所有嵌入工具调用片段。 */
