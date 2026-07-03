@@ -26,6 +26,15 @@
 
 历史性的逐日实现日志和旧的重修计划不再被视为权威文档。将实现历史保留在 Git 提交和 PR 中，而不要重新引入冗长的 `DONE` 文件或归档文件。
 
+## 审计与配置参考文档
+
+以下文档记录未接入功能的审计结论和保留项的配置方法，供维护者参考：
+
+- [unintegrated_code_audit_20260703.md](unintegrated_code_audit_20260703.md) — 未接入代码审计报告（含 Phase 1/2 已处理项和 Phase 3 搁置项）
+- [self_harness_audit_20260703.md](self_harness_audit_20260703.md) — self-harness 模块接入状态审计
+- [supervisor-configuration.md](supervisor-configuration.md) — Supervisor 候选池配置方法（ADV-HAR-04 默认禁用机制）
+- [retained-features-status.md](retained-features-status.md) — 搁置功能状态说明（Mailbox workflow / GoalRuntime / Sandbox 主路径）
+
 ## 文档规则
 
 - 除非某篇文档明确链接到权威来源，否则不要在多个文档中重复相同的事实。
