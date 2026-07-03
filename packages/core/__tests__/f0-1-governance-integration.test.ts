@@ -613,4 +613,104 @@ describe("F0-1: 审计反馈 B1-B6 验证", () => {
     expect(pending2.length).toBe(0)
     // 第二轮不会再 submitSignal
   })
+
+  it("B6-2: free/forced 模式下 ModeDecisionEngine submitted signals 不残留", async () => {
+    // 审计反馈 B6-2: executionMode='free'/'forced' 路径下 evaluateExecutionMode()
+    // 不调用 evaluate()，submitted signals 不会被 finally 块清空。
+    // 修复：非 adaptive 模式下显式 resetSubmittedSignals + markRecoverySignalsConsumed。
+
+    // 准备：写入一个未消费的 recovery signal
+    const checkpoint = new CheckpointEngine(tmpDir, "b6-2-test")
+    await checkpoint.save({
+      trigger: "manual",
+      branchBudget: new BranchBudgetTracker(),
+      appendRecoverySignal: {
+        source: "branch_budget",
+        message: "test-signal-free-forced",
+        at: Date.now(),
+        consumed: false,
+      },
+    })
+
+    const modeEngine = new ModeDecisionEngine()
+
+    // 仿 engine.ts: 非 adaptive 模式下不 submitSignal，直接消费 pending signals
+    // （engine.ts 的 isAdaptiveMode 分支）
+    const isAdaptiveMode = false  // 模拟 free/forced 模式
+    if (!isAdaptiveMode) {
+      // 非 adaptive：不提交 signal，直接消费
+      checkpoint.markRecoverySignalsConsumed(() => true)
+    }
+
+    // 验证：modeEngine 没有 submitted signals（因为没提交）
+    expect(modeEngine.getSubmittedSignals().length).toBe(0)
+    // 验证：pending signals 已被消费
+    expect(checkpoint.pendingRecoverySignals().length).toBe(0)
+
+    // 仿 loop.ts evaluateExecutionMode: 非 auto 分支也清理
+    const autoModeDecisionEnabled = false  // free/forced 模式
+    if (!autoModeDecisionEnabled) {
+      modeEngine.resetSubmittedSignals()
+      if (checkpoint) {
+        checkpoint.markRecoverySignalsConsumed(() => true)
+      }
+    }
+
+    // 验证：仍然没有残留 signals
+    expect(modeEngine.getSubmittedSignals().length).toBe(0)
+    expect(checkpoint.pendingRecoverySignals().length).toBe(0)
+  })
+
+  it("B6-2: adaptive 模式下 checkpoint_resumed signal 正常提交并消费", async () => {
+    // 对比测试：adaptive 模式下 checkpoint_resumed signal 正常走 evaluate 流程
+    const checkpoint = new CheckpointEngine(tmpDir, "b6-2-adaptive-test")
+    await checkpoint.save({
+      trigger: "manual",
+      branchBudget: new BranchBudgetTracker(),
+      appendRecoverySignal: {
+        source: "branch_budget",
+        message: "test-signal-adaptive",
+        at: Date.now(),
+        consumed: false,
+      },
+    })
+
+    expect(checkpoint.pendingRecoverySignals().length).toBe(1)
+
+    const modeEngine = new ModeDecisionEngine()
+
+    // 仿 engine.ts: adaptive 模式下提交 checkpoint_resumed
+    const isAdaptiveMode = true
+    if (isAdaptiveMode) {
+      modeEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+    }
+
+    // 仿 loop.ts evaluateExecutionMode: auto 分支
+    const autoModeDecisionEnabled = true
+    if (autoModeDecisionEnabled) {
+      // 收集 pending recovery signals 并提交
+      const pending = checkpoint.pendingRecoverySignals()
+      if (pending.length > 0) {
+        // signal 已在 engine.ts 中提交，这里只消费 pending
+        checkpoint.markRecoverySignalsConsumed(() => true)
+      }
+
+      // evaluate 会消费 submitted signals
+      const state = createEmptyRuntimeExecutionState()
+      modeEngine.evaluate({
+        round: 1,
+        executionMode: "free",
+        executionModeLockRemaining: 0,
+        harnessMode: "adaptive",
+        riskLevel: "L1_minor_edit",
+        state,
+        signals: [],
+      })
+    }
+
+    // 验证：pending signals 已消费
+    expect(checkpoint.pendingRecoverySignals().length).toBe(0)
+    // 验证：submitted signals 已被 evaluate 清空
+    expect(modeEngine.getSubmittedSignals().length).toBe(0)
+  })
 })

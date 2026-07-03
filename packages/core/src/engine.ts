@@ -990,13 +990,25 @@ Do not change goal status.`
     // F0-1/B4: 每次 submit 开始时尝试恢复 checkpoint，跨 submit 持久化真正生效。
     // 恢复的三维计数会延续到本 submit，不会被立即清空（不再调用 resetRoundBudget）。
     // recoverTriggers 也从快照恢复（跨 submit recovery 去重）。
+    //
+    // F0-1/B6-2: 仅在 adaptive 模式下向 ModeDecisionEngine 提交 checkpoint_resumed signal。
+    // free/forced 模式下 loop.evaluateExecutionMode() 不调用 evaluate()，submitted signal
+    // 不会被消费，会残留到下一次 submit 污染 mode decision。BranchBudget 快照恢复与 mode
+    // signal 解耦——快照恢复对硬拦截/enforce 仍有意义，但 mode signal 只在 adaptive 下提交。
+    const isAdaptiveMode = this.effectivePolicy.executionMode === "adaptive"
     try {
       const v2 = await this.checkpointEngine.loadV2()
       if (v2) {
         this.branchBudgetTracker.applySnapshot(v2.branchBudget)
-        this.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+        if (isAdaptiveMode) {
+          this.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+        } else {
+          // 非 adaptive 模式下，pending recovery signals 直接标记为已消费，
+          // 避免 engine 层恢复 checkpoint 后 signal 残留。
+          this.checkpointEngine.markRecoverySignalsConsumed(() => true)
+        }
         if (this.logger.isEnabled("info")) {
-          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionId })
+          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionId, executionMode: this.effectivePolicy.executionMode })
         }
       }
     } catch (e) {

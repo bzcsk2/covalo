@@ -1,6 +1,6 @@
 import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
 import type { LoopEvent, SessionStats, ToolResult, ChatClient } from "./interface.js"
-import { isToolUseFinishReason } from "./client.js"
+import { isToolUseFinishReason } from "./finish-reason.js"
 import type { ContextManager } from "./context/manager.js"
 import type { StreamingToolExecutor } from "./streaming-executor.js"
 import type { AsyncSessionWriter } from "./session.js"
@@ -240,7 +240,17 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     if (!modeDecisionEngine) return null
     // F0-1/B1: free 模式（executionMode: "free"）下完全跳过自动 mode 决策，
     // 不会被 runtime 信号拉入 forced；forced/strict 已经在初始化时进入 forced。
-    if (!autoModeDecisionEnabled) return null
+    if (!autoModeDecisionEnabled) {
+      // F0-1/B6-2: 非 adaptive 模式下 evaluate() 不会被调用，submitted signals 不会被
+      // finally 块清空。这里显式清理，避免 engine 层在 submit 开始时提交的 checkpoint_resumed
+      // 或其他 signals 残留到下一次 submit 污染 mode decision。
+      modeDecisionEngine.resetSubmittedSignals()
+      // 同步消费 pending recovery signals，保持 lifecycle 闭环。
+      if (checkpointEngine) {
+        checkpointEngine.markRecoverySignalsConsumed(() => true)
+      }
+      return null
+    }
 
     // 收集 recovery_pending 信号
     if (branchBudgetTracker) {

@@ -1,10 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, beforeAll } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
-import { runLoop } from "../src/loop.js"
-import { ContextManager } from "../src/context/manager.js"
 import { BranchBudgetTracker } from "../src/governance/branch-budget.js"
 import { ModeDecisionEngine } from "../src/governance/mode-decision.js"
 import { CheckpointEngine } from "../src/checkpoint/checkpoint-engine.js"
@@ -16,6 +14,14 @@ import type { ChatMessage, ToolCall, ToolSpec } from "../src/types.js"
 import type { LoopEvent, SessionStats, ToolResult } from "../src/interface.js"
 import type { EffectiveHarnessPolicy } from "../src/model-profile/types.js"
 import type { StreamingToolExecutor } from "../src/streaming-executor.js"
+
+// F0-1/B1-RT: runLoop 和 ContextManager 通过 dynamic import 加载，
+// 避免静态 import 触发 loop.ts 的深层依赖链在 Windows 上产生 EPERM。
+// 这些模块只在测试实际运行时（Linux/CI）才需要加载。
+type RunLoopFn = typeof import("../src/loop.js").runLoop
+type ContextManagerCtor = typeof import("../src/context/manager.js").ContextManager
+let runLoop: RunLoopFn
+let ContextManager: ContextManagerCtor
 
 // 直接构造 EffectiveHarnessPolicy 对象，避免引入 zod 依赖（resolveEffectiveHarnessPolicy
 // 通过 strictness.ts 间接 import zod，单元测试环境可能解析不到）
@@ -155,12 +161,27 @@ function makeEmptyExecutor(): StreamingToolExecutor {
 
 // ── 测试 fixture ───────────────────────────────────────────────────────────
 
-describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
-  // NOTE: 本测试组真正调用 runLoop()，验证 governance/checkpoint 三件套在 loop
-  // 主路径中的行为。但在 Windows 上 bun test 存在已知 EPERM 文件锁 bug
-  //（专门针对 client.ts 等被频繁引用的文件），导致无法在本地运行。
-  // CI（Linux）环境可正常运行。保留测试代码作为回归测试。
+// F0-1/B1-RT: 平台条件 skip。
+// Windows 上 bun test 存在系统性 EPERM 文件锁 bug，在加载 loop.ts 的深层 import 链
+// （executor-helpers.ts / supervisor/guided-loop.ts 等）时触发 EPERM reading 错误。
+// 这是 bun 1.3.x 在 Windows 上的已知问题，与代码无关。
+// Linux/CI 环境不受影响，测试会真实运行并验证 runLoop() 接入行为。
+const isWindows = process.platform === "win32"
+const describeOrSkip = isWindows ? describe.skip : describe
+
+describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
+  // 本测试组真正调用 runLoop()，验证 governance/checkpoint 三件套在 loop
+  // 主路径中的行为。覆盖审计反馈的 7 个 runtime 验证点。
   let tmpDir: string
+
+  beforeAll(async () => {
+    // F0-1/B1-RT: dynamic import 避免静态 import 在 Windows 上触发 EPERM。
+    // 这两个模块只在测试实际运行时（Linux/CI）才需要加载。
+    const loopModule = await import("../src/loop.js")
+    const ctxModule = await import("../src/context/manager.js")
+    runLoop = loopModule.runLoop
+    ContextManager = ctxModule.ContextManager
+  })
 
   beforeEach(() => {
     setPromptLocale("en")
@@ -202,7 +223,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       isInterrupted: () => false,
       appendToolResult,
       maxTurns: 3,
-      effectivePolicy: resolveEffectiveHarnessPolicy("normal"),
+      effectivePolicy: makePolicy("normal"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
@@ -249,7 +270,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       appendToolResult,
       maxTurns: 3,
       // recover 模式：启用 tracker 但不硬拦截
-      effectivePolicy: resolveEffectiveHarnessPolicy("normal"),
+      effectivePolicy: makePolicy("normal"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
@@ -300,7 +321,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       appendToolResult,
       maxTurns: 3,
       // enforce 模式：strict policy → branchBudget: "enforce"
-      effectivePolicy: resolveEffectiveHarnessPolicy("strict"),
+      effectivePolicy: makePolicy("strict"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
@@ -346,7 +367,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       isInterrupted: () => false,
       appendToolResult,
       maxTurns: 3,
-      effectivePolicy: resolveEffectiveHarnessPolicy("strict"),
+      effectivePolicy: makePolicy("strict"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
@@ -389,7 +410,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       appendToolResult: () => {},
       maxTurns: 1,
       // loose policy: executionMode: "free", branchBudget: "observe"
-      effectivePolicy: resolveEffectiveHarnessPolicy("loose"),
+      effectivePolicy: makePolicy("loose"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
@@ -422,7 +443,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       appendToolResult: () => {},
       maxTurns: 1,
       // strict policy: executionMode: "forced"
-      effectivePolicy: resolveEffectiveHarnessPolicy("strict"),
+      effectivePolicy: makePolicy("strict"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
@@ -470,7 +491,7 @@ describe.skip("F0-1 runtime-level: runLoop 接入验证", () => {
       isInterrupted: () => false,
       appendToolResult: () => {},
       maxTurns: 2,
-      effectivePolicy: resolveEffectiveHarnessPolicy("normal"),
+      effectivePolicy: makePolicy("normal"),
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
