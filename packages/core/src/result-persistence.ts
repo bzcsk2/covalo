@@ -13,6 +13,7 @@ export interface ResultPersistenceConfig {
   previewChars?: number
   sessionQuotaBytes?: number
   maxFilesPerSession?: number
+  baseDir?: string
 }
 
 export interface PersistedResult {
@@ -28,10 +29,10 @@ const sessionByteUsage = new Map<string, number>()
 /** Track which sessions have been initialized from disk */
 const sessionInitialized = new Set<string>()
 
-async function initSessionUsage(sessionId: string, logger: RuntimeLogger): Promise<void> {
+async function initSessionUsage(sessionId: string, baseDir: string, logger: RuntimeLogger): Promise<void> {
   if (sessionInitialized.has(sessionId)) return
   sessionInitialized.add(sessionId)
-  const dir = join(process.cwd(), ".covalo", "results", sanitizeId(sessionId))
+  const dir = join(baseDir, ".covalo", "results", sanitizeId(sessionId))
   try {
     const files = await readdir(dir)
     let totalBytes = 0
@@ -85,7 +86,8 @@ export async function maybePersistResult(
   }
 
   // CL-31: Initialize usage from disk on first use for this session
-  await initSessionUsage(sessionId, logger)
+  const baseDir = config?.baseDir ?? process.cwd()
+  await initSessionUsage(sessionId, baseDir, logger)
 
   const quota = config?.sessionQuotaBytes ?? DEFAULT_SESSION_QUOTA_BYTES
   const contentBytes = Buffer.byteLength(content, "utf-8")
@@ -115,7 +117,7 @@ export async function maybePersistResult(
   }
 
   try {
-    const dir = join(process.cwd(), ".covalo", "results", sanitizeId(sessionId))
+    const dir = join(baseDir, ".covalo", "results", sanitizeId(sessionId))
     await mkdir(dir, { recursive: true, mode: 0o700 })
 
     const filename = `${sanitizeId(toolName)}-${randomUUID()}.txt`
@@ -137,7 +139,7 @@ export async function maybePersistResult(
     }
 
     const maxFiles = config?.maxFilesPerSession ?? DEFAULT_MAX_FILES_PER_SESSION
-    cleanupOldFiles(dir, maxFiles, sessionId, logger).catch(() => {})
+    scheduleCleanup(dir, maxFiles, sessionId, logger)
 
     return {
       content: preview,
@@ -160,6 +162,42 @@ export async function maybePersistResult(
       },
     }
   }
+}
+
+/** Per-dir cleanup state: ensure only one cleanup worker per directory. */
+const cleanupState = new Map<string, { running: boolean; dirty: boolean }>()
+
+function scheduleCleanup(
+  dir: string,
+  maxFiles: number,
+  sessionId: string,
+  logger: RuntimeLogger,
+): void {
+  const state = cleanupState.get(dir) ?? { running: false, dirty: false }
+  state.dirty = true
+  cleanupState.set(dir, state)
+
+  if (state.running) return
+
+  state.running = true
+
+  void (async () => {
+    try {
+      while (state.dirty) {
+        state.dirty = false
+        await cleanupOldFiles(dir, maxFiles, sessionId, logger)
+      }
+    } catch (e) {
+      if (logger.isEnabled("warn")) {
+        logger.warn("tool.result.cleanup_schedule_error", {
+          error: e instanceof Error ? e.message : String(e),
+        })
+      }
+    } finally {
+      state.running = false
+      if (!state.dirty) cleanupState.delete(dir)
+    }
+  })()
 }
 
 async function cleanupOldFiles(dir: string, maxFiles: number, sessionId: string, logger: RuntimeLogger): Promise<void> {

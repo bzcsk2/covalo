@@ -327,6 +327,87 @@ export class ContextManager {
     }
   }
 
+  /**
+   * SPEC-D: compact 专用路径。
+   * 只在“选择被摘要的旧消息”和“裁剪 log”上工作，不再调用 `reduceToTarget("compress")` 避免确定性摘要覆盖 LLM 摘要。
+   */
+  async compactToTarget(targetRatio: number, signal?: AbortSignal): Promise<ContextReductionResult> {
+    const targetTokens = Math.max(1, Math.floor(this.contextWindow * targetRatio))
+    const beforeTokens = estimateTokens(this.buildMessages())
+    if (beforeTokens <= targetTokens) {
+      return {
+        mode: "compress",
+        beforeTokens,
+        afterTokens: beforeTokens,
+        targetTokens,
+        removedMessages: 0,
+        summaryTokens: estimateTokens(this.summary.getMessages()),
+      }
+    }
+
+    const originalLog = [...this.log.messages]
+    const protectedStart = this.lastRoundStart(originalLog)
+    const protectedTail = protectedStart >= 0 ? originalLog.slice(protectedStart) : []
+    let current = protectedStart >= 0 ? originalLog.slice(0, protectedStart) : [...originalLog]
+    const removed: ChatMessage[] = []
+
+    const estimateWith = (candidate: ChatMessage[]) =>
+      estimateTokens([
+        ...this.prefix.messages,
+        ...this.summary.getMessages(),
+        ...candidate,
+        ...protectedTail,
+        ...this.scratch.messages,
+      ])
+
+    while (current.length > 0 && estimateWith(current) > targetTokens) {
+      const end = this.firstRoundEnd(current)
+      removed.push(...current.slice(0, end))
+      current = current.slice(end)
+    }
+
+    if (removed.length > 0 && this.summarizer) {
+      const result = await this.summarizer.summarize({
+        messages: removed,
+        currentSummary: this.summary.getRawContent(),
+        targetTokens,
+      }, signal)
+
+      if (result.summary) {
+        this.summary.replace(result.summary)
+      } else {
+        this.summary.replace(this.createSummaryContent(removed))
+      }
+    } else if (removed.length > 0) {
+      this.summary.replace(this.createSummaryContent(removed))
+    }
+
+    const estimateFinal = (candidate: ChatMessage[]) =>
+      estimateTokens([
+        ...this.prefix.messages,
+        ...this.summary.getMessages(),
+        ...candidate,
+        ...protectedTail,
+        ...this.scratch.messages,
+      ])
+
+    while (current.length > 0 && estimateFinal(current) > targetTokens) {
+      const end = this.firstRoundEnd(current)
+      current = current.slice(end)
+    }
+
+    this.log.replaceAll([...current, ...protectedTail])
+    const afterTokens = estimateTokens(this.buildMessages())
+    return {
+      mode: "compress",
+      beforeTokens,
+      afterTokens,
+      targetTokens,
+      removedMessages: removed.length,
+      summaryTokens: estimateTokens(this.summary.getMessages()),
+    }
+  }
+
   private firstRoundEnd(messages: ChatMessage[]): number {
     if (messages.length === 0) return 0
     const firstUserIdx = messages.findIndex(m => m.role === "user")

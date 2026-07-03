@@ -312,6 +312,7 @@ export class ReasonixEngine implements CoreEngine {
       maxResultSizeChars: 200_000,
       previewChars: 2_000,
       maxFilesPerSession: 200,
+      baseDir: process.cwd(),
     }
 
     this.toolExecutor = new StreamingToolExecutor(
@@ -1085,24 +1086,14 @@ Do not change goal status.`
     if (budget.ratio >= this.contextPolicy.triggerRatio) {
       let result
       if (this.contextPolicy.mode === "compact") {
-        const targetTokens = Math.floor(budget.window * this.contextPolicy.targetRatio)
-        const success = await this.ctx.runSummarize(targetTokens, abortController.signal)
-        if (success) {
-          result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
-          if (this.logger.isEnabled("info")) {
-            this.logger.info("context.reduction.compact.success", { ...result })
-          }
-        } else {
-          result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
-          if (this.logger.isEnabled("info")) {
-            this.logger.info("context.reduction.compact.fallback", { ...result })
-          }
-        }
+        result = await this.ctx.compactToTarget(
+          this.contextPolicy.targetRatio,
+          abortController.signal,
+        )
+        this.logger.info("context.reduction.compact", { ...result })
       } else {
         result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
-        if (this.logger.isEnabled("info")) {
-          this.logger.info("context.reduction.trim", { ...result })
-        }
+        this.logger.info("context.reduction.trim", { ...result })
       }
     }
     // P1-fix (A): buildMessages() 在外层 try 内、guard 之前持久化。
