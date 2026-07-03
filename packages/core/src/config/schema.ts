@@ -99,7 +99,8 @@ export const ToolsConfigSchema = z.object({
   approvalPolicy: z.enum(["never", "on-request", "on-failure", "always"]),
   sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]),
   dangerousToolsEnabled: z.boolean(),
-  strictMode: z.boolean(),
+  // Backward-compatible default for existing user/project configs.
+  strictMode: z.boolean().default(false),
   runtimeGuard: z.object({
     toolOutputGuarding: z.boolean(),
   }).optional(),

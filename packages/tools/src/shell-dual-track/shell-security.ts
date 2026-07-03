@@ -20,9 +20,9 @@ const CHMOD_RECURSIVE_ROOT = /\bchmod\s+-R\s+777\s+\//
 // Git destructive
 const GIT_HARD_RESET = /\bgit\s+reset\s+--hard\b/
 const GIT_CLEAN_FORCE = /\bgit\s+clean\s+-f[d]?\b/
-// Pipe to shell
-const CURL_BASH = /\bcurl\s+.*\|?\s*bash\b/
-const WGET_SH = /\bwget\s+.*-O[^-].*\|?\s*sh\b/
+// Pipe remote script output directly to a shell.
+const CURL_PIPE_SHELL = /\bcurl\b[^;\n|]*\|\s*(?:bash|sh)\b/
+const WGET_PIPE_SHELL = /\bwget\b[^;\n|]*\|\s*(?:bash|sh)\b/
 // Network exfil
 const EXFIL_MARKERS = /\b(?:nc\s+|ncat\s+|telnet\s+)(?:\S+\s+){1,2}\d+\b/
 // System config mutation
@@ -43,8 +43,8 @@ const POSIX_DENY_PATTERNS = [
   DISK_PARTITION,
   GIT_HARD_RESET,
   GIT_CLEAN_FORCE,
-  CURL_BASH,
-  WGET_SH,
+  CURL_PIPE_SHELL,
+  WGET_PIPE_SHELL,
   EXFIL_MARKERS,
   SYSTEMCTL,
   PASSWD,

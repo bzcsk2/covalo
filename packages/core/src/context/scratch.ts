@@ -14,12 +14,12 @@ interface ScratchEntry {
 /**
  * VolatileScratch — 每轮临时状态（易失区域）
  *
- * 三区域上下文分区的第三部分。
+ * SPEC-B: source-aware scratch — 每条消息带 source 标记，
+ * 允许按来源精确替换/删除，避免 reset() 全量清空非 ledger 内容。
+ *
  * 参考 Reasonix (github.com/bczsk2/reasonix-core) 的
  * VolatileScratch 设计：每轮清空，用于暂存当前轮的
  * 思考过程、中间状态、或辅助指令。
- *
- * 参考 Reasonix 源码: src/context/VolatileScratch.ts
  */
 export class VolatileScratch {
   // 内部存储：带来源标记的临时消息列表
@@ -34,7 +34,7 @@ export class VolatileScratch {
     this.entries.push({ source, message: cloneChatMessage(message) })
   }
 
-  // 按来源替换消息：先删除该来源全部消息，再追加新消息
+  // SPEC-B: 替换指定 source 的所有消息，不删除其他 source
   replaceSource(source: ScratchSource, messages: ChatMessage[]): void {
     this.entries = this.entries.filter(e => e.source !== source)
     for (const message of messages) {
@@ -42,17 +42,15 @@ export class VolatileScratch {
     }
   }
 
-  // 按来源删除消息
+  // SPEC-B: 移除指定 source 的所有消息
   removeSource(source: ScratchSource): void {
     this.entries = this.entries.filter(e => e.source !== source)
   }
 
-  // 重置暂存区：清空所有消息（每轮开始前调用）
   reset(): void {
     this.entries = []
   }
 
-  // 获取当前暂存区消息的只读视图
   get messages(): readonly ChatMessage[] {
     return cloneChatMessages(this.entries.map(e => e.message))
   }

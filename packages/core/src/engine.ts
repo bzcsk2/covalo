@@ -1274,7 +1274,6 @@ Do not change goal status.`
           ?? harnessProfile.requireVerificationBeforeFinal,
         verificationGateState: this.verificationGateState,
         refreshLedgerContext: () => {
-          this.ctx.scratch.reset()
           this.injectTaskLedgerContext(this.taskLedger)
         },
         // ADV-HAR-06: 根据 effectivePolicy.earlyStop 配置 EarlyStopDetector
@@ -1562,6 +1561,9 @@ Do not change goal status.`
       this.logger.child({ delegate: true, subagentType: def.name }),
     )
     this.activeChildEngines.add(child)
+
+    // SPEC-C: 子引擎继承父引擎 contextPolicy
+    await child.setContextPolicy(this.getContextPolicy())
 
     try {
       for (const tool of this.tools.values()) {
