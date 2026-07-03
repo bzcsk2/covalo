@@ -247,7 +247,7 @@ export function injectAdviceToContext(input: InjectAdviceInput): string {
     evidenceHash: input.evidenceHash,
     failureClass: input.advice.failureClass,
   })
-  input.ctx.scratch.append({ role: "user", content })
+  input.ctx.scratch.append({ role: "user", content }, "supervisor_advice")
   return content
 }
 

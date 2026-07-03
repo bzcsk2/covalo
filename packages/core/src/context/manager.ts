@@ -400,6 +400,11 @@ export class ContextManager {
     this.scratch.reset()
   }
 
+  clearTransientState(): void {
+    this.scratch.reset()
+    this.summary.clear()
+  }
+
   getSummary(): ContextSummary {
     return this.summary
   }
