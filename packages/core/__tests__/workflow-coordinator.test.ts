@@ -1253,20 +1253,32 @@ describe("WorkflowCoordinator", () => {
       // 关键：coordinator.runSupervisorCheck() 从 getState().messages.findLast()
       // 读取响应（不是从 submit yield），所以 getState() 必须返回 submit()
       // 最新产生的内容，而不是固定 "stub"。
+      //
+      // 审核反馈（第三轮）：原 mock 的 supervisor_check 永远返回 ask_user，
+      // 导致 workflow 永远不会 completed。修正：第一次 supervisor_check 返回
+      // ask_user，用户回复后的第二次 supervisor_check 返回 structured approve。
+      // approve JSON 必须在 supervisor_check 阶段返回（supervisor_analyse 的
+      // 输出会被当成 plan，不会被当成完成决策）。
       const questionService = new QuestionService()
       let supervisorMessage = ""
       let supervisorCalls = 0
       let workerCalls = 0
       let workerMessage = ""
+      let askedUser = false
       const runtime = {
         getSupervisor: () => ({
           submit: async function* (_input: string, _mode?: string, phase?: string) {
             supervisorCalls++
-            if (phase === "supervisor_analyse" && supervisorCalls === 1) {
-              supervisorMessage = "Initial plan"
-            } else if (phase === "supervisor_check") {
+            if (phase === "supervisor_analyse") {
+              supervisorMessage = supervisorCalls === 1
+                ? "Initial plan"
+                : "Updated plan after user clarification"
+            } else if (phase === "supervisor_check" && !askedUser) {
+              // 第一次 supervisor_check：返回 ask_user，触发 waiting_user
+              askedUser = true
               supervisorMessage = "I need to ask_user for clarification about the requirement"
-            } else {
+            } else if (phase === "supervisor_check") {
+              // 第二次 supervisor_check（用户回复后）：返回 structured approve
               supervisorMessage = JSON.stringify({
                 version: 1,
                 workflowId: "wf-ask-user",
