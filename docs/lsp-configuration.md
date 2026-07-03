@@ -84,7 +84,15 @@ If you only want to override certain languages, you can omit others — they wil
 |---|---|
 | `COVALO_LSP_CONFIG` | Path to an alternative LSP config file |
 | `COVALO_LSP_ALLOW_NPX` | Set to `1` to enable npx fallback for server resolution |
-| `COVALO_LSP_SERVER_TYPESCRIPT` | Override command for TypeScript (same pattern for other languages) |
+| `COVALO_LSP_SERVER_TYPESCRIPT` | Override command for TypeScript (same pattern for other languages). Takes priority over default config commands. |
+
+## Platform Support
+
+| Platform | Status |
+|---|---|
+| Linux (x64) | ✅ Full support |
+| macOS | ✅ Full support |
+| Windows | ✅ Supported: PATH uses platform-appropriate `;` delimiter, and `.cmd`/`.exe`/`.ps1` shims are detected automatically |
 
 ## Pool Behavior (Session-Level Connection)
 

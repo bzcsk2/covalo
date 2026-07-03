@@ -128,8 +128,10 @@ export function createLspTool(pool?: LspClientPool): AgentTool {
         if (!language) return { content: safeStringify({ error: "Cannot determine language for restart_server" }), isError: true }
         const { config } = await readLspConfig(ctx.cwd)
         const server = getLanguageConfig(config, language)
-        const serverKey = `${language}::${ctx.cwd}::${server?.command ?? ""}`
-        await pool.restart(serverKey).catch(() => {})
+        if (!server) return { content: safeStringify({ error: `No server configured for language: ${language}` }), isError: true }
+        const serverKey = pool.findServerKey(language, ctx.cwd, server)
+        if (!serverKey) return { content: safeStringify({ error: `No active server found for language: ${language}` }), isError: true }
+        await pool.restart(serverKey)
         return { content: safeStringify({ status: "ok", action: "restart_server", restarted: true }), isError: false }
       }
 
@@ -197,7 +199,7 @@ export function createLspTool(pool?: LspClientPool): AgentTool {
 
         try {
           if (pool) {
-            const acquired = await pool.acquire(language, ctx.cwd, server)
+            const acquired = await pool.acquire(language, ctx.cwd, server, timeoutMs)
             acquiredClient = acquired.client
             acquiredServerKey = acquired.serverKey
             const content = await readFile(filePath, "utf8")

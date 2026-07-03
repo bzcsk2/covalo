@@ -1,6 +1,6 @@
 import { access, constants } from "node:fs/promises"
 import { accessSync } from "node:fs"
-import { resolve, dirname } from "node:path"
+import { resolve, dirname, delimiter } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { LspLanguageConfig } from "./config.js"
 
@@ -31,7 +31,40 @@ function getConfigHint(): string {
 }
 
 function getInstallHint(language: string): string | undefined {
-  return INSTALL_HINTS[INSTALL_HINTS[language] ? language : Object.keys(INSTALL_HINTS).find(k => k === language) ?? ""]
+  return INSTALL_HINTS[language]
+}
+
+const LANGUAGE_ENV_ALIASES: Record<string, string> = {
+  typescript: "TYPESCRIPT",
+  typescriptreact: "TYPESCRIPT",
+  javascript: "JAVASCRIPT",
+  javascriptreact: "JAVASCRIPT",
+}
+
+function getEnvCommand(language: string): string | undefined {
+  const alias = LANGUAGE_ENV_ALIASES[language] ?? language.toUpperCase().replace(/[^A-Z0-9]/g, "_")
+  const key = `COVALO_LSP_SERVER_${alias}`
+  return process.env[key]
+}
+
+const WINDOWS_SHIMS = ["", ".cmd", ".exe", ".ps1"]
+
+function tryAccessSync(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function tryAccess(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
 }
 
 const whichCache = new Map<string, string | null>()
@@ -40,15 +73,18 @@ async function which(command: string): Promise<string | null> {
   const cached = whichCache.get(command)
   if (cached !== undefined) return cached
 
-  const pathDirs = (process.env.PATH ?? "").split(":")
+  const pathDirs = (process.env.PATH ?? "").split(delimiter)
+  const isWin = process.platform === "win32"
+  const shims = isWin ? WINDOWS_SHIMS : [""]
+
   for (const dir of pathDirs) {
-    const fullPath = resolve(dir, command)
-    try {
-      await access(fullPath, constants.X_OK)
-      whichCache.set(command, fullPath)
-      return fullPath
-    } catch {
-      continue
+    for (const shim of shims) {
+      const candidate = command + shim
+      const fullPath = resolve(dir, candidate)
+      if (await tryAccess(fullPath)) {
+        whichCache.set(command, fullPath)
+        return fullPath
+      }
     }
   }
   whichCache.set(command, null)
@@ -59,16 +95,16 @@ function resolvePackageLocalBin(command: string): string | null {
   try {
     const thisFile = fileURLToPath(import.meta.url)
     let dir = dirname(thisFile)
+    const isWin = process.platform === "win32"
+    const shims = isWin ? WINDOWS_SHIMS : [""]
     for (let i = 0; i < 10; i++) {
-      const candidate = resolve(dir, "node_modules", ".bin", command)
-      try {
-        accessSync(candidate, constants.X_OK)
-        return candidate
-      } catch {
-        const parent = resolve(dir, "..")
-        if (parent === dir) break
-        dir = parent
+      for (const shim of shims) {
+        const candidate = resolve(dir, "node_modules", ".bin", command + shim)
+        if (tryAccessSync(candidate)) return candidate
       }
+      const parent = resolve(dir, "..")
+      if (parent === dir) break
+      dir = parent
     }
   } catch {
     return null
@@ -82,30 +118,35 @@ export async function resolveServer(
   language: string,
   cwd: string,
 ): Promise<ServerResolverResult> {
+  const envCommand = getEnvCommand(language)
+  const effectiveCommand = envCommand ?? command
+
   const result: ServerResolverResult = {
-    server: { command: command ?? "", args: args ?? [] },
+    server: { command: effectiveCommand ?? "", args: args ?? [] },
     source: "path",
     available: false,
   }
 
-  if (!command) {
+  if (!effectiveCommand) {
     result.installHint = getInstallHint(language)
     result.configHint = getConfigHint()
     return result
   }
 
-  // 1. Check PATH
-  const pathResolved = await which(command)
+  const source: ServerResolverResult["source"] = envCommand ? "env" : "user-config"
+
+  // 1. Check PATH (with platform-appropriate shims on Windows)
+  const pathResolved = await which(effectiveCommand)
   if (pathResolved) {
     result.server = { command: pathResolved, args: args ?? [] }
-    result.source = "path"
+    result.source = source
     result.available = true
     result.resolvedPath = pathResolved
     return result
   }
 
   // 2. Check package-local node_modules/.bin
-  const localBin = resolvePackageLocalBin(command)
+  const localBin = resolvePackageLocalBin(effectiveCommand)
   if (localBin) {
     result.server = { command: localBin, args: args ?? [] }
     result.source = "package-local"
@@ -118,7 +159,7 @@ export async function resolveServer(
   if (process.env.COVALO_LSP_ALLOW_NPX === "1") {
     const npxPath = await which("npx")
     if (npxPath) {
-      result.server = { command: npxPath, args: ["--yes", command, ...(args ?? [])] }
+      result.server = { command: npxPath, args: ["--yes", effectiveCommand, ...(args ?? [])] }
       result.source = "npx-fallback"
       result.available = true
       result.resolvedPath = npxPath

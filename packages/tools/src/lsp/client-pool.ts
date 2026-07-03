@@ -14,6 +14,9 @@ interface DocumentCacheEntry {
 
 interface PoolEntry {
   client: LspClient
+  language: string
+  cwd: string
+  server: LspLanguageConfig
   lastUsed: number
   refCount: number
   createdAt: number
@@ -51,7 +54,7 @@ export class LspClientPool {
   private clients = new Map<string, PoolEntry>()
   private idleTimer: ReturnType<typeof setInterval> | null = null
 
-  async acquire(language: string, cwd: string, server: LspLanguageConfig): Promise<{ client: LspClient; serverKey: string }> {
+  async acquire(language: string, cwd: string, server: LspLanguageConfig, timeoutMs?: number): Promise<{ client: LspClient; serverKey: string }> {
     const serverKey = buildServerKey(language, cwd, server)
     const existing = this.clients.get(serverKey)
 
@@ -67,7 +70,7 @@ export class LspClientPool {
       cwd,
       rootPath: cwd,
       language,
-      timeoutMs: 8000,
+      timeoutMs: timeoutMs ?? 8000,
       initializationOptions: server.initializationOptions,
       settings: server.settings,
     })
@@ -77,6 +80,9 @@ export class LspClientPool {
 
     const entry: PoolEntry = {
       client,
+      language,
+      cwd,
+      server: { command: server.command, args: server.args, initializationOptions: server.initializationOptions, settings: server.settings },
       lastUsed: Date.now(),
       refCount: 1,
       createdAt: Date.now(),
@@ -91,6 +97,19 @@ export class LspClientPool {
     if (!entry) return
     entry.refCount = Math.max(0, entry.refCount - 1)
     entry.lastUsed = Date.now()
+  }
+
+  buildKeyFor(language: string, cwd: string, server: LspLanguageConfig): string {
+    return buildServerKey(language, cwd, server)
+  }
+
+  findServerKey(language: string, cwd: string, server: LspLanguageConfig): string | undefined {
+    const computed = buildServerKey(language, cwd, server)
+    if (this.clients.has(computed)) return computed
+    for (const key of this.clients.keys()) {
+      if (key.startsWith(`${language}::${cwd}::`)) return key
+    }
+    return undefined
   }
 
   async ensureDocument(serverKey: string, filePath: string, language: string, content: string): Promise<void> {
@@ -111,13 +130,13 @@ export class LspClientPool {
     }
   }
 
-  startIdleSweep(intervalMs = 60000): void {
+  startIdleSweep(intervalMs = 60000, idleTimeoutMs = 300000): void {
     if (this.idleTimer) return
     this.idleTimer = setInterval(() => {
       const now = Date.now()
       for (const [key, entry] of this.clients.entries()) {
         if (entry.refCount > 0) continue
-        if (now - entry.lastUsed < 300000) continue
+        if (now - entry.lastUsed < idleTimeoutMs) continue
         entry.client.shutdown().catch(() => entry.client.kill())
         this.clients.delete(key)
       }
@@ -139,7 +158,7 @@ export class LspClientPool {
       statuses.push({
         serverKey: key,
         language: entry.client.getLanguage(),
-        workspaceRoot: "",
+        workspaceRoot: entry.cwd,
         pid: entry.client.getPid(),
         state: health.state,
         uptimeMs: health.uptimeMs,
@@ -151,27 +170,17 @@ export class LspClientPool {
     return statuses
   }
 
-  async restart(serverKey: string): Promise<void> {
+  async restart(serverKey: string): Promise<boolean> {
     const entry = this.clients.get(serverKey)
     if (!entry) throw new Error(`No client for server key: ${serverKey}`)
+
+    const { language, cwd, server } = entry
 
     await entry.client.shutdown().catch(() => entry.client.kill())
     this.clients.delete(serverKey)
 
-    const language = entry.client.getLanguage()
-    const server: LspLanguageConfig = {
-      command: "",
-      args: [],
-    }
-    const { client } = await this.acquire(language, process.cwd(), server)
-    const newKey = buildServerKey(language, process.cwd(), server)
-    this.clients.set(newKey, {
-      client,
-      lastUsed: Date.now(),
-      refCount: 0,
-      createdAt: Date.now(),
-      documents: new Map(),
-    })
+    await this.acquire(language, cwd, server)
+    return true
   }
 
   async disposeAll(): Promise<void> {
