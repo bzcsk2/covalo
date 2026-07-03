@@ -92,7 +92,7 @@ describe("repairToolArguments - Storm", () => {
     const result = repairToolArguments('"name": "test"')
     expect(result.success).toBe(true)
     expect(result.args).toEqual({ name: "test" })
-    expect(result.partial).toBeFalsy()
+    expect(result.partial).toBe(true)
   })
 
   it("should accept empty object", () => {
