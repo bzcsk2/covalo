@@ -415,7 +415,13 @@ export class ReasonixEngine implements CoreEngine {
       }
     }
     this.sessionId = sessionId
+    // SPEC-A: session boundary — clear all context zones and submit-local state
     this.ctx.log.clear()
+    this.ctx.clearTransientState()
+    this.taskLedger = undefined
+    this.verificationGateState = { continuationCount: 0 }
+    this.supervisorGuidanceState = createSupervisorGuidanceState()
+    this.pendingInstructionQueue = []
     this.toolExecutor.setSessionId(sessionId)
     this.logger = this.logger.child({ sessionId })
     this.rebindSessionWriter(sessionId)
@@ -514,16 +520,15 @@ export class ReasonixEngine implements CoreEngine {
     return this.taskLedger?.snapshot()
   }
 
-  /** DRF-40: 将 TaskLedger 注入可变 scratch 上下文 */
+  /** DRF-40: 将 TaskLedger 注入可变 scratch 上下文 — 按来源精确替换，避免污染其他来源消息 */
   private injectTaskLedgerContext(ledger?: TaskLedgerTracker, includePlanRequest = false): void {
     if (!ledger) return
-    const formatted = ledger.formatForContext()
-    if (formatted.trim()) {
-      this.ctx.scratch.append({ role: "user", content: formatted })
-    }
+    const messages: ChatMessage[] = []
     if (includePlanRequest && ledger.plan.length === 0) {
-      this.ctx.scratch.append({ role: "user", content: planRequestInstruction() })
+      messages.push({ role: "user", content: planRequestInstruction() })
     }
+    messages.push({ role: "user", content: ledger.formatForContext() })
+    this.ctx.scratch.replaceSource("task_ledger", messages)
   }
 
   /** DRF-60: 构建 Supervisor 指导闭环配置 */
