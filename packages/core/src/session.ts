@@ -5,7 +5,7 @@ import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 
 export interface SessionRecord {
   ts: number
-  type: "event" | "messages" | "stats" | "dual-session" | "workflow-checkpoint" | "advice-history"
+  type: "event" | "messages" | "stats" | "workflow-checkpoint"
   payload: unknown
 }
 
@@ -23,15 +23,6 @@ export type SessionReadStatus = "ok" | "missing" | "empty" | "corrupt" | "unread
 export interface SessionReadResult {
   status: SessionReadStatus
   messages: ChatMessage[]
-  skippedLines: number
-  error?: string
-}
-
-export interface DualSessionReadResult {
-  status: SessionReadStatus
-  snapshot?: import("./dual-session/types.js").DualSessionSnapshot
-  workflowCheckpoint?: import("./workflow-coordinator/types.js").WorkflowCheckpoint
-  adviceHistory?: import("./dual-session/types.js").AdviceHistoryEntry[]
   skippedLines: number
   error?: string
 }
@@ -101,60 +92,6 @@ export class SessionLoader {
       }
     }
     return { status: skippedLines > 0 ? "corrupt" : "empty", messages: [], skippedLines }
-  }
-
-  static async readDualSession(sessionId: string): Promise<DualSessionReadResult> {
-    const path = this.safePath(sessionId)
-    let raw: string
-    try {
-      raw = await readFile(path, "utf-8")
-    } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : undefined
-      if (code === "ENOENT") {
-        return { status: "missing", skippedLines: 0 }
-      }
-      return {
-        status: "unreadable",
-        skippedLines: 0,
-        error: error instanceof Error ? error.message : String(error),
-      }
-    }
-    if (!raw.trim()) {
-      return { status: "empty", skippedLines: 0 }
-    }
-    const lines = raw.trim().split("\n")
-    let skippedLines = 0
-    let snapshot: import("./dual-session/types.js").DualSessionSnapshot | undefined
-    let workflowCheckpoint: import("./workflow-coordinator/types.js").WorkflowCheckpoint | undefined
-    let adviceHistory: import("./dual-session/types.js").AdviceHistoryEntry[] | undefined
-
-    // Scan all lines to find the most recent records of each type
-    for (const line of lines) {
-      try {
-        const rec: SessionRecord = JSON.parse(line)
-        if (rec.type === "dual-session" && rec.payload) {
-          snapshot = rec.payload as import("./dual-session/types.js").DualSessionSnapshot
-        } else if (rec.type === "workflow-checkpoint" && rec.payload) {
-          workflowCheckpoint = rec.payload as import("./workflow-coordinator/types.js").WorkflowCheckpoint
-        } else if (rec.type === "advice-history" && Array.isArray(rec.payload)) {
-          adviceHistory = rec.payload as import("./dual-session/types.js").AdviceHistoryEntry[]
-        }
-      } catch {
-        skippedLines++
-      }
-    }
-
-    if (!snapshot) {
-      return { status: skippedLines > 0 ? "corrupt" : "empty", skippedLines }
-    }
-
-    return {
-      status: "ok",
-      snapshot,
-      workflowCheckpoint,
-      adviceHistory,
-      skippedLines,
-    }
   }
 
   static async list(): Promise<SessionSummary[]> {

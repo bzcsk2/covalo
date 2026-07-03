@@ -1,8 +1,6 @@
 import type { AgentTool, ToolResult, ToolProgressUpdate } from "./interface.js"
 import type { ToolCall } from "./types.js"
 import type { PermissionEngine, HookManager, PermissionDecision } from "@covalo/security"
-import type { PermissionService, PermissionRule } from "./permission/index.js"
-import { evaluateRules, fromConfig, createSessionRule } from "./permission/index.js"
 import { maybePersistResult, type ResultPersistenceConfig } from "./result-persistence.js"
 import { type RuntimeLogger } from "./runtime-logger.js"
 import { repairToolArguments } from "./context/repair.js"
@@ -40,39 +38,12 @@ export function parseToolCallArgs(raw: string, toolName: string): ParsedToolCall
 }
 
 /**
- * Extract resource patterns from tool arguments for permission evaluation.
- */
-function extractResourcePatterns(
-  toolName: string,
-  args: Record<string, unknown>,
-): string[] {
-  // File path patterns
-  const filePath = args.filePath ?? args.path ?? args.file
-  if (typeof filePath === "string") {
-    return [filePath]
-  }
-
-  // Shell command patterns
-  const command = args.command ?? args.cmd
-  if (typeof command === "string" && (toolName === "bash" || toolName === "exec" || toolName === "shell")) {
-    return [command]
-  }
-
-  // URL patterns
-  const url = args.url ?? args.query
-  if (typeof url === "string" && (toolName === "webfetch" || toolName === "websearch")) {
-    return [url]
-  }
-
-  // Generic pattern fallback
-  return [toolName]
-}
-
-/**
  * CL-50: Evaluate whether a tool call should be allowed, denied, or requires user confirmation.
  * Pure function — no side effects beyond the provided callbacks.
  *
- * Supports both the legacy PermissionEngine and the new PermissionService.
+ * Phase 2.1: PermissionService 分支已从生产路径移除（路径 B：deprecate）。
+ * PermissionService 模块本身保留为 @deprecated，未来版本将移除。
+ * 生产权限决策走 PermissionEngine（@covalo/security）。
  */
 export async function evaluatePermission(
   tc: ToolCall,
@@ -81,9 +52,6 @@ export async function evaluatePermission(
   hookManager?: HookManager,
   requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>,
   parsedArgs?: Record<string, unknown>,
-  permissionService?: PermissionService,
-  configRules?: PermissionRule[],
-  sessionId?: string,
 ): Promise<PermissionOutcome> {
   const handler = tools.get(tc.function.name)
   if (!handler) return "allow"
@@ -91,37 +59,6 @@ export async function evaluatePermission(
   const argsResult = parsedArgs ? { ok: true as const, args: parsedArgs, repaired: false } : parseToolCallArgs(tc.function.arguments, tc.function.name)
   if (!argsResult.ok) return "invalid"
   const args = argsResult.args
-
-  // Extract resource patterns for the new permission system
-  const patterns = extractResourcePatterns(tc.function.name, args)
-
-  // Try new permission system first (if available)
-  if (permissionService && sessionId) {
-    // Check session-approved rules first
-    if (permissionService.matchesSessionRules({
-      id: "",
-      sessionId,
-      permission: tc.function.name,
-      patterns,
-      always: [],
-      metadata: {},
-    })) {
-      return "allow"
-    }
-
-    // Evaluate against config rules
-    const sessionRules = permissionService.getSessionRules(sessionId)
-    const decision = evaluateRules(
-      tc.function.name,
-      patterns[0] ?? "*",
-      configRules ?? [],
-      sessionRules,
-    )
-
-    if (decision === "allow") return "allow"
-    if (decision === "deny") return "deny"
-    // If "ask", continue to legacy system and hook checks
-  }
 
   // Legacy PermissionEngine check
   if (permissionEngine) {
@@ -132,7 +69,7 @@ export async function evaluatePermission(
     }
   }
 
-  // Hook check (runs for both systems when decision is "ask")
+  // Hook check (runs when decision is "ask")
   let hookDecision: PermissionDecision | void
   try {
     hookDecision = await hookManager?.runBeforeToolCall({
@@ -147,7 +84,7 @@ export async function evaluatePermission(
   if (hookDecision === "deny") return "deny"
   if (requestPermission) return "ask"
   // 无权限基础设施时默认允许（测试/无头模式）
-  if (!permissionEngine && !permissionService) return "allow"
+  if (!permissionEngine) return "allow"
   return "deny"
 }
 

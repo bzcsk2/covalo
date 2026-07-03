@@ -16,6 +16,6 @@ export type {
   StartWorkflowOptions,
   WorkflowEvent,
 } from "./types.js"
-export { DEFAULT_WORKFLOW_CONFIG, SUPERVISOR_WORKFLOW_PROMPT } from "./types.js"
+export { DEFAULT_WORKFLOW_CONFIG } from "./types.js"
 export { WorkflowCoordinator } from "./coordinator.js"
 export type { WorkflowCoordinatorOptions } from "./coordinator.js"

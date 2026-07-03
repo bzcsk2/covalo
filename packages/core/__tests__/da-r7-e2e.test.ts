@@ -13,8 +13,6 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test"
 import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
-import { DualSession } from "../src/dual-session/index.js"
-import { DualSessionStore } from "../src/dual-session/store.js"
 import { validateAgentProfiles } from "../src/agent-profile/schema.js"
 import { DualAgentRuntime } from "../src/dual-agent-runtime/dual-runtime.js"
 import type { DualAgentRuntimeConfig } from "../src/dual-agent-runtime/types.js"
@@ -24,11 +22,9 @@ import { setPromptLocale } from "../src/prompt-locale";
 describe("DA-R7: 端到端双角色运行时测试", () => {
   beforeEach(() => setPromptLocale("en"));
   let workflowCoordinator: WorkflowCoordinator
-  let sessionStore: DualSessionStore
 
   beforeEach(() => {
     workflowCoordinator = new WorkflowCoordinator()
-    sessionStore = new DualSessionStore({ sessionDir: "/tmp/deepr-test-sessions" })
   })
 
   afterEach(() => {
@@ -215,56 +211,6 @@ describe("DA-R7: 端到端双角色运行时测试", () => {
     })
   })
 
-  describe("场景 3: Session 持久化与恢复", () => {
-    it("应正确保存和恢复 Session", () => {
-      // 创建 Session
-      const session = new DualSession({
-        sessionId: "test-session-e2e",
-        workerModelTarget: "deepseek-chat",
-        supervisorModelTarget: "deepseek-reasoner",
-      })
-
-      // 添加消息
-      session.addMessage("worker", { role: "user", content: "Worker 消息 1" })
-      session.addMessage("supervisor", { role: "user", content: "Supervisor 消息 1" })
-
-      // 保存 Session
-      const saved = sessionStore.save(session)
-      expect(saved).toBe(true)
-
-      // 加载 Session
-      const loaded = sessionStore.load("test-session-e2e")
-      expect(loaded).not.toBeNull()
-
-      // 验证消息
-      const workerState = loaded!.getRoleState("worker")
-      const supervisorState = loaded!.getRoleState("supervisor")
-
-      expect(workerState.messages.length).toBe(1)
-      expect(supervisorState.messages.length).toBe(1)
-      expect(workerState.messages[0].content).toBe("Worker 消息 1")
-      expect(supervisorState.messages[0].content).toBe("Supervisor 消息 1")
-    })
-
-    it("应正确处理路径穿越攻击", () => {
-      const session = new DualSession({
-        sessionId: "../../etc/passwd",
-        workerModelTarget: "test",
-        supervisorModelTarget: "test",
-      })
-
-      // 尝试保存应抛出错误
-      expect(() => {
-        sessionStore.save(session)
-      }).toThrow()
-    })
-
-    it("应正确处理损坏的文件", () => {
-      const loaded = sessionStore.load("non-existent-session")
-      expect(loaded).toBeNull()
-    })
-  })
-
   describe("场景 4: Agent Profile 验证", () => {
     it("应正确验证有效的 Agent Profile", () => {
       const validProfiles = {
@@ -394,33 +340,6 @@ describe("DA-R7: 端到端双角色运行时测试", () => {
     })
   })
 
-  describe("场景 6: 双角色独立通信", () => {
-    it("Worker 和 Supervisor 应有独立的消息历史", () => {
-      const session = new DualSession({
-        sessionId: "test-dual-comm",
-        workerModelTarget: "deepseek-chat",
-        supervisorModelTarget: "deepseek-reasoner",
-      })
-
-      // 添加 Worker 消息
-      session.addMessage("worker", { role: "user", content: "Worker 消息 1" })
-      session.addMessage("worker", { role: "user", content: "Worker 消息 2" })
-
-      // 添加 Supervisor 消息
-      session.addMessage("supervisor", { role: "user", content: "Supervisor 消息 1" })
-
-      // 验证消息隔离
-      const workerState = session.getRoleState("worker")
-      const supervisorState = session.getRoleState("supervisor")
-
-      expect(workerState.messages.length).toBe(2)
-      expect(supervisorState.messages.length).toBe(1)
-      expect(workerState.messages[0].content).toBe("Worker 消息 1")
-      expect(workerState.messages[1].content).toBe("Worker 消息 2")
-      expect(supervisorState.messages[0].content).toBe("Supervisor 消息 1")
-    })
-  })
-
   describe("场景 7: 重启恢复", () => {
     it("应正确恢复工作流状态", () => {
       // 开始工作流
@@ -462,8 +381,6 @@ describe("DA-R7: 发布门禁验证", () => {
 
     // 验证核心组件可用
     expect(WorkflowCoordinator).toBeDefined()
-    expect(DualSession).toBeDefined()
-    expect(DualSessionStore).toBeDefined()
     expect(validateAgentProfiles).toBeDefined()
     expect(DualAgentRuntime).toBeDefined()
   })

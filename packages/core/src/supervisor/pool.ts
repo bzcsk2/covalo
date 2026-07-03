@@ -173,11 +173,6 @@ export function loadSupervisorPool(cwd: string = process.cwd()): SupervisorPoolC
   }
 }
 
-/**
- * 获取已启用的 Supervisor 候选列表。
- *
- * @param pool - 池配置
- */
-export function getEnabledSupervisorCandidates(pool: SupervisorPoolConfig): SupervisorCandidate[] {
-  return pool.candidates.filter((c) => c.enabled)
-}
+// Phase 2.2: getEnabledSupervisorCandidates 已删除（仅测试使用，无生产调用方）。
+// 调用方可直接用 pool.candidates.filter(c => c.enabled) 替代。
+// 详见 docs/unintegrated_code_audit_20260703.md §3.10f。

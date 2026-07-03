@@ -13,7 +13,6 @@ export {
   parseSupervisorPoolConfig,
   mergeSupervisorPool,
   loadSupervisorPool,
-  getEnabledSupervisorCandidates,
 } from "./pool.js"
 
 export type {

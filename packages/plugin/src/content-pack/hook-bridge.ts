@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs"
-import { spawn } from "node:child_process"
 
 export interface EccHookEntry {
   id: string
@@ -90,17 +89,5 @@ export function parseEccHooks(filePath: string): { hooks: BridgedHook[]; warning
   }
 }
 
-export function executeEccHookCommand(command: string, timeout: number = 30): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn("sh", ["-c", command], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: timeout * 1000,
-    })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.on("data", (d: Buffer) => { stdout += d.toString() })
-    child.stderr.on("data", (d: Buffer) => { stderr += d.toString() })
-    child.on("close", (code) => resolve({ code, stdout, stderr }))
-    child.on("error", (e) => resolve({ code: -1, stdout, stderr: e.message }))
-  })
-}
+// Phase 2.2: executeEccHookCommand 已删除（被 executeHookCommandSafe 取代）。
+// 详见 docs/unintegrated_code_audit_20260703.md §3.10a。

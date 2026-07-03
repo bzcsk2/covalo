@@ -1,45 +1,19 @@
 import type { CovaloConfig } from "./schema.js"
-import type { WorkflowConfig as LegacyWorkflowConfig } from "../workflow-coordinator/types.js"
-import type { GoalRuntimeConfig } from "../goal/runtime.js"
 
 /**
  * 配置适配器：将新的配置系统配置转换为各个模块使用的格式
+ *
+ * Phase 2.2: 已删除 6 个未使用的函数（无生产调用方）：
+ * - toWorkflowCoordinatorConfig
+ * - toGoalRuntimeConfig
+ * - getSupervisorToolPolicy
+ * - getWorkerToolPolicy
+ * - getMailboxConfig
+ * - getContextConfig
+ * 详见 docs/unintegrated_code_audit_20260703.md §3.7。
+ * 保留的函数：isToolAllowed / isHardDeniedForSupervisorLoop / isHardDeniedForWorkerLoop
+ * （被 resolve-effective-tools.ts 使用）。
  */
-
-/**
- * 将新的WorkflowConfig转换为WorkflowCoordinator使用的格式
- */
-export function toWorkflowCoordinatorConfig(config: CovaloConfig): Partial<LegacyWorkflowConfig> {
-  return {
-    maxRounds: config.workflow.maxRounds,
-    requireSupervisorPlan: config.workflow.structuredProtocol,
-    requireVerificationGate: config.workflow.requireJsonDecisions,
-  }
-}
-
-/**
- * 将新的GoalConfig转换为GoalRuntime使用的格式
- */
-export function toGoalRuntimeConfig(config: CovaloConfig): Partial<GoalRuntimeConfig> {
-  return {
-    maxAutoContinuations: config.goal.maxAutoContinuations,
-    maxConsecutiveTurnErrors: config.goal.maxConsecutiveTurnErrors,
-  }
-}
-
-/**
- * 获取Supervisor的工具策略
- */
-export function getSupervisorToolPolicy(config: CovaloConfig, mode: "loop" | "subagent") {
-  return config.tools.supervisor[mode]
-}
-
-/**
- * 获取Worker的工具策略
- */
-export function getWorkerToolPolicy(config: CovaloConfig, mode: "loop" | "subagent") {
-  return config.tools.worker[mode]
-}
 
 /**
  * 检查工具是否被允许
@@ -51,17 +25,17 @@ export function isToolAllowed(
   toolName: string
 ): boolean {
   const policy = config.tools[role][mode]
-  
+
   // 检查deny列表
   if (policy.deny.includes(toolName)) {
     return false
   }
-  
+
   // 检查allow列表（如果为空，则允许所有）
   if (policy.allow.length > 0) {
     return policy.allow.includes(toolName)
   }
-  
+
   // 默认允许
   return true
 }
@@ -80,32 +54,4 @@ export function isHardDeniedForSupervisorLoop(toolName: string): boolean {
 export function isHardDeniedForWorkerLoop(toolName: string): boolean {
   const hardDenied = ["update_goal"]
   return hardDenied.includes(toolName)
-}
-
-/**
- * 获取Mailbox配置
- */
-export function getMailboxConfig(config: CovaloConfig) {
-  return {
-    enabled: config.mailbox.enabled,
-    storage: config.mailbox.storage,
-    waitTimeoutMs: config.mailbox.waitTimeoutMs,
-    maxMessagesPerRole: config.mailbox.maxMessagesPerRole,
-    markReadAfterTurn: config.mailbox.markReadAfterTurn,
-  }
-}
-
-/**
- * 获取Context配置
- */
-export function getContextConfig(config: CovaloConfig) {
-  return {
-    strategy: config.context.strategy,
-    maxInputTokens: config.context.maxInputTokens,
-    summaryEnabled: config.context.summaryEnabled,
-    summaryEveryTurns: config.context.summaryEveryTurns,
-    includeMailboxHistory: config.context.includeMailboxHistory,
-    includeGoalHistory: config.context.includeGoalHistory,
-    includeToolEvents: config.context.includeToolEvents,
-  }
 }

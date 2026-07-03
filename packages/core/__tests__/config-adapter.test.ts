@@ -1,10 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { 
-  isHardDeniedForSupervisorLoop, 
-  isHardDeniedForWorkerLoop, 
+import {
+  isHardDeniedForSupervisorLoop,
+  isHardDeniedForWorkerLoop,
   isToolAllowed,
-  toWorkflowCoordinatorConfig,
-  toGoalRuntimeConfig,
 } from "../src/config/adapter.js"
 import { DEFAULT_CONFIG } from "../src/config/defaults.js"
 import type { CovaloConfig } from "../src/config/schema.js"
@@ -107,44 +105,6 @@ describe("Tool Policy", () => {
 
       expect(isToolAllowed(config, "worker", "loop", "bash")).toBe(true)
       expect(isToolAllowed(config, "worker", "loop", "read_file")).toBe(true)
-    })
-  })
-})
-
-describe("Config Adapters", () => {
-  describe("toWorkflowCoordinatorConfig", () => {
-    it("should convert workflow config", () => {
-      const config: CovaloConfig = {
-        ...DEFAULT_CONFIG,
-        workflow: {
-          ...DEFAULT_CONFIG.workflow,
-          maxRounds: 10,
-          structuredProtocol: false,
-          requireJsonDecisions: false,
-        },
-      }
-
-      const result = toWorkflowCoordinatorConfig(config)
-      expect(result.maxRounds).toBe(10)
-      expect(result.requireSupervisorPlan).toBe(false)
-      expect(result.requireVerificationGate).toBe(false)
-    })
-  })
-
-  describe("toGoalRuntimeConfig", () => {
-    it("should convert goal config", () => {
-      const config: CovaloConfig = {
-        ...DEFAULT_CONFIG,
-        goal: {
-          ...DEFAULT_CONFIG.goal,
-          maxAutoContinuations: 20,
-          maxConsecutiveTurnErrors: 5,
-        },
-      }
-
-      const result = toGoalRuntimeConfig(config)
-      expect(result.maxAutoContinuations).toBe(20)
-      expect(result.maxConsecutiveTurnErrors).toBe(5)
     })
   })
 })

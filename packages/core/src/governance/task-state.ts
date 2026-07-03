@@ -1,6 +1,11 @@
 /**
  * 任务意图推断 — 用于决定是否创建 TaskLedger。
  *
+ * @experimental task-state.ts 是从 iceCoder 移植的实验性 intent classifier。
+ * 当前生产路径使用 task-ledger.ts 的 shouldCreateLedger（基于消息长度/PLAN_HINTS/句子数量）。
+ * 本模块保留作为未来更精细的 intent 分类基础，未接入生产路径，也不再公开 export。
+ * 详见 docs/unintegrated_code_audit_20260703.md §3.6（Phase 2.2 选项 B）。
+ *
  * DRF-40: 从 iceCoder task-state.ts 的 inferIntent / hasExecutableSideSignal 裁剪适配（MIT）
  * Source: iceCoder/src/harness/task-state.ts
  */

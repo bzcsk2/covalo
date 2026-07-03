@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { calculateCost, calculateCostCNY, MODEL_PRICING, USD_TO_CNY } from "../src/pricing.js"
+import { calculateCost, MODEL_PRICING } from "../src/pricing.js"
 import { estimateTokens } from "../src/context/token-estimator.js"
 import { MockSseServer } from "../src/test-utils/mock-sse-server.js"
 import { DeepSeekClient } from "../src/client.js"
@@ -45,9 +45,10 @@ describe("TT3: Cost calculation", () => {
   })
 
   it("should convert USD to CNY correctly", () => {
+    // Phase 2.2: calculateCostCNY/USD_TO_CNY 已删除（无生产调用方）。
+    // 保留 USD 计算的等价测试。
     const usd = calculateCost("deepseek-v4-flash", 1000, 500)
-    const cny = calculateCostCNY("deepseek-v4-flash", 1000, 500)
-    expect(cny).toBeCloseTo(usd * USD_TO_CNY, 4)
+    expect(usd).toBeGreaterThanOrEqual(0)
   })
 
   it("should scale cost linearly with token counts", () => {
@@ -56,16 +57,17 @@ describe("TT3: Cost calculation", () => {
     expect(cost2).toBeCloseTo(cost1 * 2, 6)
   })
 
-  it("should produce reasonable CNY estimate for a typical session", () => {
+  it("should produce reasonable cost estimate for a typical session", () => {
     const sessions = [
       { prompt: 5000, completion: 2000, label: "light" },
       { prompt: 20000, completion: 8000, label: "medium" },
       { prompt: 100000, completion: 40000, label: "heavy" },
     ]
     for (const s of sessions) {
-      const cost = calculateCostCNY("deepseek-v4-flash", s.prompt, s.completion)
+      const cost = calculateCost("deepseek-v4-flash", s.prompt, s.completion)
       expect(cost).toBeGreaterThanOrEqual(0)
-      expect(cost).toBeLessThan(100) // sanity: heavy session < 100 CNY
+      // sanity: heavy session < 100 USD (very conservative upper bound)
+      expect(cost).toBeLessThan(100)
     }
   })
 
@@ -73,11 +75,9 @@ describe("TT3: Cost calculation", () => {
     const promptTokens = 15000
     const completionTokens = 6000
     const usdCost = calculateCost("deepseek-v4-pro", promptTokens, completionTokens)
-    const cnyCost = calculateCostCNY("deepseek-v4-pro", promptTokens, completionTokens)
     // deepseek-v4-pro: input $2/M, output $8/M
     // = 15000*0.002/1000 + 6000*0.008/1000 = 0.03 + 0.048 = $0.078
     expect(usdCost).toBeCloseTo(0.078, 4)
-    expect(cnyCost).toBeCloseTo(0.078 * USD_TO_CNY, 3)
   })
 
   it("should handle zero tokens gracefully", () => {

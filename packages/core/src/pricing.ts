@@ -15,8 +15,6 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "zen-free": { inputPer1K: 0, outputPer1K: 0, cacheReadPer1K: 0, cacheWritePer1K: 0 },
 }
 
-export const USD_TO_CNY = 7.25
-
 export function calculateCost(model: string, promptTokens: number, completionTokens: number, cacheHitTokens = 0, cacheMissTokens = 0): number {
   const pricing = MODEL_PRICING[model]
   if (!pricing) return 0
@@ -31,10 +29,8 @@ export function calculateCost(model: string, promptTokens: number, completionTok
   return cost
 }
 
-export function calculateCostCNY(model: string, promptTokens: number, completionTokens: number, cacheHitTokens = 0, cacheMissTokens = 0): number {
-  return calculateCost(model, promptTokens, completionTokens, cacheHitTokens, cacheMissTokens) * USD_TO_CNY
-}
-
-export function getPricing(model: string): ModelPricing | undefined {
-  return MODEL_PRICING[model]
-}
+// Phase 2.2: 以下函数已删除（无生产调用方）：
+// - USD_TO_CNY
+// - calculateCostCNY
+// - getPricing
+// 详见 docs/unintegrated_code_audit_20260703.md §3.9。
