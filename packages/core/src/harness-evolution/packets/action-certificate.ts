@@ -12,7 +12,7 @@ export type ApprovalClass =
 
 export type ApprovalBy = "supervisor" | "human" | "policy";
 
-export type OutcomeStatus = "ok" | "failed" | "cancelled";
+export type OutcomeStatus = "ok" | "failed" | "cancelled" | "blocked_by_policy";
 
 // High-risk command patterns
 const HIGH_RISK_RE = /\b(?:rm\s+-rf|git\s+reset\s+--hard|git\s+clean\s+-f|drop\s+database|truncate\s+table|terraform\s+destroy|kubectl\s+delete|npm\s+publish|pnpm\s+publish|git\s+push|deploy\b|terraform\s+apply|kubectl\s+apply)\b/i;

@@ -14,8 +14,8 @@ export function repairToolArguments(raw: string): RepairResult {
 
   const s3 = storm(raw)
   if (s3.success) {
-    // AUD-08: partial recovery with multiple KV pairs is suspicious — flag it
-    return { success: true, args: s3.args, method: "storm", partial: Object.keys(s3.args).length > 1 }
+    // AUD-08: storm recovery is always partial — low-confidence regex extraction
+    return { success: true, args: s3.args, method: "storm", partial: true }
   }
 
   return { success: false, args: {}, method: "all-failed" }
