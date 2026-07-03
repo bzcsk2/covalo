@@ -65,6 +65,8 @@ export class LspClient {
   private serverCapabilities: Record<string, unknown> = {}
   private diagnosticRegistrations = new Map<string, { id: string; method: string }>()
   private initializationOptions: Record<string, unknown> = {}
+  // 跟踪当前 child 的 exit handler，避免 kill→start 后旧进程 exit 事件污染新进程
+  private exitHandler: ((code: number | null, signal: NodeJS.Signals | null) => void) | null = null
 
   constructor(options: LspClientOptions) {
     this.options = options
@@ -88,8 +90,9 @@ export class LspClient {
       return
     }
 
-    // LSP-1: 清理可能残留的旧 guard timer，避免 stale timer 误杀新启动的进程。
+    // LSP-1: 清理可能残留的旧 guard timer 和 exit handler，避免 stale listener 污染新进程。
     this.clearStartingGuardTimer()
+    this.clearExitHandler()
 
     this.state = "starting"
     this.startedAt = Date.now()
@@ -106,9 +109,8 @@ export class LspClient {
         this.stderr += String(chunk)
       })
 
-      this.child.on("exit", (code, signal) => {
-        this.handleExit(code, signal)
-      })
+      this.exitHandler = (code, signal) => this.handleExit(code, signal)
+      this.child.on("exit", this.exitHandler)
 
       this.child.on("error", (error) => {
         this.handleError(error)
@@ -381,9 +383,17 @@ export class LspClient {
     }
   }
 
+  private clearExitHandler(): void {
+    if (this.child && this.exitHandler) {
+      this.child.removeListener("exit", this.exitHandler)
+    }
+    this.exitHandler = null
+  }
+
   kill(): void {
-    // LSP-1: 清理 starting guard timer，避免 stale timer 误杀后续 start()
+    // LSP-1: 清理 starting guard timer + exit handler，避免 stale 回调污染后续进程
     this.clearStartingGuardTimer()
+    this.clearExitHandler()
     if (this.child) {
       terminateProcessTree(this.child, true, this.platform)
       this.child = null
@@ -400,8 +410,8 @@ export class LspClient {
   private handleExit(code: number | null, signal: NodeJS.Signals | null): void {
     // LSP-1: 清理 starting guard timer
     this.clearStartingGuardTimer()
-    if (this.state === "shutdown") {
-      this.state = "stopped"
+    // 如果已 shutdown 或 kill() 已清理，不改变 state（避免旧进程 exit 事件污染新进程）
+    if (this.state === "shutdown" || this.state === "stopped") {
       return
     }
 

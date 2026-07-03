@@ -12,6 +12,7 @@ import { AgentScoreStore } from "@covalo/core/scoring/index.js"
 import { createGoalTools } from "@covalo/core/goal/tools.js"
 import { createMailboxTools } from "@covalo/core/agent-comm/tools.js"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend, createAgentToolTool, createAskUserQuestionTool, createReadFileTool, createGrepTool, createListDirTool, createTodoWriteTool } from "@covalo/tools"
+import { LspClientPool } from "@covalo/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@covalo/mcp"
 import { PluginRuntime, pluginToolsToAgentTools } from "@covalo/plugin"
 import type { ToolCallHooks } from "@covalo/security"
@@ -90,6 +91,10 @@ async function main(): Promise<void> {
 
   let baseSystemPrompt = rebuildBaseSystemPrompt(promptLocale)
 
+  // Phase 2: LSP 持久化连接池 — session 级生命周期，与 engine 同寿
+  const lspPool = new LspClientPool()
+  lspPool.startIdleSweep()
+
   // Render-first startup: plugins/default tools are loaded in the background.
   // The TUI accepts input immediately; the first submit waits for this promise.
   const pluginRuntime = new PluginRuntime({ hookManager: engine.hookManager })
@@ -131,7 +136,7 @@ async function main(): Promise<void> {
         preloadedSkills.push({ name: rs.name, description: rs.description, content: rs.content })
       }
 
-      for (const tool of createDefaultTools(skillDirs, preloadedSkills)) engine.registerTool(tool)
+      for (const tool of createDefaultTools(skillDirs, preloadedSkills, undefined, { lspPool })) engine.registerTool(tool)
       for (const tool of pluginToolAgentTools) engine.registerTool(tool)
 
       const mcpConfigs = pluginRuntime.loadMcpConfigs()
@@ -146,7 +151,7 @@ async function main(): Promise<void> {
     } catch (e) {
       errorOutput.write(`[covalo] Plugin init skipped: ${e instanceof Error ? e.message : String(e)}\n`)
       // Preserve a usable agent even when plugin discovery fails.
-      for (const tool of createDefaultTools([], [])) engine.registerTool(tool)
+      for (const tool of createDefaultTools([], [], undefined, { lspPool })) engine.registerTool(tool)
     }
   })
 
@@ -419,6 +424,8 @@ async function main(): Promise<void> {
     // Wait for background MCP load to settle before disconnecting (best-effort, 2s cap)
     await Promise.race([mcpLoadPromise, new Promise<void>(r => setTimeout(r, 2000))])
     await mcpHost.disconnectAll()
+    // Phase 2: dispose LSP pool — shutdown all server processes
+    await lspPool.disposeAll().catch(() => {})
   }
 }
 

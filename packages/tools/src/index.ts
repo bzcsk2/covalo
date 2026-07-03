@@ -47,6 +47,7 @@ import { createWorkflowTool } from "./workflow.js"
 import { createAgentToolTool } from "./agent-tool.js"
 import { createSendMessageTool } from "./send-message.js"
 import { createLspTool } from "./lsp.js"
+import { LspClientPool } from "./lsp/client-pool.js"
 import { safeStringify, hasBinaryEncoding } from "./safe-stringify.js"
 import { clearReadTracker } from "./stale-read.js"
 import { getPlatformCapabilities, normalizePlatform } from "./platform/capabilities.js"
@@ -97,6 +98,7 @@ export {
   createAgentToolTool,
   createSendMessageTool,
   createLspTool,
+  LspClientPool,
   safeStringify,
   hasBinaryEncoding,
   clearReadTracker,
@@ -117,10 +119,15 @@ export type { SkillDef } from "./skills/index.js"
  *
  * ADV-HAR-03: Accepts optional shellPolicy to enable dual-track bash tool.
  */
+export interface ToolServices {
+  lspPool?: LspClientPool
+}
+
 export function createDefaultTools(
   skillDirs?: string[],
   preloadedSkills?: SkillDef[],
   shellPolicy?: "dual-track-conservative" | "dual-track",
+  services?: ToolServices,
 ): AgentTool[] {
   const useDualTrack = shellPolicy === "dual-track" || shellPolicy === "dual-track-conservative"
   return [
@@ -152,6 +159,6 @@ export function createDefaultTools(
     createWorkflowTool(),
     createAgentToolTool(),
     createSendMessageTool(),
-    createLspTool(),
+    createLspTool(services?.lspPool),
   ]
 }

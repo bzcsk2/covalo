@@ -1,5 +1,11 @@
-export { readLspConfig, normalizeConfig, getLanguageConfig, getRequestTimeout, getIdleTimeout, getInstallHint } from "./config.js"
+export { readLspConfig, normalizeConfig, getLanguageConfig, getRequestTimeout, getIdleTimeout, getInstallHint, DEFAULT_LSP_CONFIG, mergeConfig } from "./config.js"
 export type { LspLanguageConfig, LspConfig, LspConfigResult } from "./config.js"
+
+export { resolveServer } from "./server-resolver.js"
+export type { ServerResolverResult } from "./server-resolver.js"
+
+export { LspClientPool } from "./client-pool.js"
+export type { PoolEntryStatus } from "./client-pool.js"
 
 export { inferLanguage, getFileExtensions, LANGUAGE_EXTENSIONS } from "./language.js"
 

@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
 import { LspClient } from "../src/lsp/lsp-client.js"
-import { pathToFileURL } from "node:url"
+import { pathToFileURL, fileURLToPath } from "node:url"
 
-const fakeLspPath = join(import.meta.dir, "fixtures", "fake-lsp.mjs")
+const fakeLspPath = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-lsp.mjs")
 
 describe("LspClient", () => {
   let client: LspClient | null = null

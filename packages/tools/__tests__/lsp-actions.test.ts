@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
 import { createLspTool } from "../src/lsp.js"
-import { pathToFileURL } from "node:url"
+import { pathToFileURL, fileURLToPath } from "node:url"
 
-const fakeLspPath = join(import.meta.dir, "fixtures", "fake-lsp.mjs")
+const fakeLspPath = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-lsp.mjs")
 
 const ctx = {
   cwd: mkdtempSync(join(tmpdir(), "lsp-actions-test-")),
@@ -333,14 +333,14 @@ describe("LSP Actions", () => {
       expect(p.error).toContain("Cannot infer language")
     })
 
-    it("should return install hint for unconfigured language", async () => {
+    it("should return install hint for language without server", async () => {
       const tool = createLspTool()
-      writeFileSync(join(ctx.cwd, "test.py"), "x = 42")
-      const r = await tool.execute({ action: "hover", file_path: "test.py" }, ctx)
+      writeFileSync(join(ctx.cwd, "test.rb"), "x = 42")
+      const r = await tool.execute({ action: "hover", file_path: "test.rb" }, ctx)
       expect(r.isError).toBe(true)
       const p = JSON.parse(r.content as string)
-      expect(p.message).toContain("No LSP server configured")
-      expect(p.installHint).toContain("pip install pyright")
+      expect(p.message).toContain("LSP server not found")
+      expect(p.installHint).toBeUndefined()
     })
   })
 })
