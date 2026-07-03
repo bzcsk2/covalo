@@ -160,7 +160,7 @@
 
 ---
 
-## 三、P1 阶段修复详情（本阶段进行中）
+## 三、P1 阶段修复详情（已完成，PR #18）
 
 > P1 阶段的核心是 **submit lifecycle envelope**（submit 外层生命周期信封）。
 > P1-B 是整个 P1 的核心项，P1-A / P1-C / P1-D 是围绕生命周期的具体修复点。
@@ -362,13 +362,41 @@
 
 **文件**：`packages/plugin/src/runtime.ts`、`packages/cli/src/tui.ts`、`packages/plugin/__tests__/runtime.test.ts`、`packages/plugin/__tests__/content-pack-runtime-integration.test.ts`
 
-### 4.6 后续阶段（P4+）规划
+### 4.6 P4 阶段修复详情（已完成，PR #21）
 
-以下项目推迟到后续阶段：
+#### F0-1: 接入 CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine（已修复）
 
-- **F0-1**: 接入 CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine — 需确定接入点、定义与 effectivePolicy 的关系、添加集成测试。G1 工具名对齐已为此铺路。
-- **G2**: recovery_pending 无法触发 forced。
-- **C1**: checkpoint-engine 未接入运行时。
+**问题**：三件套（BranchBudgetTracker / ModeDecisionEngine / CheckpointEngine）已实现但未接入 `engine.ts` / `loop.ts` 主路径，governance/checkpoint 在运行时完全失效。
+
+**修复**：
+- `engine.ts` submit 开始时 `loadV2` 恢复 BranchBudget 快照 + applySnapshot，跨 submit 持久化
+- `loop.ts` 解构 `effectivePolicy`，映射 `executionMode` 到 `HarnessMode`，用 `resolveInitialExecutionMode` 初始化
+- `evaluateExecutionMode()` 每轮收集 recovery_pending / checkpoint_resumed 信号并调用 `modeDecisionEngine.evaluate()`
+- BranchBudget 记录从 taskLedger 条件块中拆出，普通任务也计数
+- 工具批次前 BranchBudget 硬拦截（仅 enforce 模式），recover 模式只记录不阻断
+- batch 中任意 tool_call 被 block 时，所有 tool_call 都 append tool_result（避免 orphan）
+
+**审计反馈返工（两轮）**：
+- B1-B6: effectivePolicy 真正消费 / enforce 与 recover 分离 / BranchBudget 脱离 TaskLedger / checkpoint 恢复后不 reset / batch block 配对 / pending signal 消费
+- B6-2: free/forced 路径 signal lifecycle 闭合（engine.ts 仅 adaptive 提交 signal + loop.ts 非 auto 分支显式清理）
+
+**文件**：`packages/core/src/loop.ts`、`packages/core/src/engine.ts`、`packages/core/src/finish-reason.ts`（新增）、`packages/core/__tests__/f0-1-governance-integration.test.ts`、`packages/core/__tests__/f0-1-runtime-loop.test.ts`
+
+#### G2: recovery_pending 触发 forced（已修复）
+
+**问题**：`recovery_pending` 信号未加入 `MODE_SIGNAL_PRECEDENCE`，无法触发 `enter_forced`，BranchBudget 超限后无法进入 forced 模式。
+
+**修复**：`recovery_pending` 加入 `ENTER_SIGNAL_SET` 和 `MODE_SIGNAL_PRECEDENCE`，优先级低于 `verification_failure`。
+
+**文件**：`packages/core/src/governance/mode-decision.ts`、`packages/core/__tests__/mode-decision.test.ts`
+
+#### C1: checkpoint-engine 接入运行时（已修复）
+
+**问题**：`CheckpointEngine` 已实现但 `engine.ts` / `loop.ts` 未引用，checkpoint 永远不落盘。
+
+**修复**：与 F0-1 一同接入。`engine.ts` 构造时实例化 CheckpointEngine，submit 开始时 loadV2 恢复；`loop.ts` 在 safe point 调用 `checkpointEngine.save()`，forced policy 下额外保存 `step_completed` / `verification_started`。
+
+**文件**：`packages/core/src/engine.ts`、`packages/core/src/loop.ts`
 
 ---
 
