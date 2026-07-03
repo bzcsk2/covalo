@@ -294,17 +294,24 @@ export class WorkflowCoordinator {
       return false
     }
 
-    if (this.state.currentPhase === "waiting_user") {
-      return false
-    }
+    // WF-1: waiting_user 不在这里截断。
+    // runWorkflow() 主循环会进入 runWaitingUser() 分支，
+    // runWaitingUser() await questionService.ask() 阻塞等待 TUI
+    // 通过 replyWorkflowQuestion()/rejectWorkflowQuestion() 回复。
+    // 如果在 canContinue 提前返回 false，pending entry 永远不会创建。
 
-    // Phase G: continuation is goal-driven when goalStore is present
-    if (this.goalStore) {
+    // Phase G: continuation is goal-driven when goalStore is present.
+    // waiting_user 阶段不受 goal continuation 限制 —— 用户问题必须被回答。
+    if (this.goalStore && this.state.currentPhase !== "waiting_user") {
       if (!this.goalShouldContinue()) return false
     }
 
     if (this.state.currentPhase === "supervisor_analyse") {
       return this.state.iteration <= this.state.maxRounds
+    }
+    if (this.state.currentPhase === "waiting_user") {
+      // waiting_user 不受 maxRounds 限制，等待用户回复期间一直可继续
+      return true
     }
     return this.state.iteration < this.state.maxRounds
   }

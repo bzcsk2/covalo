@@ -600,9 +600,12 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         contextWindow: ctx.getContextWindow(),
         routingOverride: routingMode,
         // 传入上一轮 select_category 的结果，让 resolveToolRouting 进入 Stage 2
+        // （router 的 Stage 2 条件：selectedCategory 存在且 !awaitingCategorySelection）
         selectedCategory,
-        // 标记已选类别，避免重复进入 category_select 阶段
-        awaitingCategorySelection: selectedCategory !== undefined,
+        // 不设置 awaitingCategorySelection：
+        // - undefined / false：router 看到 selectedCategory 存在 → 进入 Stage 2（category_tools）
+        // - true：router 重新注入 select_category（用于重置后让模型重新选择）
+        // 这里我们已经有 selectedCategory，希望进入 Stage 2，所以保持 undefined。
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools
@@ -916,6 +919,14 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+
+            // TR-1: selectedCategory 是一次性状态。
+            // Stage 2 的一批真实工具调用执行完成后清空，让下一轮模型
+            // 需要工具时重新走 select_category 选择新类别（避免被锁定
+            // 在第一次选择的类别里无法切换 read→write→search→run）。
+            if (selectedCategory) {
+              selectedCategory = undefined
+            }
 
             // F0-1: safe point — 落盘 checkpoint（trigger: step_completed）
             // 在 forced 模式下才会真实落盘（由 forcedPolicyActive 控制）

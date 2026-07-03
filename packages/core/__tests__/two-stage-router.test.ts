@@ -34,8 +34,8 @@ const ALL_BUILTIN_TOOLS = [
   "edit",
   "grep",
   "bash",
-  "lsp",
-  "todo_write",
+  "LSP",
+  "todowrite",
 ].map(makeTool)
 
 describe("getRoutingMode", () => {
@@ -63,7 +63,8 @@ describe("inferToolCategory", () => {
   it("识别内置工具类别", () => {
     expect(inferToolCategory("read_file")).toBe("read")
     expect(inferToolCategory("bash")).toBe("run")
-    expect(inferToolCategory("lsp")).toBe("code_intel")
+    // TR-1: 工具名已修正为真实名 LSP（原 lsp 不再存在）
+    expect(inferToolCategory("LSP")).toBe("code_intel")
   })
 
   it("未知工具归入 full", () => {
@@ -219,6 +220,77 @@ describe("resolveToolRouting", () => {
     })
     expect(decision.mode).toBe("direct")
     expect(decision.tools.length).toBeGreaterThan(1)
+  })
+
+  it("TR-1: selectedCategory 存在且不设 awaitingCategorySelection → 进入 Stage 2 (category_tools)", () => {
+    // 审核反馈：原先 loop.ts 设置 awaitingCategorySelection=true 导致
+    // router 永远重新注入 select_category，进不了 Stage 2。
+    // 修正后 loop.ts 不设置 awaitingCategorySelection，router 应进入 Stage 2。
+    const decision = resolveToolRouting({
+      allTools: ALL_BUILTIN_TOOLS,
+      contextWindow: 8192,
+      toolset: "full",
+      routingOverride: "two_stage",
+      selectedCategory: "read",
+      // 故意不设置 awaitingCategorySelection（即 undefined）
+    })
+    expect(decision.mode).toBe("two_stage")
+    expect(decision.stage).toBe("category_tools")
+    // Stage 2 工具集不应包含 select_category
+    expect(decision.tools.some(t => t.function.name === "select_category")).toBe(false)
+    // 应包含 read 类工具
+    expect(decision.tools.some(t => t.function.name === "read_file")).toBe(true)
+  })
+
+  it("TR-1: selectedCategory 存在但 awaitingCategorySelection=true → 重新进入 category_select", () => {
+    // 验证 router 语义：awaitingCategorySelection=true 表示需要重新选择
+    const decision = resolveToolRouting({
+      allTools: ALL_BUILTIN_TOOLS,
+      contextWindow: 8192,
+      toolset: "full",
+      routingOverride: "two_stage",
+      selectedCategory: "read",
+      awaitingCategorySelection: true,
+    })
+    expect(decision.stage).toBe("category_select")
+    expect(decision.tools.some(t => t.function.name === "select_category")).toBe(true)
+  })
+})
+
+describe("TOOL_CATEGORIES 工具名一致性", () => {
+  it("TR-1: plan 类别包含真实工具名（todowrite/Question/PlanMode/AgentTool）", () => {
+    // 审核反馈：原 TOOL_CATEGORIES.plan 写的是 todo_write/ask_user_question/
+    // plan_mode/agent_tool，与真实工具名不一致，导致 two-stage 启用后
+    // 这些工具被过滤掉。
+    const planTools = TOOL_CATEGORIES.plan.tools
+    expect(planTools).toContain("todowrite")
+    expect(planTools).toContain("Question")
+    expect(planTools).toContain("PlanMode")
+    expect(planTools).toContain("AgentTool")
+    // 不应包含错误的旧名
+    expect(planTools).not.toContain("todo_write")
+    expect(planTools).not.toContain("ask_user_question")
+    expect(planTools).not.toContain("plan_mode")
+    expect(planTools).not.toContain("agent_tool")
+  })
+
+  it("TR-1: code_intel 类别使用 LSP（不是 lsp）", () => {
+    expect(TOOL_CATEGORIES.code_intel.tools).toContain("LSP")
+    expect(TOOL_CATEGORIES.code_intel.tools).not.toContain("lsp")
+  })
+
+  it("TR-1: run 类别使用 PascalCase 真实名（Monitor/Cron/Workflow/Worktree/PushNotification）", () => {
+    const runTools = TOOL_CATEGORIES.run.tools
+    expect(runTools).toContain("Monitor")
+    expect(runTools).toContain("Cron")
+    expect(runTools).toContain("Workflow")
+    expect(runTools).toContain("Worktree")
+    expect(runTools).toContain("PushNotification")
+    expect(runTools).not.toContain("monitor")
+    expect(runTools).not.toContain("cron")
+    expect(runTools).not.toContain("workflow")
+    expect(runTools).not.toContain("worktree")
+    expect(runTools).not.toContain("push_notification")
   })
 })
 
