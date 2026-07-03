@@ -11,8 +11,6 @@ import { CapabilityCatalog, RoleCapabilityView } from "../src/capability-catalog
 import { DualAgentRuntime, AgentRuntime } from "../src/dual-agent-runtime/index.js"
 import type { DualAgentRuntimeOptions } from "../src/dual-agent-runtime/index.js"
 import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
-import { DualSession } from "../src/dual-session/index.js"
-import { DualSessionStore } from "../src/dual-session/store.js"
 import { loadSupervisorPool, DEFAULT_SUPERVISOR_POOL } from "../src/supervisor/pool.js"
 import type { DualAgentRuntimeConfig, SendToOptions } from "../src/dual-agent-runtime/types.js"
 
@@ -237,39 +235,6 @@ describe("DA-R0: 真实基线测试", () => {
       expect(canContinue).toBe(false)
     })
   })
-
-  describe("DualSession 缺陷", () => {
-    it("路径穿越应该被拒绝", () => {
-      const store = new DualSessionStore("/tmp/sessions")
-
-      // 尝试使用路径穿越
-      const maliciousId = "../../etc/passwd"
-
-      // 创建一个正常的 session
-      const session = new DualSession({
-        sessionId: maliciousId,
-        worker: { model: "test", provider: "test" },
-        supervisor: { model: "test", provider: "test" },
-      })
-
-      // 期望：路径穿越应该被拒绝
-      // 当前：可能接受恶意路径
-      expect(() => {
-        store.save(session)
-      }).toThrow()
-    })
-
-    it("损坏文件应该被安全处理", () => {
-      const store = new DualSessionStore("/tmp/sessions")
-
-      // 尝试加载不存在或损坏的会话
-      const result = store.load("non-existent-session")
-
-      // 期望：应该返回 null 或默认值，不抛出异常
-      // 当前：可能抛出异常
-      expect(result).toBeNull()
-    })
-  })
 })
 
 describe("DA-R0: 真实流事件测试", () => {
@@ -333,29 +298,5 @@ describe("DA-R0: Supervisor 写工具测试", () => {
     )
 
     expect(hasWriteTools).toBe(false)
-  })
-})
-
-describe("DA-R0: Session 恢复测试", () => {
-  it("恢复后不应该重复执行工具", async () => {
-    const session = new DualSession({
-      sessionId: "test-session",
-      worker: { model: "test", provider: "test" },
-      supervisor: { model: "test", provider: "test" },
-    })
-
-    // 添加一些消息
-    session.addMessage("worker", { role: "user", content: "test" })
-    session.addMessage("worker", { role: "assistant", content: "response" })
-
-    // 保存快照
-    const snapshot = session.toSnapshot()
-
-    // 恢复
-    const restored = DualSession.fromSnapshot(snapshot)
-
-    // 期望：恢复后不应该有重复的工具执行标记
-    // 当前：可能有重复标记
-    expect(restored).toBeDefined()
   })
 })

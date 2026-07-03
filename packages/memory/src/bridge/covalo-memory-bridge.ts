@@ -44,6 +44,12 @@ export class DeepreefMemoryBridge {
     } catch { /* non-blocking */ }
   }
 
+  /**
+   * @experimental 未接入生产路径。
+   * 设计意图：在工具调用前注入 memory context，实现"工具调用前上下文增强"。
+   * 当前 HookManager 的 beforeToolCall 已有 hook 机制，未来可在此处接入。
+   * 详见 docs/unintegrated_code_audit_20260703.md §3.8（Phase 2.3 选项 A）。
+   */
   async onPreToolUse(sessionId: string, toolName: string, toolInput: unknown): Promise<string | undefined> {
     if (!this.config.autoObserve && !this.config.injectContext) return
     let context = ""
@@ -101,41 +107,9 @@ export class DeepreefMemoryBridge {
     } catch { /* non-blocking */ }
   }
 
-  async onPreCompact(sessionId: string): Promise<void> {
-    if (!this.config.autoObserve) return
-    try {
-      await this.memory.trigger("mem::observe", {
-        hookType: "pre_compact",
-        sessionId,
-        timestamp: new Date().toISOString(),
-        raw: JSON.stringify({ event: "pre_compact" }),
-      })
-    } catch { /* non-blocking */ }
-  }
-
-  async onSubagentStart(sessionId: string, subagentType: string, task: string): Promise<void> {
-    if (!this.config.autoObserve) return
-    try {
-      await this.memory.trigger("mem::observe", {
-        hookType: "subagent_start",
-        sessionId,
-        timestamp: new Date().toISOString(),
-        raw: JSON.stringify({ subagentType, task }),
-      })
-    } catch { /* non-blocking */ }
-  }
-
-  async onSubagentStop(sessionId: string, subagentType: string): Promise<void> {
-    if (!this.config.autoObserve) return
-    try {
-      await this.memory.trigger("mem::observe", {
-        hookType: "subagent_stop",
-        sessionId,
-        timestamp: new Date().toISOString(),
-        raw: JSON.stringify({ subagentType }),
-      })
-    } catch { /* non-blocking */ }
-  }
+  // Phase 2.3: onPreCompact / onSubagentStart / onSubagentStop 已删除
+  // （无未来设计意图，无任何调用方）。
+  // 详见 docs/unintegrated_code_audit_20260703.md §3.8。
 
   async onGenerationComplete(sessionId: string): Promise<void> {
     if (!this.config.autoObserve) return

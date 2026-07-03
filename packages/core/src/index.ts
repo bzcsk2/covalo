@@ -45,23 +45,7 @@ export type {
   WorkflowEvent,
   WorkflowCoordinatorOptions,
 } from "./workflow-coordinator/index.js"
-export { DEFAULT_WORKFLOW_CONFIG, SUPERVISOR_WORKFLOW_PROMPT } from "./workflow-coordinator/index.js"
-
-export {
-  DualSession,
-  DualSessionStore,
-} from "./dual-session/index.js"
-export type {
-  DualSessionConfig,
-  RoleSessionState,
-  DualSessionSnapshot,
-  AdviceHistoryEntry,
-  SessionCheckpoint,
-  DualSessionOptions,
-  DualSessionOptionsExtended,
-  SessionStoreOptions,
-} from "./dual-session/index.js"
-export { SESSION_VERSION } from "./dual-session/index.js"
+export { DEFAULT_WORKFLOW_CONFIG } from "./workflow-coordinator/index.js"
 
 export {
   ReasonixEngine,
@@ -168,7 +152,6 @@ export type {
 export {
   canonicalBudgetPath,
   mergeBudgetPathMap,
-  mergeBudgetPathSet,
 } from "./governance/branch-budget-path.js"
 export {
   extractToolTargetPath,
@@ -176,12 +159,9 @@ export {
   isFileWriteTool,
 } from "./governance/branch-budget-tool-path.js"
 export { isHarnessVerificationCommand } from "./governance/verification-command.js"
-export {
-  inferTaskIntent,
-  hasExecutableSideSignal,
-  shouldCreateLedgerByIntent,
-} from "./governance/task-state.js"
-export type { TaskIntent } from "./governance/task-state.js"
+// Phase 2.2: task-state.ts 标记为 experimental，不再公开 export。
+// 生产路径使用 task-ledger.ts 的 shouldCreateLedger。
+// 详见 docs/unintegrated_code_audit_20260703.md §3.6（选项 B）。
 export {
   buildVerificationDigest,
   buildVerificationSuccessSummary,
@@ -391,15 +371,9 @@ export {
 } from "./config/errors.js"
 
 export {
-  toWorkflowCoordinatorConfig,
-  toGoalRuntimeConfig,
-  getSupervisorToolPolicy,
-  getWorkerToolPolicy,
   isToolAllowed,
   isHardDeniedForSupervisorLoop,
   isHardDeniedForWorkerLoop,
-  getMailboxConfig,
-  getContextConfig,
 } from "./config/adapter.js"
 
 export type { ChatMessage, ToolCall, ToolSpec, Usage, Role } from "./types.js"
@@ -451,6 +425,11 @@ export type {
   QuestionServiceInterface,
 } from "./question/index.js"
 
+/**
+ * @deprecated PermissionService 模块未接入生产路径，将在下一版本移除。
+ * 生产权限决策走 @covalo/security 的 PermissionEngine。
+ * 详见 docs/unintegrated_code_audit_20260703.md §3.4（Phase 2.1 路径 B）。
+ */
 export {
   PermissionService,
   PermissionRejectedError,
@@ -461,6 +440,9 @@ export {
   getDisabledTools,
   createSessionRule,
 } from "./permission/index.js"
+/**
+ * @deprecated PermissionService 相关类型，随模块一同将在下一版本移除。
+ */
 export type {
   PermissionAction,
   PermissionMode,
@@ -511,7 +493,6 @@ export {
   parseSupervisorPoolConfig,
   mergeSupervisorPool,
   loadSupervisorPool,
-  getEnabledSupervisorCandidates,
   DEFAULT_SUPERVISOR_BUDGET,
   SupervisorBudgetTracker,
   scoreSupervisorCandidate,

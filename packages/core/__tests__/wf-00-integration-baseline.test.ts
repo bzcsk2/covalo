@@ -14,7 +14,6 @@ import { describe, it, expect, beforeEach } from "bun:test"
 import { ReasonixEngine } from "../src/engine.js"
 import { DualAgentRuntime } from "../src/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
-import { DualSession } from "../src/dual-session/index.js"
 import { validateAgentProfiles } from "../src/agent-profile/schema.js"
 
 describe("WF-00: 集成基线测试", () => {
@@ -70,13 +69,6 @@ describe("WF-00: 集成基线测试", () => {
       // 当前生产路径不创建 WorkflowCoordinator 实例
       expect(WorkflowCoordinator).toBeDefined()
       expect(typeof WorkflowCoordinator).toBe("function")
-    })
-
-    it("DualSession 应该是独立模块，未被 Engine 导入", () => {
-      // 验证 DualSession 是独立模块
-      // 当前生产路径不使用 DualSession
-      expect(DualSession).toBeDefined()
-      expect(typeof DualSession).toBe("function")
     })
   })
 

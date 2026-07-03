@@ -47,14 +47,5 @@ export function mergeBudgetPathMap(
   return merged
 }
 
-/** 合并 bypass 路径集合时同样规范化键（保留 API 供未来扩展）。 */
-export function mergeBudgetPathSet(
-  paths: Set<string>,
-  workspaceRoot: string,
-): Set<string> {
-  const merged = new Set<string>()
-  for (const raw of paths) {
-    merged.add(canonicalBudgetPath(workspaceRoot, raw) ?? raw.replace(/\\/g, "/"))
-  }
-  return merged
-}
+// Phase 2.2: mergeBudgetPathSet 已删除（无任何调用方）。
+// 详见 docs/unintegrated_code_audit_20260703.md §3.10b。

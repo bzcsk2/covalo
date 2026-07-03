@@ -4,10 +4,15 @@
  *
  * Handles permission inheritance from parent to child agents,
  * and the bubble mechanism for requesting parent approval.
+ *
+ * Phase 2.2: deriveSubagentPermissions 和 createBubbleRequest 已删除
+ * （bubble 协议未实装，无任何调用方）。
+ * 详见 docs/unintegrated_code_audit_20260703.md §3.10e。
+ * 保留：getToolTier / SubagentPermissionCheck / checkSubagentPermission
+ * （被 subagent runtime 使用）。
  */
 
 import type { SubagentPermissionMode } from "./types.js"
-import type { PermissionRule, PermissionRequest } from "../permission/types.js"
 
 /* ── Tool Tier Classification ── */
 
@@ -69,115 +74,5 @@ export function checkSubagentPermission(
 
     default:
       return { allowed: false, reason: `Unknown permission mode: ${permissionMode}` }
-  }
-}
-
-/* ── Permission Inheritance ── */
-
-/**
- * Derive subagent permissions from parent permissions.
- * Adapted from OpenCode's deriveSubagentSessionPermission.
- *
- * Rules:
- * 1. Forward parent's deny rules (e.g., Plan Mode restrictions)
- * 2. Forward parent's external_directory rules
- * 3. Forward all deny rules from parent session
- * 4. Add default todowrite deny if not already permitted
- * 5. Add default task deny if not already permitted
- */
-export function deriveSubagentPermissions(input: {
-  parentRules: PermissionRule[]
-  parentAgent: string
-  subagentName: string
-  subagentPermissionMode: SubagentPermissionMode
-}): PermissionRule[] {
-  const rules: PermissionRule[] = []
-
-  // Forward parent's deny rules
-  for (const rule of input.parentRules) {
-    if (rule.action === "deny") {
-      rules.push({
-        ...rule,
-        source: "agent",
-      })
-    }
-  }
-
-  // Forward external_directory rules from parent
-  for (const rule of input.parentRules) {
-    if (rule.permission === "external_directory") {
-      rules.push({
-        ...rule,
-        source: "agent",
-      })
-    }
-  }
-
-  // Add default deny rules based on subagent mode
-  if (input.subagentPermissionMode === "readonly") {
-    // Deny write and exec
-    rules.push(
-      { permission: "write_file", pattern: "*", action: "deny", source: "agent" },
-      { permission: "edit", pattern: "*", action: "deny", source: "agent" },
-      { permission: "bash", pattern: "*", action: "deny", source: "agent" },
-    )
-  } else if (input.subagentPermissionMode === "denyExec") {
-    // Deny exec only
-    rules.push(
-      { permission: "bash", pattern: "*", action: "deny", source: "agent" },
-    )
-  }
-
-  // Add default todowrite deny if not already permitted
-  const hasTodowritePermit = input.parentRules.some(
-    r => r.permission === "todowrite" && r.action === "allow"
-  )
-  if (!hasTodowritePermit) {
-    rules.push({
-      permission: "todowrite",
-      pattern: "*",
-      action: "deny",
-      source: "agent",
-    })
-  }
-
-  // Add default task deny if not already permitted
-  const hasTaskPermit = input.parentRules.some(
-    r => r.permission === "task" && r.action === "allow"
-  )
-  if (!hasTaskPermit) {
-    rules.push({
-      permission: "task",
-      pattern: "*",
-      action: "deny",
-      source: "agent",
-    })
-  }
-
-  return rules
-}
-
-/* ── Bubble Request ── */
-
-/**
- * Create a permission request for bubble to parent.
- */
-export function createBubbleRequest(input: {
-  sessionId: string
-  toolName: string
-  toolCallId: string
-  patterns: string[]
-  metadata: Record<string, unknown>
-  parentSessionId: string
-}): PermissionRequest {
-  return {
-    id: `bubble_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    sessionId: input.sessionId,
-    permission: input.toolName,
-    patterns: input.patterns,
-    always: [],
-    metadata: input.metadata,
-    tool: { toolCallId: input.toolCallId, toolName: input.toolName },
-    parentSessionId: input.parentSessionId,
   }
 }

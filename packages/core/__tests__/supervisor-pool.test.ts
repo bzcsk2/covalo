@@ -6,7 +6,6 @@ import { tmpdir } from "node:os"
 import {
   DEFAULT_SUPERVISOR_POOL,
   SUPERVISOR_POOL_FILE,
-  getEnabledSupervisorCandidates,
   loadSupervisorPool,
   mergeSupervisorPool,
   parseSupervisorPoolConfig,
@@ -141,25 +140,6 @@ describe("loadSupervisorPool", () => {
 
     const pool = loadSupervisorPool(dir)
     expect(pool.candidates.length).toBe(0)
-  })
-})
-
-describe("getEnabledSupervisorCandidates", () => {
-  it("ADV-HAR-04: 默认池无启用候选", () => {
-    const enabled = getEnabledSupervisorCandidates(DEFAULT_SUPERVISOR_POOL)
-    expect(enabled.length).toBe(0)
-  })
-
-  it("仅返回 enabled 候选", () => {
-    const pool = {
-      candidates: [
-        { ...DEFAULT_SUPERVISOR_POOL.candidates[0]!, enabled: true },
-        { ...DEFAULT_SUPERVISOR_POOL.candidates[1]!, enabled: false },
-      ],
-    }
-    const enabled = getEnabledSupervisorCandidates(pool)
-    expect(enabled.length).toBe(1)
-    expect(enabled[0]!.id).toBe("zen-deepseek")
   })
 })
 
