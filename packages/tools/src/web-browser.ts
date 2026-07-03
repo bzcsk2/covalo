@@ -58,10 +58,10 @@ export function createWebBrowserTool(): AgentTool {
             return { content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: finalUrl }), isError: true }
           }
 
-          const text = await resp.text()
-          const contentType = resp.headers.get("content-type") ?? ""
-          const isHtml = contentType.includes("text/html")
-          const content = isHtml ? htmlToText(text) : text
+            const text = await resp.text()
+            const contentType = resp.headers.get("content-type") ?? ""
+            const isHtml = contentType.includes("text/html")
+            const content = isHtml ? htmlToText(text) : text
 
           return { content: safeStringify({ content, code: resp.status, url: finalUrl }), isError: false }
           } finally {
