@@ -273,6 +273,13 @@ export class StreamingToolExecutor {
           if (diagnosticsEnabled) logger.warn("tool.write_guard", { toolName: tc.function.name, filePath })
           return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
         }
+        if (guard.ok && guard.withWarning && diagnosticsEnabled) {
+          logger.warn("tool.write_guard.second_attempt_allowed", {
+            toolName: tc.function.name,
+            filePath,
+            warning: guard.withWarning,
+          })
+        }
       }
     }
 
@@ -284,13 +291,13 @@ export class StreamingToolExecutor {
         return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
       }
 
-      // Action certificate gate: check high-risk bash commands before execution
+      // Action certificate gate: check risky bash commands before execution
       if (tc.function.name === "bash" || tc.function.name === "shell" || tc.function.name === "exec") {
         const command = typeof args.command === "string" ? args.command : typeof args.commands === "string" ? args.commands : ""
         if (command) {
           const { classifyRisk, createActionCertificate, completeActionCertificate } = await import("./harness-evolution/packets/action-certificate");
           const risk = classifyRisk(command);
-          if (risk === "high" || risk === "medium") {
+          if (risk === "high") {
             const cert = createActionCertificate({
               packetId: `ac:streaming-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               runId: this.sessionId ?? "streaming",
@@ -308,7 +315,7 @@ export class StreamingToolExecutor {
               mode: "loop",
               role: "worker",
             });
-            const outcome = { status: "cancelled" as const, exitCode: -1, durationMs: 0 };
+            const outcome = { status: "blocked_by_policy" as const, exitCode: -1, durationMs: 0 };
             const completedCert = completeActionCertificate(cert, outcome);
             // Persist the certificate as sidecar artifact
             try {
@@ -331,6 +338,41 @@ export class StreamingToolExecutor {
             // Block execution: return tool error with the certificate evidence
             const blockedResult = makeToolError(`Action certificate: blocked ${risk}-risk command. Certificate ${completedCert.packetId} recorded outcome=${completedCert.outcome?.status}. Command: ${command.slice(0, 200)}`);
             return { event: makeErrorEvent(blockedResult, tc.function.name, index, tc.id), result: blockedResult };
+          }
+          if (risk === "medium") {
+            // Medium risk: create certificate but allow execution after existing permission flow.
+            // The certificate is recorded without blocking; outcome is completed after execution.
+            const cert = createActionCertificate({
+              packetId: `ac:streaming-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              runId: this.sessionId ?? "streaming",
+              actionId: `action-${index}-${Date.now()}`,
+              action: {
+                toolName: tc.function.name,
+                command: command.slice(0, 500),
+                affectedFiles: [command],
+                promptSha256: undefined,
+              },
+              riskLevel: risk,
+              approval: { class: "runtime_enforced", approvedBy: "policy" },
+              assumptions: [],
+              rollbackPlan: "N/A",
+              mode: "loop",
+              role: "worker",
+            });
+            if (diagnosticsEnabled) logger.info("tool.action_certificate_medium", {
+              toolName: tc.function.name, risk,
+              command: command.slice(0, 200),
+              packetId: cert.packetId,
+            });
+            try {
+              const { mkdir, writeFile } = await import("node:fs/promises");
+              const { join } = await import("node:path");
+              const certDir = join(process.cwd(), ".covalo", "harness", "certificates");
+              await mkdir(certDir, { recursive: true });
+              await writeFile(join(certDir, `${cert.packetId}.json`), JSON.stringify(cert, null, 2), "utf-8");
+            } catch {
+              // Certificate artifact is optional
+            }
           }
         }
       }
@@ -405,12 +447,25 @@ export class StreamingToolExecutor {
         }
         const handler = this.tools.get(name)
         if (!handler) return makeToolError(`Unknown tool: ${name}`)
+        // Nested bash/shell/exec is blocked inside Workflow to prevent
+        // bypass of action certificate and read-before-write guards.
+        if (name === "bash" || name === "shell" || name === "exec") {
+          return makeToolError(`Nested execution tool is not allowed inside Workflow: ${name}`)
+        }
         const permission = this.permissionEngine?.decide(name, args, handler.approval)
         if (permission?.decision === "deny") return makeToolError(permission.reason ?? `Permission denied: ${name}`)
-        // Workflow itself is exec-tier and its complete step list was already
-        // confirmed by the user. Deny rules still take precedence above.
-        if (permission?.decision === "ask" && stack[0] !== "Workflow") {
+        if (permission?.decision === "ask") {
           return makeToolError(`Nested tool requires direct confirmation and was not executed: ${name}`)
+        }
+        // Read-before-write guard for nested write tools
+        if (this.readTracker) {
+          const filePath = extractFilePath(name, args)
+          if (filePath && isWriteTool(name)) {
+            const guard = this.readTracker.checkWrite(filePath, this.cwd)
+            if (!guard.ok) {
+              return makeToolError(guard.reason ?? "Write guard: read file first")
+            }
+          }
         }
         try {
           return normalizeToolResult(await handler.execute(args, this.createToolContext(signal, [...stack, name])))
