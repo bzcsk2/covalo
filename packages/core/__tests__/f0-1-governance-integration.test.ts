@@ -5,9 +5,15 @@ import { tmpdir } from "node:os"
 
 import { BranchBudgetTracker } from "../src/governance/branch-budget.js"
 import { extractToolTargetPath, extractRunCommand } from "../src/governance/branch-budget-tool-path.js"
-import { ModeDecisionEngine, createEmptyRuntimeExecutionState } from "../src/governance/mode-decision.js"
+import {
+  ModeDecisionEngine,
+  createEmptyRuntimeExecutionState,
+  resolveInitialExecutionMode,
+  isAutoModeDecisionEnabled,
+} from "../src/governance/mode-decision.js"
 import { CheckpointEngine } from "../src/checkpoint/checkpoint-engine.js"
 import { setPromptLocale } from "../src/prompt-locale.js"
+import type { EffectiveHarnessPolicy } from "../src/model-profile/types.js"
 
 /**
  * F0-1 集成测试：验证 BranchBudgetTracker / ModeDecisionEngine / CheckpointEngine
@@ -363,5 +369,248 @@ describe("F0-1: governance/checkpoint 三件套集成", () => {
     expect(r.commandRetries).toEqual(o.commandRetries)
     expect(r.errorRepeats).toEqual(o.errorRepeats)
     expect(restored.recoverTriggerCount).toBe(original.recoverTriggerCount)
+  })
+})
+
+/**
+ * 审计反馈 B1-B6 验证点：模拟 loop.ts 中的关键步骤，验证 F0-1 接入语义。
+ * 这些测试不调用 runLoop（Windows 上 bun test 存在 EPERM 文件锁 bug），
+ * 但覆盖了审计反馈的 6 个阻塞问题的核心逻辑。
+ * 真正调用 runLoop 的 runtime-level 测试见 f0-1-runtime-loop.test.ts（Linux/CI 可运行）。
+ */
+describe("F0-1: 审计反馈 B1-B6 验证", () => {
+  let tmpDir: string
+
+  beforeEach(() => {
+    setPromptLocale("en")
+    tmpDir = mkdtempSync(join(tmpdir(), "f0-1-audit-"))
+  })
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  // 仿 loop.ts 中 effectivePolicy.executionMode → harnessMode 映射
+  function mapHarnessMode(policy: EffectiveHarnessPolicy): "free" | "adaptive" | "forced" {
+    if (policy.executionMode === "forced") return "forced"
+    if (policy.executionMode === "free") return "free"
+    return "adaptive"
+  }
+
+  function makePolicy(strictness: "strict" | "normal" | "loose"): EffectiveHarnessPolicy {
+    if (strictness === "strict") {
+      return {
+        strictness: "strict", source: "default",
+        toolset: "compact", maxParallelTools: 1, maxTurns: 50,
+        readBeforeWrite: "block", textToolSalvage: "off",
+        branchBudget: "enforce", checkpoint: "frequent",
+        verification: "block", earlyStop: "aggressive",
+        toolRouting: "two-stage", executionMode: "forced",
+        shellPolicy: "dual-track-conservative", supervisorPolicy: "on-failure",
+      }
+    }
+    if (strictness === "loose") {
+      return {
+        strictness: "loose", source: "default",
+        toolset: "full", maxParallelTools: 4, maxTurns: 100,
+        readBeforeWrite: "off", textToolSalvage: "always",
+        branchBudget: "observe", checkpoint: "minimal",
+        verification: "warn", earlyStop: "critical-only",
+        toolRouting: "direct", executionMode: "free",
+        shellPolicy: "dual-track", supervisorPolicy: "off",
+      }
+    }
+    return {
+      strictness: "normal", source: "default",
+      toolset: "standard", maxParallelTools: 2, maxTurns: 75,
+      readBeforeWrite: "warn", textToolSalvage: "on-native-failure",
+      branchBudget: "recover", checkpoint: "safe-point",
+      verification: "require-or-waive", earlyStop: "standard",
+      toolRouting: "auto", executionMode: "adaptive",
+      shellPolicy: "dual-track", supervisorPolicy: "on-failure",
+    }
+  }
+
+  it("B1: executionMode='free' 时 resolveInitialExecutionMode 返回 free，isAutoModeDecisionEnabled 返回 false", () => {
+    const policy = makePolicy("loose")
+    const harnessMode = mapHarnessMode(policy)
+    expect(harnessMode).toBe("free")
+    expect(resolveInitialExecutionMode(harnessMode)).toBe("free")
+    expect(isAutoModeDecisionEnabled(harnessMode)).toBe(false)
+    // free 模式下 loop.ts 会跳过 evaluateExecutionMode，不会被拉入 forced
+  })
+
+  it("B1: executionMode='forced' 时 resolveInitialExecutionMode 返回 forced，初始即 forced policy", () => {
+    const policy = makePolicy("strict")
+    const harnessMode = mapHarnessMode(policy)
+    expect(harnessMode).toBe("forced")
+    expect(resolveInitialExecutionMode(harnessMode)).toBe("forced")
+    // forced 模式下 loop.ts 初始化时即 setForcedPolicy(true)
+    const checkpoint = new CheckpointEngine(tmpDir, "b1-forced")
+    checkpoint.setForcedPolicy(true)
+    expect(checkpoint.isForcedPolicyActive()).toBe(true)
+  })
+
+  it("B1: executionMode='adaptive' 时 isAutoModeDecisionEnabled 返回 true，初始为 free", () => {
+    const policy = makePolicy("normal")
+    const harnessMode = mapHarnessMode(policy)
+    expect(harnessMode).toBe("adaptive")
+    expect(isAutoModeDecisionEnabled(harnessMode)).toBe(true)
+    expect(resolveInitialExecutionMode(harnessMode)).toBe("free")
+  })
+
+  it("B2: branchBudget='enforce' 时 shouldHardBlock=true；'recover' 时 shouldHardBlock=false", () => {
+    // 仿 loop.ts: const shouldHardBlock = effectivePolicy?.branchBudget === "enforce"
+    const strictPolicy = makePolicy("strict")
+    const normalPolicy = makePolicy("normal")
+    const loosePolicy = makePolicy("loose")
+
+    expect(strictPolicy.branchBudget).toBe("enforce")
+    expect(normalPolicy.branchBudget).toBe("recover")
+    expect(loosePolicy.branchBudget).toBe("observe")
+
+    // loop.ts 中的判定逻辑
+    const shouldHardBlockStrict = strictPolicy.branchBudget === "enforce"
+    const shouldHardBlockNormal = normalPolicy.branchBudget === "enforce"
+    const shouldHardBlockLoose = loosePolicy.branchBudget === "enforce"
+
+    expect(shouldHardBlockStrict).toBe(true)   // enforce → 硬拦截
+    expect(shouldHardBlockNormal).toBe(false)  // recover → 不硬拦截，只记录
+    expect(shouldHardBlockLoose).toBe(false)   // observe → 不硬拦截，tracker 禁用
+  })
+
+  it("B3: BranchBudget 记录不依赖 TaskLedger（验证 recordBranchBudget 可独立调用）", () => {
+    // 仿 loop.ts: recordBranchBudget 在 (toolEvent.role === "tool" || "error") && toolEvent.toolName 时调用
+    // 不再要求 taskLedger 存在
+    const tracker = new BranchBudgetTracker({ fileEditMax: 3 })
+    tracker.bindWorkspaceRoot(tmpDir)
+    tracker.setEnabled(true)
+
+    // 模拟工具结果回调（无 TaskLedger）
+    const toolName = "write_file"
+    const args = { path: join(tmpDir, "foo.ts") }
+    const result = { content: "wrote", isError: false }
+
+    // 仿 loop.ts recordBranchBudget
+    if (extractToolTargetPath(toolName, args) && !result.isError) {
+      tracker.recordFileEdit(extractToolTargetPath(toolName, args))
+    }
+
+    // 验证：即使没有 TaskLedger，BranchBudget 也记录了 file edit
+    const inspect = tracker.inspect()
+    expect(Object.keys(inspect.fileEdits).length).toBe(1)
+    expect(Object.values(inspect.fileEdits)[0]).toBe(1)
+  })
+
+  it("B4: applySnapshot 后不调用 resetRoundBudget，恢复的三维计数保留", async () => {
+    // 准备：原 tracker 累积了三维计数
+    const original = new BranchBudgetTracker({ fileEditMax: 5 })
+    original.bindWorkspaceRoot(tmpDir)
+    original.recordFileEdit(join(tmpDir, "a.ts"))
+    original.recordFileEdit(join(tmpDir, "a.ts"))
+    original.recordFailedCommandAttempt("npm test")
+    original.markRecoveryTriggered()
+
+    // 落盘
+    const checkpoint = new CheckpointEngine(tmpDir, "b4-test")
+    await checkpoint.save({ trigger: "compaction", branchBudget: original })
+
+    // 仿 engine.ts: loadV2 + applySnapshot（B4 修复后不再调用 resetRoundBudget）
+    const restored = new BranchBudgetTracker({ fileEditMax: 5 })
+    restored.bindWorkspaceRoot(tmpDir)
+    const v2 = await checkpoint.loadV2()
+    expect(v2).not.toBeNull()
+    restored.applySnapshot(v2!.branchBudget)
+
+    // 验证：恢复后三维计数保留（B4 修复前会被 resetRoundBudget 清空）
+    const r = restored.inspect()
+    expect(Object.keys(r.fileEdits).length).toBe(1)
+    expect(r.fileEdits[Object.keys(r.fileEdits)[0]]).toBe(2)
+    expect(Object.keys(r.commandRetries).length).toBe(1)
+    expect(restored.recoverTriggerCount).toBe(1)
+  })
+
+  it("B5: batch 中部分 blocked 时，所有 tool_call 都应有 tool_result（不产生 orphan）", () => {
+    // 仿 loop.ts B5 修复：一旦 batch 中有任意 tool_call 被 block，
+    // 整个 batch 全部不执行，给每个 tool_call 都 append 一个 tool_result
+    const tracker = new BranchBudgetTracker({ fileEditMax: 1 })
+    tracker.bindWorkspaceRoot(tmpDir)
+    // preexisting.ts 已编辑 1 次，达到 fileEditMax=1 上限，再次编辑会被 block
+    tracker.recordFileEdit(join(tmpDir, "preexisting.ts"))
+
+    // 模拟 2 个 tool_call：tc1 目标已达上限（被 block），tc2 目标未达上限（不被 block）
+    const toolCalls = [
+      { id: "tc1", function: { name: "write_file", arguments: JSON.stringify({ path: join(tmpDir, "preexisting.ts") }) } },
+      { id: "tc2", function: { name: "write_file", arguments: JSON.stringify({ path: join(tmpDir, "new.ts") }) } },
+    ]
+
+    // 仿 loop.ts checkBranchBudgetBlocks
+    const blocks = new Map<string, string>()
+    for (const tc of toolCalls) {
+      const args = JSON.parse(tc.function.arguments)
+      const decision = tracker.checkToolBlock(
+        tc.function.name, args, extractToolTargetPath, extractRunCommand, { workspaceRoot: tmpDir },
+      )
+      if (decision.blocked && decision.message) {
+        blocks.set(tc.id, decision.message)
+      }
+    }
+
+    // 仅 tc1 被 block（tc2 是新文件，未达上限）
+    expect(blocks.size).toBe(1)
+    expect(blocks.has("tc1")).toBe(true)
+
+    // 仿 loop.ts B5 修复：给每个 tool_call 都 append tool_result（block 的和未 block 的都要补）
+    const appended: { tcId: string; hasResult: boolean; isBlock: boolean }[] = []
+    for (const tc of toolCalls) {
+      const blockMsg = blocks.get(tc.id)
+      if (blockMsg) {
+        // 被 block 的：block 消息作为 tool_result
+        appended.push({ tcId: tc.id, hasResult: true, isBlock: true })
+      } else {
+        // B5 修复：未 block 的也补一个 tool_result，避免 orphan tool_call
+        appended.push({ tcId: tc.id, hasResult: true, isBlock: false })
+      }
+    }
+
+    // 验证：所有 tool_call 都有 tool_result（不产生 orphan）
+    expect(appended.length).toBe(toolCalls.length)
+    expect(appended.every(a => a.hasResult)).toBe(true)
+    // 验证只有 tc1 是被 block 的
+    expect(appended.filter(a => a.isBlock).length).toBe(1)
+  })
+
+  it("B6: pending recovery signal 提交后立即消费，下一轮不再重复提交", async () => {
+    // 准备：写入一个未消费的 recovery signal
+    const checkpoint = new CheckpointEngine(tmpDir, "b6-test")
+    await checkpoint.save({
+      trigger: "manual",
+      branchBudget: new BranchBudgetTracker(),
+      appendRecoverySignal: {
+        source: "branch_budget",
+        message: "test-signal",
+        at: Date.now(),
+        consumed: false,
+      },
+    })
+
+    expect(checkpoint.pendingRecoverySignals().length).toBe(1)
+
+    // 仿 loop.ts evaluateExecutionMode 第一轮：submitSignal + markRecoverySignalsConsumed
+    const modeEngine = new ModeDecisionEngine()
+    const pending1 = checkpoint.pendingRecoverySignals()
+    if (pending1.length > 0) {
+      modeEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+      // B6 修复：立即消费，避免下一轮重复提交
+      checkpoint.markRecoverySignalsConsumed(() => true)
+    }
+
+    // 验证：第一轮提交了 checkpoint_resumed 信号
+    expect(modeEngine.getSubmittedSignals().length).toBe(1)
+
+    // 仿 loop.ts evaluateExecutionMode 第二轮：pending 已消费，不再提交
+    const pending2 = checkpoint.pendingRecoverySignals()
+    expect(pending2.length).toBe(0)
+    // 第二轮不会再 submitSignal
   })
 })

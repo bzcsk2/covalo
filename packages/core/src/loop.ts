@@ -42,9 +42,12 @@ import type { CheckpointSaveTrigger } from "./checkpoint/runtime-checkpoint.js"
 import {
   ModeDecisionEngine,
   createEmptyRuntimeExecutionState,
+  resolveInitialExecutionMode,
+  isAutoModeDecisionEnabled,
   type ExecutionMode,
   type ModeDecision,
 } from "./governance/mode-decision.js"
+import type { HarnessMode } from "./model-profile/types.js"
 
 export interface PendingInstruction {
   content: string
@@ -125,6 +128,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     checkpointEngine,
     modeDecisionEngine,
     workspaceRoot,
+    /** F0-1: 有效策略（executionMode / branchBudget / checkpoint 三字段被运行时消费） */
+    effectivePolicy,
   } = opts
   const diagnosticsEnabled = logger.isEnabled("error")
 
@@ -173,14 +178,29 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   let totalToolCalls = 0
 
   // F0-1: governance/checkpoint 运行时状态
-  // 当前 executionMode（free/forced），由 ModeDecisionEngine 每轮刷新
-  let currentExecutionMode: ExecutionMode = "free"
+  // 从 effectivePolicy.executionMode 映射到 HarnessMode（free/adaptive/forced/strict）
+  const harnessMode: HarnessMode = effectivePolicy?.executionMode === "forced"
+    ? "forced"
+    : effectivePolicy?.executionMode === "free"
+      ? "free"
+      : "adaptive"
+  // 是否启用自动 mode 决策（free 模式下完全跳过 evaluate）
+  const autoModeDecisionEnabled = isAutoModeDecisionEnabled(harnessMode)
+  // 当前 executionMode（free/forced），由 ModeDecisionEngine 每轮刷新；
+  // forced/strict 直接从 forced 开始；free/adaptive 从 free 开始
+  let currentExecutionMode: ExecutionMode = resolveInitialExecutionMode(harnessMode)
   // mode lock 倒计时（enter_forced 时设为 lockRounds，每轮递减）
   let executionModeLockRemaining = 0
+  // 是否在 submit 开始时已经从 checkpoint 恢复过（避免重复 loadV2）
+  // engine.ts 在 submit 入口已经做过一次 loadV2 + applySnapshot，loop 不应再做
   // 运行时执行状态快照（喂给 ModeDecisionEngine.evaluate）
   const runtimeState = createEmptyRuntimeExecutionState()
   if (workspaceRoot) {
     branchBudgetTracker?.bindWorkspaceRoot(workspaceRoot)
+  }
+  // F0-1: enforced 模式下初始化时即开启 forced policy
+  if (currentExecutionMode === "forced") {
+    checkpointEngine?.setForcedPolicy(true)
   }
 
   /**
@@ -218,6 +238,9 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
    */
   const evaluateExecutionMode = (): ModeDecision | null => {
     if (!modeDecisionEngine) return null
+    // F0-1/B1: free 模式（executionMode: "free"）下完全跳过自动 mode 决策，
+    // 不会被 runtime 信号拉入 forced；forced/strict 已经在初始化时进入 forced。
+    if (!autoModeDecisionEnabled) return null
 
     // 收集 recovery_pending 信号
     if (branchBudgetTracker) {
@@ -231,11 +254,14 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       }
     }
 
-    // 收集 checkpoint 恢复信号
+    // 收集 checkpoint 恢复信号并消费（B6：避免每轮重复提交）
     if (checkpointEngine) {
       const pending = checkpointEngine.pendingRecoverySignals()
       if (pending.length > 0) {
         modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+        // 标记为已消费：本批 pending signal 已转化为 checkpoint_resumed 信号提交给 ModeDecisionEngine，
+        // 后续轮次不再重复提交；signal 本身仍保留在 v2State.recoverySignals 中以便审计。
+        checkpointEngine.markRecoverySignalsConsumed(() => true)
       }
     }
 
@@ -243,14 +269,17 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     runtimeState.round = turnCount
     runtimeState.recoveryPending = branchBudgetTracker?.shouldBranchRecover().triggered ?? false
     runtimeState.verificationPending = taskLedger?.verificationPending ?? false
-    runtimeState.lastToolSuccess = runtimeState.lastToolSuccess // 保留前一轮设置
+    // runtimeState.lastToolSuccess 由 recordBranchBudget 同步，这里保留前一轮设置
 
     const modeDecision = modeDecisionEngine.evaluate({
       round: turnCount,
       executionMode: currentExecutionMode,
       executionModeLockRemaining,
-      harnessMode: "adaptive", // 默认 adaptive；engine.ts 会根据 effectivePolicy 覆盖
-      riskLevel: "L1_minor_edit", // 默认；engine.ts 可覆盖
+      // F0-1/B1: 使用真实 harnessMode（来自 effectivePolicy.executionMode），不再硬编码
+      harnessMode,
+      // F0-1/B1: riskLevel 仍保持 L1_minor_edit 作为 runtime 默认值；
+      // 真正的 task 风险分级由 task-graph executor 提供，本 loop 不参与
+      riskLevel: "L1_minor_edit",
       state: runtimeState,
       signals: [],
     })
@@ -703,10 +732,16 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               return
             }
 
-            // F0-1: 工具批次执行前做 BranchBudget 硬拦截。
-            // 被拦截的 toolCall 直接返回拦截消息作为 tool_result，不执行工具。
-            const branchBudgetBlocks = checkBranchBudgetBlocks(toolCalls)
+            // F0-1/B2: 工具批次执行前做 BranchBudget 硬拦截。
+            // 仅当 effectivePolicy.branchBudget === "enforce" 时才硬拦截；
+            // "recover" 模式只记录、触发 recovery_pending，不阻断工具执行。
+            const shouldHardBlock = effectivePolicy?.branchBudget === "enforce"
+            const branchBudgetBlocks = shouldHardBlock ? checkBranchBudgetBlocks(toolCalls) : new Map<string, string>()
             if (branchBudgetBlocks.size > 0) {
+              // F0-1/B5: 一旦 batch 中有任意 tool_call 被 BranchBudget 拦截，
+              // 整个 batch 全部不执行，并给每个 tool_call 都 append 一个 tool_result，
+              // 避免产生 orphan tool_call 破坏 provider 协议（assistant.tool_calls 与
+              // tool_result 必须一一配对）。
               for (const tc of toolCalls) {
                 const blockMsg = branchBudgetBlocks.get(tc.id)
                 if (blockMsg) {
@@ -718,6 +753,10 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                     metadata: { reason: "branch_budget_blocked", toolName: tc.function.name, toolCallId: tc.id },
                   }
                   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "error", content: blockMsg, metadata: { reason: "branch_budget_blocked", toolName: tc.function.name } } })
+                } else {
+                  // 未被拦截的 tool_call 也补一个 tool_result，避免 orphan tool_call
+                  const skipMsg = "Skipped: BranchBudget blocked another tool in this batch; please retry in the next turn."
+                  appendToolResult(tc, { content: skipMsg, isError: true, metadata: { reason: "branch_budget_batch_skipped" } })
                 }
               }
               // 跳过本轮工具执行，直接进入下一轮让模型看到拦截消息
@@ -734,24 +773,29 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                 if (toolEvent.role !== 'tool_progress') {
                   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
                 }
-                // DRF-40: 记录工具结果到 TaskLedger
-                if (taskLedger && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
+                // F0-1/B3: BranchBudget 记录不依赖 TaskLedger — 普通任务（无 ledger）
+                // 也需要累加 file edit / command retry / error 计数，否则 shouldBranchRecover()
+                // 永远没有数据来源，governance 在普通任务中失效。
+                if ((toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
                   const tc = findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex)
                   if (tc) {
                     const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
                     if (argsResult.ok) {
                       const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
-                      recordLedgerTool(toolEvent.toolName, argsResult.args, {
-                        isError: isErr,
-                        content: toolEvent.content ?? "",
-                        metadata: toolEvent.metadata,
-                      })
                       // F0-1: 同步累加 BranchBudget 计数（file edit / command retry / error）
                       recordBranchBudget(toolEvent.toolName, argsResult.args, {
                         isError: isErr,
                         content: toolEvent.content ?? "",
                         metadata: toolEvent.metadata,
                       })
+                      // DRF-40: 记录工具结果到 TaskLedger（仅在 ledger 存在时）
+                      if (taskLedger) {
+                        recordLedgerTool(toolEvent.toolName, argsResult.args, {
+                          isError: isErr,
+                          content: toolEvent.content ?? "",
+                          metadata: toolEvent.metadata,
+                        })
+                      }
                       if (supervisorGuidance) {
                         recordSupervisorToolEvidence(
                           supervisorGuidance.state,

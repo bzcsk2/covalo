@@ -196,8 +196,6 @@ export class ReasonixEngine implements CoreEngine {
   private branchBudgetTracker: BranchBudgetTracker = new BranchBudgetTracker()
   private checkpointEngine: CheckpointEngine
   private modeDecisionEngine: ModeDecisionEngine = new ModeDecisionEngine()
-  /** F0-1: checkpoint 是否已恢复本 submit */
-  private checkpointResumedThisSubmit = false
 
   /** Get context window size */
   getContextWindow(): number {
@@ -381,7 +379,6 @@ export class ReasonixEngine implements CoreEngine {
     this.checkpointEngine = new CheckpointEngine(sessionDir, sessionId)
     this.branchBudgetTracker.reset()
     this.modeDecisionEngine.resetSubmittedSignals()
-    this.checkpointResumedThisSubmit = false
     // TUI-FIX-10: 清除前一 session 的所有 worker
     this.emitOrchestration?.({ role: "orchestration", orchestration: { kind: "worker_remove", workerId: "*" } })
     return this._loadSessionMessages(sessionId)
@@ -990,26 +987,23 @@ Do not change goal status.`
     // 由 CheckpointEngine.shouldPersistOnTrigger 内部根据 forcedPolicyActive 判定，这里只负责 loadV2 恢复
     // executionMode: "forced" → 强制 forced；"adaptive" → 自适应决策；"free" → 强制 free
     // ModeDecisionEngine 在 loop.ts 中每轮 evaluate；engine 层只需把 harnessMode 映射进去
-    // 这里在 submit 开始时尝试恢复 checkpoint
-    if (!this.checkpointResumedThisSubmit) {
-      try {
-        const v2 = await this.checkpointEngine.loadV2()
-        if (v2) {
-          this.branchBudgetTracker.applySnapshot(v2.branchBudget)
-          this.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
-          if (this.logger.isEnabled("info")) {
-            this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionId })
-          }
-        }
-      } catch (e) {
-        if (this.logger.isEnabled("warn")) {
-          this.logger.warn("engine.checkpoint.resume_error", { error: e instanceof Error ? e.message : String(e) })
+    // F0-1/B4: 每次 submit 开始时尝试恢复 checkpoint，跨 submit 持久化真正生效。
+    // 恢复的三维计数会延续到本 submit，不会被立即清空（不再调用 resetRoundBudget）。
+    // recoverTriggers 也从快照恢复（跨 submit recovery 去重）。
+    try {
+      const v2 = await this.checkpointEngine.loadV2()
+      if (v2) {
+        this.branchBudgetTracker.applySnapshot(v2.branchBudget)
+        this.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+        if (this.logger.isEnabled("info")) {
+          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionId })
         }
       }
-      this.checkpointResumedThisSubmit = true
+    } catch (e) {
+      if (this.logger.isEnabled("warn")) {
+        this.logger.warn("engine.checkpoint.resume_error", { error: e instanceof Error ? e.message : String(e) })
+      }
     }
-    // 每轮 submit 重置 BranchBudgetTracker 的 round 维度（保留 recoverTriggers）
-    this.branchBudgetTracker.resetRoundBudget()
 
     this.verificationGateState = { continuationCount: 0 }
     this.supervisorGuidanceState = createSupervisorGuidanceState()
