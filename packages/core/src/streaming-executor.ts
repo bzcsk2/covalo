@@ -6,6 +6,7 @@ import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 import { evaluatePermission, resolveDenyMessage, createSettleLedger, createProgressQueue, applyResultPersistence, parseToolCallArgs } from "./executor-helpers.js"
 import { shouldBlockSalvagedTruncatedWrite, buildSalvagedTruncatedWriteBlockMessage } from "./tool-arguments/truncation-recovery.js"
 import { ReadTracker, extractFilePath, isWriteTool, isReadTool } from "./read-before-write.js"
+import { guardToolOutput } from "./harness-evolution/packets/runtime-guard.js"
 import type { SubagentRunOptions, SubagentRunResult } from "./subagent/types.js"
 import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
 import { getCurrentCaseWorkspace } from "./eval/runner.js"
@@ -112,7 +113,7 @@ export class StreamingToolExecutor {
 
         const permResult = await evaluatePermission(tc, exec.tools, exec.permissionEngine, exec.hookManager, exec.requestPermission, argsResult.args)
         if (permResult === "deny") {
-          const result = makeToolError(resolveDenyMessage(tc, exec.tools, exec.permissionEngine, argsResult.args, exec.hookManager))
+          const result = makeToolError(resolveDenyMessage(tc, exec.tools, exec.permissionEngine, argsResult.args))
           settle(tc, index, result)
           yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
           continue
@@ -396,6 +397,19 @@ export class StreamingToolExecutor {
         result = await applyResultPersistence(rawResult, this.sessionId, tc.function.name, this.resultPersistenceConfig, this.hookManager, logger)
       }
 
+      // S1-1: Guard tool output for secrets and untrusted content
+      if (!result.isError) {
+        const guard = guardToolOutput(tc.function.name, result.content)
+        if (guard.disposition === "block") {
+          const blockedResult = makeToolError(`Tool output blocked by runtime guard: ${tc.function.name}`)
+          if (diagnosticsEnabled) logger.warn("tool.output.guard_blocked", { toolName: tc.function.name, findings: guard.findings })
+          return { event: makeErrorEvent(blockedResult, tc.function.name, index, tc.id), result: blockedResult }
+        }
+        if (guard.disposition === "review" && diagnosticsEnabled) {
+          logger.warn("tool.output.guard_review", { toolName: tc.function.name, findings: guard.findings })
+        }
+      }
+
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: result.isError, metadata: result.metadata })
       evalToolTracker.record(result.isError)
 
@@ -503,7 +517,7 @@ export class StreamingToolExecutor {
     }
     const permResult = await this.checkAskPermission(tc, index, argsResult.args)
     if (permResult === "deny") {
-      const result = makeToolError(resolveDenyMessage(tc, this.tools, this.permissionEngine, argsResult.args, this.hookManager))
+      const result = makeToolError(resolveDenyMessage(tc, this.tools, this.permissionEngine, argsResult.args))
       settle(tc, index, result)
       yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
       return

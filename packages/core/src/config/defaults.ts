@@ -60,6 +60,7 @@ export const DEFAULT_CONFIG: CovaloConfig = {
     approvalPolicy: "on-request",
     sandbox: "workspace-write",
     dangerousToolsEnabled: false,
+    strictMode: false,
     supervisor: {
       loop: {
         allow: [],
@@ -149,6 +150,7 @@ export const LOCAL_FIRST_CONFIG: Partial<CovaloConfig> = {
     approvalPolicy: "on-request",
     sandbox: "workspace-write",
     dangerousToolsEnabled: false,
+    strictMode: false,
     supervisor: {
       loop: {
         allow: [],
@@ -177,6 +179,7 @@ export const SAFE_READONLY_CONFIG: Partial<CovaloConfig> = {
     approvalPolicy: "always",
     sandbox: "read-only",
     dangerousToolsEnabled: false,
+    strictMode: true,
     supervisor: {
       loop: {
         allow: [],
@@ -218,6 +221,7 @@ export const AUTONOMOUS_CODING_CONFIG: Partial<CovaloConfig> = {
     approvalPolicy: "on-failure",
     sandbox: "workspace-write",
     dangerousToolsEnabled: false,
+    strictMode: false,
     supervisor: {
       loop: {
         allow: [],
