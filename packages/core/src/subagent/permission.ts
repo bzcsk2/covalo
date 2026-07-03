@@ -30,7 +30,13 @@ export function getToolTier(toolName: string): "read" | "write" | "exec" {
 export interface SubagentPermissionCheck {
   allowed: boolean
   reason?: string
-  /** If true, the request should be bubbled to the parent */
+  /**
+   * If true, the request should be bubbled to the parent.
+   *
+   * 注意：bubble 协议当前未实装。engine.spawnSubagent() 只检查 `allowed`，
+   * 不处理 `bubble` 字段，bubble 请求等价于 deny（直接加 deny rule）。
+   * 未来若实装 bubble 上抛机制，需要 parent agent 消费此字段。
+   */
   bubble?: boolean
 }
 
