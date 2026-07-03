@@ -10,8 +10,16 @@ import type { ToolSpec } from "../types.js"
 /** 工具类别 */
 export type ToolCategory = "read" | "write" | "search" | "run" | "plan" | "code_intel" | "full"
 
-/** 路由模式：direct 一次暴露全部工具；two_stage 先选类别再注入子集 */
-export type ToolRoutingMode = "direct" | "two_stage"
+/**
+ * 路由模式：
+ * - direct：一次暴露全部工具
+ * - two_stage：先选类别再注入子集
+ * - auto：由 shouldUseTwoStageRouting 基于 contextWindow/schemaTokens/sizeClass 自动决策
+ *
+ * 注意："auto" 是输入值，由 loop 传给 resolveToolRouting；
+ * ToolRoutingDecision.mode 输出只会是 "direct" 或 "two_stage"。
+ */
+export type ToolRoutingMode = "direct" | "two_stage" | "auto"
 
 /** 两阶段路由阶段 */
 export type ToolRoutingStage = "deterministic" | "category_select" | "category_tools" | "direct"
@@ -46,7 +54,7 @@ export interface ToolRoutingContext {
   selectedCategory?: ToolCategory
   /** MCP/动态工具名 -> 类别映射 */
   toolCategoryMap?: Record<string, ToolCategory>
-  /** 环境或配置覆盖：direct | two_stage */
+  /** 环境或配置覆盖：direct | two_stage | auto（auto 走自动检测） */
   routingOverride?: ToolRoutingMode
   /** schema token 预算（默认按 contextWindow 比例推算） */
   schemaTokenBudget?: number

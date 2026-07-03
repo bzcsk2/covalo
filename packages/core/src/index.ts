@@ -420,11 +420,10 @@ export type { SessionSummary } from "./session.js"
 
 export {
   SubagentRegistry,
-  defaultSubagentRegistry,
   BUILTIN_SUBAGENTS,
   checkSubagentPermission,
-  SubagentRunner,
 } from "./subagent/index.js"
+// SA-1: SubagentRunner 和 defaultSubagentRegistry 已删除
 export type {
   SubagentPermissionMode,
   SubagentDefinition,

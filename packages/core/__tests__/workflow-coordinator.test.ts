@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
 import type { WorkflowSupervisorAdvice } from "../src/workflow-coordinator/types.js"
+import { QuestionService } from "../src/question/service.js"
 
 import { setPromptLocale } from "../src/prompt-locale.js"
 describe("WorkflowCoordinator", () => {
@@ -1241,5 +1242,159 @@ describe("WorkflowCoordinator", () => {
     expect(phases).toContain("worker_do")
     expect(phases).toContain("worker_report")
     expect(phases).toContain("supervisor_check")
+  })
+
+  describe("WF-1: ask_user 回复链集成", () => {
+    it("supervisor_check ask_user → waiting_user → pending question → replyWorkflowQuestion → supervisor_analyse", async () => {
+      // 审核反馈：原 canContinue() 对 waiting_user 返回 false，导致
+      // runWaitingUser() 进不去，pending question 永远不会创建。
+      // 修正后 waiting_user 可进入 runWaitingUser()，await ask() 创建 pending。
+      //
+      // 关键：coordinator.runSupervisorCheck() 从 getState().messages.findLast()
+      // 读取响应（不是从 submit yield），所以 getState() 必须返回 submit()
+      // 最新产生的内容，而不是固定 "stub"。
+      //
+      // 审核反馈（第三轮）：原 mock 的 supervisor_check 永远返回 ask_user，
+      // 导致 workflow 永远不会 completed。修正：第一次 supervisor_check 返回
+      // ask_user，用户回复后的第二次 supervisor_check 返回 structured approve。
+      // approve JSON 必须在 supervisor_check 阶段返回（supervisor_analyse 的
+      // 输出会被当成 plan，不会被当成完成决策）。
+      const questionService = new QuestionService()
+      let supervisorMessage = ""
+      let supervisorCalls = 0
+      let workerCalls = 0
+      let workerMessage = ""
+      let askedUser = false
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* (_input: string, _mode?: string, phase?: string) {
+            supervisorCalls++
+            if (phase === "supervisor_analyse") {
+              supervisorMessage = supervisorCalls === 1
+                ? "Initial plan"
+                : "Updated plan after user clarification"
+            } else if (phase === "supervisor_check" && !askedUser) {
+              // 第一次 supervisor_check：返回 ask_user，触发 waiting_user
+              askedUser = true
+              supervisorMessage = "I need to ask_user for clarification about the requirement"
+            } else if (phase === "supervisor_check") {
+              // 第二次 supervisor_check（用户回复后）：返回 structured approve
+              supervisorMessage = JSON.stringify({
+                version: 1,
+                workflowId: "wf-ask-user",
+                iteration: 1,
+                basedOnLedgerVersion: 0,
+                decision: "approve",
+                diagnosis: "done",
+                nextActions: [],
+                constraints: [],
+                verification: [],
+                completionAudit: [{ requirement: "ask_user 闭环", status: "proven", evidence: ["user replied"] }],
+              })
+            }
+            yield { role: "assistant_final", content: supervisorMessage }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            workerCalls++
+            workerMessage = "done"
+            yield { role: "assistant_final", content: workerMessage }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: workerMessage }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({
+        runtime: runtime as any,
+        questionService,
+        config: { requireSupervisorPlan: false, requireVerificationGate: false, maxRounds: 5 },
+      })
+      coordinator.startWorkflow({ goal: "test ask_user 闭环" })
+
+      // 异步消费 workflow，模拟 TUI 在收到 ask_user 事件后回复
+      const events: any[] = []
+      const workflowPromise = (async () => {
+        for await (const event of coordinator.runWorkflow()) {
+          events.push(event)
+          // 收到 ask_user 事件后，异步回复（模拟用户点击 UI）
+          if (event.type === "ask_user" && event.requestId) {
+            const requestId = event.requestId
+            // 给 runWaitingUser 一点时间调 questionService.ask() 创建 pending
+            setTimeout(() => {
+              coordinator.replyWorkflowQuestion(requestId, [["yes"]])
+            }, 10)
+          }
+        }
+      })()
+
+      await workflowPromise
+
+      // 验证：workflow 完成（不是 blocked）
+      const finalState = coordinator.getState()
+      expect(finalState?.currentPhase).toBe("completed")
+
+      // 验证：ask_user 事件被 emit，且 requestId 不为空
+      const askUserEvent = events.find(e => e.type === "ask_user")
+      expect(askUserEvent).toBeDefined()
+      expect(askUserEvent.requestId).toBeTruthy()
+
+      // 验证：worker 至少执行过一次
+      expect(workerCalls).toBeGreaterThanOrEqual(1)
+    })
+
+    it("WF-1: rejectWorkflowQuestion → blocked", async () => {
+      const questionService = new QuestionService()
+      let supervisorMessage = ""
+      let workerMessage = ""
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* (_input: string, _mode?: string, phase?: string) {
+            if (phase === "supervisor_check") {
+              supervisorMessage = "ask_user for clarification"
+            } else {
+              supervisorMessage = "plan"
+            }
+            yield { role: "assistant_final", content: supervisorMessage }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            workerMessage = "done"
+            yield { role: "assistant_final", content: workerMessage }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: workerMessage }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({
+        runtime: runtime as any,
+        questionService,
+        config: { requireSupervisorPlan: false, requireVerificationGate: false, maxRounds: 5 },
+      })
+      coordinator.startWorkflow({ goal: "test reject" })
+
+      const events: any[] = []
+      const workflowPromise = (async () => {
+        for await (const event of coordinator.runWorkflow()) {
+          events.push(event)
+          if (event.type === "ask_user" && event.requestId) {
+            const requestId = event.requestId
+            setTimeout(() => {
+              coordinator.rejectWorkflowQuestion(requestId)
+            }, 10)
+          }
+        }
+      })()
+
+      await workflowPromise
+
+      // 验证：reject 后 workflow 进入 blocked（不是 completed）
+      const finalState = coordinator.getState()
+      expect(finalState?.currentPhase).toBe("blocked")
+      expect(finalState?.blockedReason).toContain("User rejected")
+    })
   })
 })

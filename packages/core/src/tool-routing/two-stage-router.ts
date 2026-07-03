@@ -31,6 +31,10 @@ export const MIN_SCHEMA_TOKEN_BUDGET = 512
 
 /**
  * Deepreef 内置工具类别表
+ *
+ * 工具名必须与 createDefaultTools() 注册的真实工具 name 一致，
+ * 否则 two-stage 路由会把不存在的工具名过滤掉，导致模型选了正确
+ * 类别但工具不可用。参考 packages/tools/src/index.ts。
  */
 export const TOOL_CATEGORIES: Record<Exclude<ToolCategory, "full">, ToolCategoryDef> = {
   read: {
@@ -43,39 +47,39 @@ export const TOOL_CATEGORIES: Record<Exclude<ToolCategory, "full">, ToolCategory
   },
   search: {
     description: "正则搜索、网页检索与抓取",
-    tools: ["grep", "web_search", "web_fetch", "web_browser"],
+    tools: ["grep", "WebSearch", "web_search", "WebFetch", "WebBrowser"],
   },
   run: {
     description: "执行 shell 命令、后台任务与工作流",
     tools: [
       "bash",
-      "sleep",
-      "monitor",
-      "cron",
-      "workflow",
-      "worktree",
-      "push_notification",
+      "Sleep",
+      "Monitor",
+      "Cron",
+      "Workflow",
+      "Worktree",
+      "PushNotification",
     ],
   },
   plan: {
     description: "任务计划、Todo、用户问答与子 Agent",
     tools: [
-      "todo_write",
-      "task_create",
-      "task_update",
-      "task_list",
-      "task_get",
-      "task_stop",
-      "ask_user_question",
-      "plan_mode",
-      "agent_tool",
-      "send_message",
+      "todowrite",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskList",
+      "TaskGet",
+      "TaskStop",
+      "Question",
+      "PlanMode",
+      "AgentTool",
+      "SendMessage",
       "Skill",
     ],
   },
   code_intel: {
     description: "LSP 符号查询与代码智能",
-    tools: ["lsp"],
+    tools: ["LSP"],
   },
 }
 

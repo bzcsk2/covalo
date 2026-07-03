@@ -992,6 +992,8 @@ export function createBridge(
     engine.respondQuestion(requestId, answers);
     dualRuntime?.getWorker().getEngine().respondQuestion(requestId, answers);
     dualRuntime?.getSupervisor().getEngine().respondQuestion(requestId, answers);
+    // WF-1: 同时转发给 workflowCoordinator，回复 supervisor 的 ask_user 问题
+    workflowCoordinator?.replyWorkflowQuestion(requestId, answers);
     commitBridge(() => ({ questionPrompt: null }));
   };
 
@@ -999,6 +1001,8 @@ export function createBridge(
     engine.rejectQuestion(requestId);
     dualRuntime?.getWorker().getEngine().rejectQuestion(requestId);
     dualRuntime?.getSupervisor().getEngine().rejectQuestion(requestId);
+    // WF-1: 同时转发给 workflowCoordinator
+    workflowCoordinator?.rejectWorkflowQuestion(requestId);
     commitBridge(() => ({ questionPrompt: null }));
   };
 
@@ -1231,6 +1235,21 @@ export function createBridge(
             onPhaseChange?.('failed', 0, 'failed', wfEvent.reason);
           } else if (wfEvent.type === 'blocked') {
             onPhaseChange?.('blocked', 0, 'blocked', wfEvent.reason);
+          } else if (wfEvent.type === 'ask_user' && wfEvent.requestId && wfEvent.question) {
+            // WF-1: 把 ask_user 事件写入 questionPrompt，触发 App 渲染问题 UI。
+            // requestId 与 QuestionService pending map 一致（由 coordinator.runWaitingUser 传入），
+            // 用户回答后 respondQuestion 会转发到 workflowCoordinator.replyWorkflowQuestion。
+            commitBridge(() => ({
+              questionPrompt: {
+                id: wfEvent.requestId!,
+                sessionId: wfEvent.workflowId,
+                questions: [{
+                  question: wfEvent.question!,
+                  header: 'Workflow needs input',
+                  options: [],
+                }],
+              },
+            }));
           }
         } else if (hasRole) {
           const loopEvent = rawEvent as unknown as LoopEvent;

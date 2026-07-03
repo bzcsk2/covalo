@@ -14,6 +14,7 @@ import type {
 import { DEFAULT_WORKFLOW_CONFIG } from "./types.js"
 import type { DualAgentRuntime } from "../dual-agent-runtime/dual-runtime.js"
 import type { QuestionService } from "../question/service.js"
+import type { QuestionAnswer } from "../question/types.js"
 import type { LoopEvent } from "../interface.js"
 import { parseSupervisorDecision, parseSupervisorPlan, parseWorkerReport, type BlockerAuditState } from "./structured-protocol.js"
 import type { AgentCommController } from "../agent-comm/controller.js"
@@ -293,17 +294,24 @@ export class WorkflowCoordinator {
       return false
     }
 
-    if (this.state.currentPhase === "waiting_user") {
-      return false
-    }
+    // WF-1: waiting_user 不在这里截断。
+    // runWorkflow() 主循环会进入 runWaitingUser() 分支，
+    // runWaitingUser() await questionService.ask() 阻塞等待 TUI
+    // 通过 replyWorkflowQuestion()/rejectWorkflowQuestion() 回复。
+    // 如果在 canContinue 提前返回 false，pending entry 永远不会创建。
 
-    // Phase G: continuation is goal-driven when goalStore is present
-    if (this.goalStore) {
+    // Phase G: continuation is goal-driven when goalStore is present.
+    // waiting_user 阶段不受 goal continuation 限制 —— 用户问题必须被回答。
+    if (this.goalStore && this.state.currentPhase !== "waiting_user") {
       if (!this.goalShouldContinue()) return false
     }
 
     if (this.state.currentPhase === "supervisor_analyse") {
       return this.state.iteration <= this.state.maxRounds
+    }
+    if (this.state.currentPhase === "waiting_user") {
+      // waiting_user 不受 maxRounds 限制，等待用户回复期间一直可继续
+      return true
     }
     return this.state.iteration < this.state.maxRounds
   }
@@ -715,6 +723,9 @@ Return your guidance as structured advice.`
     }
 
     try {
+      // WF-1: 把 handleAskUser 生成的 requestId 传给 questionService.ask()，
+      // 使 ask_user 事件的 requestId 与 pending map 的 requestId 一致。
+      // 这样 UI 通过 ask_user 事件拿到的 requestId 可以直接用于 reply/reject。
       await this.questionService.ask({
         sessionId: this.state.workflowId,
         questions: [{
@@ -722,12 +733,39 @@ Return your guidance as structured advice.`
           header: "Workflow needs input",
           options: [],
         }],
+        requestId,
       })
 
       this.transition("supervisor_analyse")
     } catch {
       this.transition("blocked", "User rejected question")
     }
+  }
+
+  /**
+   * WF-1: 回复 workflow 的 waiting_user 问题。
+   * 由 TUI/CLI 在用户回答 supervisor 的 ask_user 后调用。
+   * requestId 必须与 ask_user 事件中的 requestId 一致。
+   */
+  replyWorkflowQuestion(requestId: string, answers: QuestionAnswer[]): void {
+    if (!this.state || !this.questionService) return
+    if (this.state.waitingUserRequestId !== requestId) return
+
+    this.questionService.reply({ requestId, answers })
+    // reply 成功后，runWaitingUser 的 await 会 resolve，
+    // 状态机自动 transition("supervisor_analyse")
+  }
+
+  /**
+   * WF-1: 拒绝 workflow 的 waiting_user 问题。
+   */
+  rejectWorkflowQuestion(requestId: string): void {
+    if (!this.state || !this.questionService) return
+    if (this.state.waitingUserRequestId !== requestId) return
+
+    this.questionService.reject(requestId)
+    // reject 后 runWaitingUser 的 await 会 reject，
+    // 状态机自动 transition("blocked", "User rejected question")
   }
 
   private async *handleAskUser(question: string): AsyncGenerator<WorkflowEvent> {

@@ -33,8 +33,8 @@ import {
 } from "./supervisor/guided-loop.js"
 import type { SupervisorTriggerContext } from "./supervisor/types.js"
 import type { EffectiveHarnessPolicy } from "./harness/index.js"
-import { resolveToolRouting } from "./tool-routing/two-stage-router.js"
-import type { ToolRoutingMode } from "./tool-routing/types.js"
+import { resolveToolRouting, parseSelectedCategory } from "./tool-routing/two-stage-router.js"
+import type { ToolRoutingMode, ToolCategory } from "./tool-routing/types.js"
 import { BranchBudgetTracker } from "./governance/branch-budget.js"
 import { extractToolTargetPath, extractRunCommand } from "./governance/branch-budget-tool-path.js"
 import { CheckpointEngine } from "./checkpoint/checkpoint-engine.js"
@@ -176,6 +176,12 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   // 共享模块级全局 seq 导致 per-turn reset 语义被破坏
   const toolCallIdNormalizer = createToolCallIdNormalizer()
   let totalToolCalls = 0
+
+  // ADV-HAR-07/TR-1: Two-stage routing 的当前类别选择状态。
+  // 由 loop 内部拦截 select_category 工具调用后填充，下一轮 resolveToolRouting
+  // 会基于此返回 Stage 2（仅注入该 category 的工具）。这是 loop 内部协议状态，
+  // 不暴露给 StreamingToolExecutor 或 createDefaultTools。
+  let selectedCategory: ToolCategory | undefined
 
   // F0-1: governance/checkpoint 运行时状态
   // 从 effectivePolicy.executionMode 映射到 HarnessMode（free/adaptive/forced/strict）
@@ -580,14 +586,26 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     const useMaxTokens = provider === "kilo" || provider === "openai-compatible"
     const supportsThinking = provider === "deepseek" || provider === "zen" || provider === "mimo"
 
-    // ADV-HAR-07: 根据 toolRouting 策略决定本轮注入的工具集
+    // ADV-HAR-07/TR-1: 根据 toolRouting 策略决定本轮注入的工具集
+    // TR-1 修复："auto" 不再静默降级为 "direct"，而是传给 resolveToolRouting，
+    // 由 shouldUseTwoStageRouting 基于 contextWindow/schemaTokens/sizeClass 自动决策。
     let routedTools: ToolSpec[] | undefined
     if (toolSpecs.length > 0) {
-      const routingMode: ToolRoutingMode = toolRoutingMode === "two-stage" ? "two_stage" : "direct"
+      const routingMode: ToolRoutingMode =
+        toolRoutingMode === "two-stage" ? "two_stage"
+        : toolRoutingMode === "auto" ? "auto"
+        : "direct"
       const routingCtx = {
         allTools: toolSpecs,
         contextWindow: ctx.getContextWindow(),
         routingOverride: routingMode,
+        // 传入上一轮 select_category 的结果，让 resolveToolRouting 进入 Stage 2
+        // （router 的 Stage 2 条件：selectedCategory 存在且 !awaitingCategorySelection）
+        selectedCategory,
+        // 不设置 awaitingCategorySelection：
+        // - undefined / false：router 看到 selectedCategory 存在 → 进入 Stage 2（category_tools）
+        // - true：router 重新注入 select_category（用于重置后让模型重新选择）
+        // 这里我们已经有 selectedCategory，希望进入 Stage 2，所以保持 undefined。
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools
@@ -597,6 +615,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           stage: routingDecision.stage,
           estimatedSchemaTokens: routingDecision.estimatedSchemaTokens,
           toolCount: routedTools.length,
+          selectedCategory,
         })
       }
     }
@@ -776,6 +795,56 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               break streamLoop
             }
 
+            // TR-1: 拦截 two-stage routing 的内部协议工具 select_category。
+            // select_category 是 loop 内部虚拟工具（不注册到 createDefaultTools，
+            // 不进入 StreamingToolExecutor），由 loop 直接处理：
+            // 1. 解析参数得到类别
+            // 2. appendToolResult 让 LLM 看到选择已生效
+            // 3. 更新 selectedCategory，下一轮 resolveToolRouting 进入 Stage 2
+            // 4. break streamLoop 进入下一轮
+            const categoryCall = toolCalls.find((tc) => tc.function.name === "select_category")
+            if (categoryCall) {
+              const parsedCategory = parseSelectedCategory(categoryCall.function.arguments)
+              if (parsedCategory) {
+                selectedCategory = parsedCategory
+                appendToolResult(categoryCall, {
+                  content: `Category selected: ${parsedCategory}. Continuing with tools from this category.`,
+                  isError: false,
+                  metadata: { reason: "two_stage_category_selected", selectedCategory: parsedCategory },
+                })
+                // 理论上 Stage 1 只注入 select_category，batch 不会有其他工具；
+                // 但为健壮起见，给 batch 中其他工具补 skip 消息避免 orphan tool_call
+                for (const tc of toolCalls) {
+                  if (tc.id !== categoryCall.id) {
+                    appendToolResult(tc, {
+                      content: "Skipped: select_category was called in this batch; please retry in the next turn.",
+                      isError: true,
+                      metadata: { reason: "two_stage_batch_skipped" },
+                    })
+                  }
+                }
+                yield {
+                  role: "status",
+                  content: "two_stage_category_selected",
+                  metadata: { selectedCategory: parsedCategory },
+                }
+                sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "two_stage_category_selected", metadata: { selectedCategory: parsedCategory } } })
+                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+                break streamLoop
+              } else {
+                // 解析失败：给 select_category 回错误，让模型重试
+                appendToolResult(categoryCall, {
+                  content: "Invalid category. Please select a valid category from: read, write, search, run, plan, code_intel, full.",
+                  isError: true,
+                  metadata: { reason: "two_stage_invalid_category" },
+                })
+                yield { role: "status", content: "tools_completed" }
+                sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+                break streamLoop
+              }
+            }
+
             try {
               for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, allowedToolNames)) {
                 yield toolEvent
@@ -850,6 +919,14 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+
+            // TR-1: selectedCategory 是一次性状态。
+            // Stage 2 的一批真实工具调用执行完成后清空，让下一轮模型
+            // 需要工具时重新走 select_category 选择新类别（避免被锁定
+            // 在第一次选择的类别里无法切换 read→write→search→run）。
+            if (selectedCategory) {
+              selectedCategory = undefined
+            }
 
             // F0-1: safe point — 落盘 checkpoint（trigger: step_completed）
             // 在 forced 模式下才会真实落盘（由 forcedPolicyActive 控制）
