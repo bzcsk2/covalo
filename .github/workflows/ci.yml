@@ -45,7 +45,7 @@ jobs:
           CI: "true"
 
       - name: Run test suite
-        run: bun test packages/core/__tests__/ packages/security/__tests__/ packages/tui/__tests__/ packages/cli/__tests__/ --timeout 30000
+        run: bun test packages/core/__tests__/ packages/security/__tests__/ packages/tools/__tests__/ packages/tui/__tests__/ packages/cli/__tests__/ --timeout 30000
         env:
           CI: "true"
 
