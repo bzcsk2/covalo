@@ -35,6 +35,16 @@ import type { SupervisorTriggerContext } from "./supervisor/types.js"
 import type { EffectiveHarnessPolicy } from "./harness/index.js"
 import { resolveToolRouting } from "./tool-routing/two-stage-router.js"
 import type { ToolRoutingMode } from "./tool-routing/types.js"
+import { BranchBudgetTracker } from "./governance/branch-budget.js"
+import { extractToolTargetPath, extractRunCommand } from "./governance/branch-budget-tool-path.js"
+import { CheckpointEngine } from "./checkpoint/checkpoint-engine.js"
+import type { CheckpointSaveTrigger } from "./checkpoint/runtime-checkpoint.js"
+import {
+  ModeDecisionEngine,
+  createEmptyRuntimeExecutionState,
+  type ExecutionMode,
+  type ModeDecision,
+} from "./governance/mode-decision.js"
 
 export interface PendingInstruction {
   content: string
@@ -86,6 +96,14 @@ export interface LoopOptions {
   verificationPolicy?: "block" | "require-or-waive" | "warn"
   /** Tool names allowed to execute in this loop turn. Undefined preserves legacy execution behavior. */
   allowedToolNames?: ReadonlySet<string>
+  /** F0-1: 分支预算追踪器 — 工具前硬拦截、工具后计数 */
+  branchBudgetTracker?: BranchBudgetTracker
+  /** F0-1: CheckpointEngine — safe point 落盘与恢复 */
+  checkpointEngine?: CheckpointEngine
+  /** F0-1: ModeDecisionEngine — 每轮 free/forced 决策 */
+  modeDecisionEngine?: ModeDecisionEngine
+  /** F0-1: 工作区根（BranchBudgetTracker 路径规范化用） */
+  workspaceRoot?: string
 }
 
 const DEFAULT_MAX_TURNS = 100
@@ -102,6 +120,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     /** ADV-HAR-08: 验证策略 */
     verificationPolicy: verificationMode,
     allowedToolNames,
+    /** F0-1: governance/checkpoint 三件套 */
+    branchBudgetTracker,
+    checkpointEngine,
+    modeDecisionEngine,
+    workspaceRoot,
   } = opts
   const diagnosticsEnabled = logger.isEnabled("error")
 
@@ -148,6 +171,148 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   // 共享模块级全局 seq 导致 per-turn reset 语义被破坏
   const toolCallIdNormalizer = createToolCallIdNormalizer()
   let totalToolCalls = 0
+
+  // F0-1: governance/checkpoint 运行时状态
+  // 当前 executionMode（free/forced），由 ModeDecisionEngine 每轮刷新
+  let currentExecutionMode: ExecutionMode = "free"
+  // mode lock 倒计时（enter_forced 时设为 lockRounds，每轮递减）
+  let executionModeLockRemaining = 0
+  // 运行时执行状态快照（喂给 ModeDecisionEngine.evaluate）
+  const runtimeState = createEmptyRuntimeExecutionState()
+  if (workspaceRoot) {
+    branchBudgetTracker?.bindWorkspaceRoot(workspaceRoot)
+  }
+
+  /**
+   * F0-1: 调用 CheckpointEngine.save 的安全包装。
+   * 根据 forcedPolicyActive 与 trigger 决定是否真实落盘；失败不阻塞 loop。
+   */
+  const saveCheckpoint = async (trigger: CheckpointSaveTrigger, extras?: {
+    appendTool?: import("./checkpoint/runtime-checkpoint.js").ToolHistoryEntry
+    appendFailure?: import("./checkpoint/runtime-checkpoint.js").FailureHistoryEntry
+    appendRecoverySignal?: import("./checkpoint/runtime-checkpoint.js").RecoverySignal
+  }): Promise<void> => {
+    if (!checkpointEngine) return
+    if (!checkpointEngine.shouldPersistOnTrigger(trigger)) return
+    try {
+      await checkpointEngine.save({
+        trigger,
+        branchBudget: branchBudgetTracker,
+        ...extras,
+      })
+    } catch (e) {
+      if (diagnosticsEnabled) {
+        logger.warn("loop.checkpoint.save_error", {
+          trigger,
+          error: e instanceof Error ? e.message : String(e),
+        })
+      }
+    }
+  }
+
+  /**
+   * F0-1: 每轮 turn 开始时评估 executionMode。
+   * - 收集 BranchBudgetTracker 的 recovery 信号
+   * - 调用 ModeDecisionEngine.evaluate
+   * - 应用决策：切换 mode、设置 checkpoint forced policy、启停 BranchBudgetTracker
+   */
+  const evaluateExecutionMode = (): ModeDecision | null => {
+    if (!modeDecisionEngine) return null
+
+    // 收集 recovery_pending 信号
+    if (branchBudgetTracker) {
+      const decision = branchBudgetTracker.shouldBranchRecover()
+      if (decision.triggered) {
+        modeDecisionEngine.submitSignal("branch_budget", "recovery_pending", {
+          dimension: decision.dimension,
+          key: decision.key,
+          count: decision.currentCount,
+        })
+      }
+    }
+
+    // 收集 checkpoint 恢复信号
+    if (checkpointEngine) {
+      const pending = checkpointEngine.pendingRecoverySignals()
+      if (pending.length > 0) {
+        modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+      }
+    }
+
+    // 同步 runtimeState 字段
+    runtimeState.round = turnCount
+    runtimeState.recoveryPending = branchBudgetTracker?.shouldBranchRecover().triggered ?? false
+    runtimeState.verificationPending = taskLedger?.verificationPending ?? false
+    runtimeState.lastToolSuccess = runtimeState.lastToolSuccess // 保留前一轮设置
+
+    const modeDecision = modeDecisionEngine.evaluate({
+      round: turnCount,
+      executionMode: currentExecutionMode,
+      executionModeLockRemaining,
+      harnessMode: "adaptive", // 默认 adaptive；engine.ts 会根据 effectivePolicy 覆盖
+      riskLevel: "L1_minor_edit", // 默认；engine.ts 可覆盖
+      state: runtimeState,
+      signals: [],
+    })
+
+    // 应用决策
+    if (modeDecision.action === "enter_forced") {
+      currentExecutionMode = "forced"
+      executionModeLockRemaining = modeDecision.lockRounds
+      checkpointEngine?.setForcedPolicy(true)
+      branchBudgetTracker?.setEnabled(true)
+    } else if (modeDecision.action === "exit_forced") {
+      currentExecutionMode = "free"
+      checkpointEngine?.setForcedPolicy(false)
+    }
+
+    return modeDecision
+  }
+
+  /**
+   * F0-1: 工具批次前对每个 toolCall 做 BranchBudget 硬拦截。
+   * 返回被拦截的 toolCall → 拦截消息映射。
+   */
+  const checkBranchBudgetBlocks = (toolCalls: ToolCall[]): Map<string, string> => {
+    const blocks = new Map<string, string>()
+    if (!branchBudgetTracker) return blocks
+    for (const tc of toolCalls) {
+      const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
+      if (!argsResult.ok) continue
+      const decision = branchBudgetTracker.checkToolBlock(
+        tc.function.name,
+        argsResult.args,
+        extractToolTargetPath,
+        extractRunCommand,
+        { workspaceRoot },
+      )
+      if (decision.blocked && decision.message) {
+        blocks.set(tc.id, decision.message)
+      }
+    }
+    return blocks
+  }
+
+  /**
+   * F0-1: 工具结果回调中累加 BranchBudget 计数。
+   */
+  const recordBranchBudget = (toolName: string, args: Record<string, unknown>, result: ToolResult): void => {
+    if (!branchBudgetTracker) return
+    const isErr = result.isError || !!result.metadata?.error
+    if (extractToolTargetPath(toolName, args) && !isErr) {
+      branchBudgetTracker.recordFileEdit(extractToolTargetPath(toolName, args))
+    }
+    if (toolName === "bash" && isErr) {
+      const cmd = extractRunCommand(args)
+      if (cmd) branchBudgetTracker.recordFailedCommandAttempt(cmd)
+    }
+    if (isErr) {
+      const sig = (typeof result.content === "string" ? result.content : "").slice(0, 200)
+      if (sig) branchBudgetTracker.recordError(sig)
+    }
+    // 同步 runtimeState
+    runtimeState.lastToolSuccess = !isErr
+  }
 
   /** DRF-40: 记录工具结果到 TaskLedger */
   const recordLedgerTool = (toolName: string, args: Record<string, unknown>, result: ToolResult): void => {
@@ -346,6 +511,18 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     earlyStop?.newTurn()
     if (diagnosticsEnabled) logger.debug("loop.turn.start", { turnCount, thinkingMode })
     toolCallIdNormalizer.reset()  // L8: per-loop 实例 reset per-turn sequence
+
+    // F0-1: 每轮 turn 开始时评估 executionMode（mode lock 递减）
+    if (executionModeLockRemaining > 0) executionModeLockRemaining--
+    const modeDecision = evaluateExecutionMode()
+    if (modeDecision && diagnosticsEnabled) {
+      logger.info("loop.mode_decision", {
+        turnCount,
+        action: modeDecision.action,
+        mode: currentExecutionMode,
+      })
+    }
+
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
       yield emitDone("interrupted")
@@ -526,6 +703,30 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               return
             }
 
+            // F0-1: 工具批次执行前做 BranchBudget 硬拦截。
+            // 被拦截的 toolCall 直接返回拦截消息作为 tool_result，不执行工具。
+            const branchBudgetBlocks = checkBranchBudgetBlocks(toolCalls)
+            if (branchBudgetBlocks.size > 0) {
+              for (const tc of toolCalls) {
+                const blockMsg = branchBudgetBlocks.get(tc.id)
+                if (blockMsg) {
+                  appendToolResult(tc, { content: blockMsg, isError: true, metadata: { reason: "branch_budget_blocked" } })
+                  yield {
+                    role: "error",
+                    content: blockMsg,
+                    severity: "warning" as const,
+                    metadata: { reason: "branch_budget_blocked", toolName: tc.function.name, toolCallId: tc.id },
+                  }
+                  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "error", content: blockMsg, metadata: { reason: "branch_budget_blocked", toolName: tc.function.name } } })
+                }
+              }
+              // 跳过本轮工具执行，直接进入下一轮让模型看到拦截消息
+              yield { role: "status", content: "tools_completed" }
+              sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+              sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+              break streamLoop
+            }
+
             try {
               for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, allowedToolNames)) {
                 yield toolEvent
@@ -541,6 +742,12 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                     if (argsResult.ok) {
                       const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
                       recordLedgerTool(toolEvent.toolName, argsResult.args, {
+                        isError: isErr,
+                        content: toolEvent.content ?? "",
+                        metadata: toolEvent.metadata,
+                      })
+                      // F0-1: 同步累加 BranchBudget 计数（file edit / command retry / error）
+                      recordBranchBudget(toolEvent.toolName, argsResult.args, {
                         isError: isErr,
                         content: toolEvent.content ?? "",
                         metadata: toolEvent.metadata,
@@ -589,6 +796,10 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+
+            // F0-1: safe point — 落盘 checkpoint（trigger: step_completed）
+            // 在 forced 模式下才会真实落盘（由 forcedPolicyActive 控制）
+            await saveCheckpoint("step_completed")
 
             // DRF-60: Safe point — Supervisor 指导（暂停工具环后继续 Worker）
             const supervisorInjected = yield* trySupervisorGuidance()
@@ -711,6 +922,9 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               break
             }
 
+            // F0-1: final_draft safe point — 落盘 checkpoint（无论 free/forced 都落盘）
+            await saveCheckpoint("final_draft")
+
             yield { role: "done", metadata: { reason } as Record<string, unknown> }
             sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "done", metadata: { reason } } })
@@ -754,6 +968,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         yield emitDone("interrupted")
         return
       }
+      // F0-1: tool_failed trigger — 流式错误时落盘（无论 free/forced 都落盘）
+      await saveCheckpoint("tool_failed")
       if (toolCalls.length > 0) {
         // Stream error after tool_calls were emitted: append tool_calls + error results
         // to maintain protocol consistency, then retry

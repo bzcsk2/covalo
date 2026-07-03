@@ -35,6 +35,7 @@ export const MODE_SIGNAL_PRECEDENCE: readonly ModeSignal[] = [
   "pending_steps",
   "tool_failure",
   "verification_failure",
+  "recovery_pending",
   "multi_write",
   "large_diff",
   "explicit_impl",
@@ -139,7 +140,8 @@ interface SubmittedModeSignal {
 const ENTER_SIGNAL_SET = new Set<ModeSignal>(MODE_SIGNAL_PRECEDENCE)
 
 /**
- * 按优先级排序进入 forced 的信号；排除 recovery_pending / verification_pending
+ * 按优先级排序进入 forced 的信号；排除 verification_pending
+ * G2 修复：recovery_pending 现已纳入 ENTER_SIGNAL_SET，可触发 enter_forced。
  */
 export function sortSignalsByPrecedence(signals: ModeSignal[]): ModeSignal[] {
   const seen = new Set<ModeSignal>()
