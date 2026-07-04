@@ -132,7 +132,10 @@ export function createDefaultTools(
   const useDualTrack = shellPolicy === "dual-track" || shellPolicy === "dual-track-conservative"
   return [
     createReadFileTool(),
-    createBashTool({ dualTrack: useDualTrack }),
+    createBashTool({
+      dualTrack: useDualTrack,
+      conservative: shellPolicy === "dual-track-conservative",
+    }),
     createEditTool(),
     createWriteFileTool(),
     createListDirTool(),
