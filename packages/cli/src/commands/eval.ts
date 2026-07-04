@@ -205,13 +205,31 @@ export async function evalPrepare(args: string[]): Promise<void> {
   console.log(`Preparing ${envId}...\n`)
 
   if (envId === "sandbox.benchmark") {
-    const missingManaged = getToolManifest.filter((t) => !isToolInstalled(t.name))
-
-    if (missingManaged.length === 0) {
-      console.log("✓ Managed toolchain already installed at ~/.covalo/toolchains/benchmark-node/")
+    // 用 getBenchmarkToolchainStatus() 作为唯一真实状态来源，避免和它语义冲突。
+    // 注意：仅靠 isToolInstalled(t.name) 判定 ready 是不够的 —— 在 Windows/macOS 上
+    // SHA256 暂为空字符串时，工具文件存在但 getBenchmarkToolchainStatus().ready 仍是 false。
+    const preStatus = getBenchmarkToolchainStatus()
+    if (preStatus.ready) {
+      console.log("✓ Benchmark toolchain ready at ~/.covalo/toolchains/benchmark-node/")
       return
     }
 
+    // 找出文件层面缺失的工具（missingTools），这些才需要真正下载。
+    // missingSha256 / versionMismatches 不算下载缺失，不影响"文件是否就位"。
+    if (preStatus.missingTools.length === 0) {
+      // 工具文件都到位但 status 仍非 ready —— 多半是 missingSha256 或 versionMismatches
+      console.log("⚠ Managed toolchain files are present but benchmark-ready status is false:")
+      if (preStatus.missingSha256.length > 0) {
+        console.log(`  missing SHA256 for: ${preStatus.missingSha256.join(", ")}`)
+      }
+      if (preStatus.versionMismatches.length > 0) {
+        console.log(`  version mismatches: ${preStatus.versionMismatches.map(v => `${v.name} expected ${v.expected}, got ${v.actual ?? "unknown"}`).join("; ")}`)
+      }
+      console.log("\nBenchmark scoring is NOT available until these are resolved.")
+      return
+    }
+
+    const missingManaged = getToolManifest.filter((t) => preStatus.missingTools.includes(t.name))
     console.log(`Downloading ${missingManaged.length} missing tools...\n`)
     for (const entry of missingManaged) {
       console.log(`  [${entry.name}] ensuring ${entry.name}@${entry.pinnedVersion}...`)
@@ -224,11 +242,21 @@ export async function evalPrepare(args: string[]): Promise<void> {
       }
     }
 
-    const stillMissing = getToolManifest.filter((t) => !isToolInstalled(t.name))
-    if (stillMissing.length === 0) {
+    // 安装后重新读取状态，统一从 status 派生结论，避免和 getBenchmarkToolchainStatus 冲突。
+    const postStatus = getBenchmarkToolchainStatus()
+    if (postStatus.ready) {
       console.log("\n✓ Benchmark toolchain ready at ~/.covalo/toolchains/benchmark-node/")
     } else {
-      console.log(`\n⚠ ${stillMissing.length} tool(s) still missing: ${stillMissing.map((t) => t.name).join(", ")}`)
+      if (postStatus.missingTools.length > 0) {
+        console.log(`\n⚠ ${postStatus.missingTools.length} tool(s) still missing: ${postStatus.missingTools.join(", ")}`)
+      }
+      if (postStatus.missingSha256.length > 0) {
+        console.log(`⚠ Installed but missing SHA256 (not benchmark-ready): ${postStatus.missingSha256.join(", ")}`)
+      }
+      if (postStatus.versionMismatches.length > 0) {
+        console.log(`⚠ Version mismatches: ${postStatus.versionMismatches.map(v => `${v.name} expected ${v.expected}, got ${v.actual ?? "unknown"}`).join("; ")}`)
+      }
+      console.log("\nBenchmark scoring is NOT available until all of the above are resolved.")
     }
   }
 

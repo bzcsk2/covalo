@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, copyFileSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, copyFileSync, cpSync, readdirSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
@@ -298,19 +298,28 @@ export async function ensureTool(name: string): Promise<string> {
       throw new Error(`Binary ${binarySrc} not found in archive for ${name}`)
     }
 
-    // 复制整个顶层目录的内容到 versionDir（保持原有行为，让同目录下的依赖文件也跟随）
+    // 复制整个顶层目录的内容到 versionDir（保持原有行为，让同目录下的依赖文件也跟随）。
+    // 必须用 cpSync 递归复制 — Node 这类 tar 包顶层是 bin/、lib/、include/、share/ 等目录，
+    // copyFileSync 不能复制目录会抛错，导致 bin/node 等关键文件没被复制出来。
     const topDir = join(destDir, binaryRel.split("/")[0]!)
     if (existsSync(topDir)) {
-      for (const entry of readdirSync(topDir)) {
-        const src = join(topDir, entry)
-        const dst = join(versionDir, entry)
+      for (const entryName of readdirSync(topDir)) {
+        const src = join(topDir, entryName)
+        const dst = join(versionDir, entryName)
         try {
-          copyFileSync(src, dst)
-          // 对于可执行文件设置可执行位（POSIX）— Windows 上无操作
+          cpSync(src, dst, { recursive: true, force: true })
+          // cpSync 默认保留源文件的模式位（POSIX），binary 通常已经可执行；
+          // 这里 setExecutable 是对个别权限丢失的情况兜底，Windows 上无操作。
           setExecutable(dst)
         } catch {
-          // 单个文件复制失败不中断（可能是符号链接等）
+          // 单个 entry 复制失败不中断（可能是符号链接等），但要保证 binary 本身可用。
         }
+      }
+      // 兜底校验：binary 必须真实存在
+      if (!existsSync(destBinaryPath)) {
+        // 如果递归复制后 binary 仍未到位，直接从 binarySrc 单文件复制
+        copyFileSync(binarySrc, destBinaryPath)
+        setExecutable(destBinaryPath)
       }
     } else {
       // 兜底：直接复制 binary
