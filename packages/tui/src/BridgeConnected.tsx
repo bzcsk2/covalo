@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from '@covalo/ink';
-import type { PermissionRequest, QuestionRequest } from '@covalo/core';
+import type { QuestionRequest } from '@covalo/core';
+import type { TuiPermissionPrompt, PermissionOriginRole } from './bridge.js';
 import { DeepiPromptInput, type DeepiPromptInputHandle } from './DeepiPromptInput.js';
 import { StatusBar } from './StatusBar.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
@@ -112,13 +113,14 @@ export const BridgeDeepiPromptInput = React.forwardRef<DeepiPromptInputHandle, B
 );
 
 interface BridgeScrollAlertsProps {
-  onPermissionSelect: (reply: 'once' | 'always' | 'reject', message?: string) => void;
+  /** SPEC S0-1: 显式回传 requestId + originRole 用于定向 respondPermissionForRequest() */
+  onPermissionSelect: (requestId: string, originRole: PermissionOriginRole, reply: 'once' | 'always' | 'reject', message?: string) => void;
   onQuestionReply: (requestId: string, answers: string[][]) => void;
   onQuestionReject: (requestId: string) => void;
   legacy?: {
     warnings: string[];
     error: string | null;
-    permissionPrompt: PermissionRequest | null;
+    permissionPrompt: TuiPermissionPrompt | null;
     questionPrompt: QuestionRequest | null;
   };
 }

@@ -1,4 +1,19 @@
 import type { ChatMessage, ReasonixEngine, QuestionRequest, PermissionRequest, PermissionReply, LoopEvent } from '@covalo/core';
+
+/**
+ * SPEC S0-1: permission 请求来源角色。
+ * - main: 单 engine 模式（无 dualRuntime）
+ * - worker / supervisor: dualRuntime 模式下对应角色 engine 发起
+ */
+export type PermissionOriginRole = 'main' | 'worker' | 'supervisor';
+
+/**
+ * SPEC S0-1: TUI 层 permission prompt 扩展 originRole，
+ * 用于定向 respondPermissionForRequest()，避免广播误消费。
+ */
+export interface TuiPermissionPrompt extends PermissionRequest {
+  originRole: PermissionOriginRole;
+}
 import type { AgentRole } from '@covalo/core/agent-profile/types.js';
 import type { WorkflowMode } from '@covalo/core/dual-agent-runtime/types.js';
 import type { DualAgentRuntime } from '@covalo/core/dual-agent-runtime/dual-runtime.js';
@@ -66,7 +81,7 @@ export interface BridgeState {
   contextUsage: number;
   warnings: string[];
   error: string | null;
-  permissionPrompt: PermissionRequest | null;
+  permissionPrompt: TuiPermissionPrompt | null;
   questionPrompt: QuestionRequest | null;
   reasoningActive: boolean;
 }
@@ -211,7 +226,7 @@ export function createBridge(
     options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
   ) => Promise<string>;
   cancel: () => void;
-  respondPermission: (reply: PermissionReply, message?: string) => void;
+  respondPermission: (requestId: string, originRole: PermissionOriginRole, reply: PermissionReply, message?: string) => void;
   respondQuestion: (requestId: string, answers: string[][]) => void;
   rejectQuestion: (requestId: string) => void;
   /** Run a workflow goal through the WorkflowCoordinator */
@@ -873,6 +888,10 @@ export function createBridge(
             break;
 
           case 'permission_ask': {
+            // SPEC S0-1: 推断 originRole 用于定向 respondPermissionForRequest()
+            const originRole: PermissionOriginRole = dualRuntime
+              ? (activeOutputRole === 'supervisor' ? 'supervisor' : 'worker')
+              : 'main';
             // Parse permission request from event metadata
             const requestId = event.metadata?.requestId as string | undefined;
             const sessionId = event.metadata?.sessionId as string | undefined;
@@ -884,7 +903,7 @@ export function createBridge(
             const parentSessionId = event.metadata?.parentSessionId as string | undefined;
 
             if (requestId && sessionId && permission) {
-              const permissionRequest: PermissionRequest = {
+              const permissionRequest: TuiPermissionPrompt = {
                 id: requestId,
                 sessionId,
                 permission,
@@ -893,13 +912,14 @@ export function createBridge(
                 metadata: metadata ?? {},
                 tool: tool ?? { toolCallId: '', toolName: event.toolName ?? 'unknown' },
                 parentSessionId,
+                originRole,
               };
               commitBridge(() => ({ permissionPrompt: permissionRequest }));
             } else {
-              // Fallback for legacy permission events
+              // Fallback for legacy permission events (无 requestId)
               let args: Record<string, unknown> = {};
               try { args = JSON.parse(event.content ?? '{}'); } catch {}
-              const fallbackRequest: PermissionRequest = {
+              const fallbackRequest: TuiPermissionPrompt = {
                 id: `perm_${Date.now().toString(36)}`,
                 sessionId: '',
                 permission: event.toolName ?? 'unknown',
@@ -907,6 +927,7 @@ export function createBridge(
                 always: [],
                 metadata: args,
                 tool: { toolCallId: '', toolName: event.toolName ?? 'unknown' },
+                originRole,
               };
               commitBridge(() => ({ permissionPrompt: fallbackRequest }));
             }
@@ -1020,12 +1041,40 @@ export function createBridge(
     engine.interrupt();
   };
 
-  const respondPermission = (reply: PermissionReply, message?: string) => {
+  /**
+   * SPEC S0-1: 定向响应权限请求。
+   * - 根据 originRole 路由到发起请求的 engine，避免广播误消费。
+   * - 仅当 dualRuntime 不存在时（legacy 单 engine 模式），fallback 到 engine.respondPermission()。
+   * - dualRuntime 存在但未匹配到 pending 时，记录 warning 但不广播。
+   */
+  const respondPermission = (requestId: string, originRole: PermissionOriginRole, reply: PermissionReply, _message?: string) => {
     const allow = reply === 'once' || reply === 'always';
     const alwaysAllow = reply === 'always';
-    engine.respondPermission(allow, alwaysAllow);
-    dualRuntime?.getWorker().getEngine().respondPermission(allow, alwaysAllow);
-    dualRuntime?.getSupervisor().getEngine().respondPermission(allow, alwaysAllow);
+    let handled = false;
+    switch (originRole) {
+      case 'worker':
+        handled = dualRuntime?.getWorker().getEngine().respondPermissionForRequest(requestId, allow, alwaysAllow) ?? false;
+        break;
+      case 'supervisor':
+        handled = dualRuntime?.getSupervisor().getEngine().respondPermissionForRequest(requestId, allow, alwaysAllow) ?? false;
+        break;
+      case 'main':
+      default:
+        if (!dualRuntime) {
+          // Legacy 单 engine 模式：fallback 到 respondPermission，消费任意 pending
+          engine.respondPermission(allow, alwaysAllow);
+          handled = true;
+        } else {
+          handled = engine.respondPermissionForRequest(requestId, allow, alwaysAllow);
+        }
+        break;
+    }
+    if (!handled && dualRuntime) {
+      // SPEC S0-1: dualRuntime 存在但未匹配到 pending — 不广播，记录 warning
+      // （理论上 cancel 已经清理，这里只是防御性日志）
+      // eslint-disable-next-line no-console
+      console.warn(`[bridge] respondPermission: no pending permission found for requestId=${requestId} originRole=${originRole}`);
+    }
     commitBridge(() => ({ permissionPrompt: null }));
   };
 
@@ -1412,6 +1461,10 @@ export function createBridge(
               break;
             }
             case 'permission_ask': {
+              // SPEC S0-1: 推断 originRole 用于定向 respondPermissionForRequest()
+              const originRole: PermissionOriginRole = dualRuntime
+                ? (activeRole === 'supervisor' ? 'supervisor' : 'worker')
+                : 'main';
               const requestId = loopEvent.metadata?.requestId as string | undefined;
               const sessionId = loopEvent.metadata?.sessionId as string | undefined;
               const permission = loopEvent.metadata?.permission as string | undefined;
@@ -1426,6 +1479,7 @@ export function createBridge(
                     metadata: loopEvent.metadata?.metadata as Record<string, unknown> ?? {},
                     tool: loopEvent.metadata?.tool as { toolCallId: string; toolName: string } ?? { toolCallId: '', toolName: loopEvent.toolName ?? 'unknown' },
                     parentSessionId: loopEvent.metadata?.parentSessionId as string | undefined,
+                    originRole,
                   },
                 }));
               }

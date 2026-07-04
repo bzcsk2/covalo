@@ -162,8 +162,16 @@ export class ReasonixEngine implements CoreEngine {
   /** SPEC-G: 上次 build prefix 时的 system prompt 文本，用于检测 prompt 变化 */
   private lastSystemPromptKey = ""
 
-  /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve */
-  private pendingPermission: { resolve: (v: boolean) => void; toolName: string; args: Record<string, unknown> } | null = null
+  /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve。
+   * SPEC S0-1: 改为 request-id 化的 Map，避免跨 engine 广播误消费。
+   * key = requestId，value = pending entry（含 resolve、toolName、args）。
+   */
+  private pendingPermissions = new Map<string, {
+    id: string;
+    resolve: (v: boolean) => void;
+    toolName: string;
+    args: Record<string, unknown>;
+  }>()
 
   /** LIFE-01: shutdown flag for idempotent cleanup */
   private _shutDown = false
@@ -239,9 +247,16 @@ export class ReasonixEngine implements CoreEngine {
   private isSubmitting = false
   private static readonly MAX_PENDING_INSTRUCTIONS = 10
 
-  /** 流式执行器内部调用，等待 TUI 返回确认结果 */
-  private requestPermission = async (toolName: string, args: Record<string, unknown>): Promise<boolean> => {
-    return new Promise(resolve => { this.pendingPermission = { resolve, toolName, args } })
+  /** 流式执行器内部调用，等待 TUI 返回确认结果。
+   * SPEC S0-1: 返回 { requestId, promise }，requestId 用于 permission_ask 事件 metadata
+   * 和定向 respondPermissionForRequest()。
+   */
+  private requestPermission = (toolName: string, args: Record<string, unknown>): { requestId: string; promise: Promise<boolean> } => {
+    const requestId = `perm_${randomUUID()}`
+    const promise = new Promise<boolean>(resolve => {
+      this.pendingPermissions.set(requestId, { id: requestId, resolve, toolName, args })
+    })
+    return { requestId, promise }
   }
 
   /** TUI-FIX-10: 设置编排事件发射回调 */
@@ -249,14 +264,41 @@ export class ReasonixEngine implements CoreEngine {
     this.emitOrchestration = handler
   }
 
-  /** TUI 调用以响应权限确认提示 */
-  respondPermission(allow: boolean, alwaysAllow?: boolean): void {
-    if (this.pendingPermission) {
+  /** TUI 调用以定向响应某个 permission 请求。
+   * SPEC S0-1: 按 requestId 查找 pending entry，避免广播误消费。
+   * 返回 true 表示找到并 resolve；返回 false 表示未找到。
+   */
+  respondPermissionForRequest(requestId: string, allow: boolean, alwaysAllow?: boolean): boolean {
+    const entry = this.pendingPermissions.get(requestId)
+    if (entry) {
       if (allow && alwaysAllow) {
-        this.permissionEngine.addAllowRule({ toolName: this.pendingPermission.toolName })
+        this.permissionEngine.addAllowRule({ toolName: entry.toolName })
       }
-      this.pendingPermission.resolve(allow)
-      this.pendingPermission = null
+      this.pendingPermissions.delete(requestId)
+      entry.resolve(allow)
+      return true
+    }
+    // 递归 child engines 查找（保持与旧广播语义兼容的定向查找）
+    for (const child of this.activeChildEngines) {
+      if (child.respondPermissionForRequest(requestId, allow, alwaysAllow)) return true
+    }
+    return false
+  }
+
+  /** TUI 调用以响应权限确认提示（legacy 兼容路径）。
+   * SPEC S0-1: 推荐使用 respondPermissionForRequest(requestId, ...)。
+   * 此方法消费 Map 中任意一个 pending（用于无 dualRuntime 的 legacy 场景或 cancel 中断）。
+   */
+  respondPermission(allow: boolean, alwaysAllow?: boolean): void {
+    // 消费任意一个 pending entry（取第一个插入的）
+    const firstKey = this.pendingPermissions.keys().next().value
+    if (firstKey) {
+      const entry = this.pendingPermissions.get(firstKey)!
+      if (allow && alwaysAllow) {
+        this.permissionEngine.addAllowRule({ toolName: entry.toolName })
+      }
+      this.pendingPermissions.delete(firstKey)
+      entry.resolve(allow)
       return
     }
     for (const child of this.activeChildEngines) child.respondPermission(allow, alwaysAllow)

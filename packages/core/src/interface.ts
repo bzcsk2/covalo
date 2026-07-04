@@ -189,6 +189,8 @@ export interface CoreEngine {
   switchAgent(agentName: string): string
   getAgentName(): string
   respondPermission(allow: boolean, alwaysAllow?: boolean): void
+  /** SPEC S0-1: 按 requestId 定向响应权限请求，避免广播误消费 */
+  respondPermissionForRequest(requestId: string, allow: boolean, alwaysAllow?: boolean): boolean
   enqueueInstruction(instruction: string): EnqueueInstructionResult
   respondQuestion(requestId: string, answers: QuestionAnswer[]): void
   rejectQuestion(requestId: string): void

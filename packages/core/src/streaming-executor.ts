@@ -19,7 +19,7 @@ export class StreamingToolExecutor {
   private cwd: string
   private permissionEngine?: PermissionEngine
   private hookManager?: HookManager
-  private requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
+  private requestPermission?: (toolName: string, args: Record<string, unknown>) => { requestId: string; promise: Promise<boolean> }
   private delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
   private switchAgent?: (name: string) => string
   private spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
@@ -43,7 +43,7 @@ export class StreamingToolExecutor {
     cwd?: string,
     permissionEngine?: PermissionEngine,
     hookManager?: HookManager,
-    requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>,
+    requestPermission?: (toolName: string, args: Record<string, unknown>) => { requestId: string; promise: Promise<boolean> },
     delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>,
     switchAgent?: (name: string) => string,
     spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>,
@@ -119,8 +119,21 @@ export class StreamingToolExecutor {
           continue
         }
         if (permResult === "ask") {
-          const permPromise = exec.requestPermission!(tc.function.name, argsResult.args)
-          yield { role: "permission_ask", toolName: tc.function.name, content: JSON.stringify(argsResult.args) }
+          const { requestId, promise: permPromise } = exec.requestPermission!(tc.function.name, argsResult.args)
+          yield {
+            role: "permission_ask",
+            toolName: tc.function.name,
+            content: JSON.stringify(argsResult.args),
+            metadata: {
+              requestId,
+              sessionId: exec.sessionId,
+              permission: tc.function.name,
+              patterns: [],
+              always: [],
+              metadata: argsResult.args,
+              tool: { toolCallId: tc.id, toolName: tc.function.name },
+            },
+          }
           const allowed = await permPromise
           if (!allowed) {
             const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
@@ -530,8 +543,21 @@ export class StreamingToolExecutor {
       return
     }
     if (permResult === "ask") {
-      const permPromise = this.requestPermission!(tc.function.name, argsResult.args) // create Promise before yielding
-      yield { role: "permission_ask", toolName: tc.function.name, content: JSON.stringify(argsResult.args) }
+      const { requestId, promise: permPromise } = this.requestPermission!(tc.function.name, argsResult.args) // create Promise before yielding
+      yield {
+        role: "permission_ask",
+        toolName: tc.function.name,
+        content: JSON.stringify(argsResult.args),
+        metadata: {
+          requestId,
+          sessionId: this.sessionId,
+          permission: tc.function.name,
+          patterns: [],
+          always: [],
+          metadata: argsResult.args,
+          tool: { toolCallId: tc.id, toolName: tc.function.name },
+        },
+      }
       const allowed = await permPromise
       if (!allowed) {
         const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)

@@ -1023,36 +1023,19 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           await configManager.reload();
           appendMessage({ role: 'assistant' as const, content: t().configReloaded });
         } else if (command.subcommand === 'set' && command.path && command.value) {
-          // 解析路径: workflow.max_rounds -> { section: 'workflow', key: 'max_rounds' }
-          const dotIndex = command.path.indexOf('.');
-          if (dotIndex === -1) {
-            appendMessage({ role: 'assistant' as const, content: t().configError('Invalid format. Use: /config <section>.<key> <value>') });
-          } else {
-            const section = command.path.slice(0, dotIndex);
-            const key = command.path.slice(dotIndex + 1);
-            const value = command.value;
-            try {
-              const config = configManager.get();
-              const sectionValue = config[section as keyof typeof config];
-              if (sectionValue === undefined || sectionValue === null) {
-                appendMessage({ role: 'assistant' as const, content: t().configError(`Unknown section: ${section}`) });
-              } else if (typeof sectionValue !== 'object' || Array.isArray(sectionValue)) {
-                appendMessage({ role: 'assistant' as const, content: t().configError(`Section '${section}' is not an object`) });
-              } else {
-                // 类型转换
-                let parsed: unknown = value;
-                if (value === 'true') parsed = true;
-                else if (value === 'false') parsed = false;
-                else if (!isNaN(Number(value))) parsed = Number(value);
-                
-                (sectionValue as Record<string, unknown>)[key] = parsed;
-                configManager.update(config, 'tui');
-                await configManager.saveProjectConfig();
-                appendMessage({ role: 'assistant' as const, content: t().configSet(command.path, value) });
-              }
-            } catch (e) {
-              appendMessage({ role: 'assistant' as const, content: t().configError(String(e)) });
+          // SPEC S0-2: 安全化 /config set —— 白名单 + schema 校验 + 敏感路径拒绝 + 禁止原地 mutate
+          try {
+            const { applySafeConfigSet } = await import('./config-command.js');
+            const result = applySafeConfigSet(configManager.get(), command.path, command.value);
+            if (!result.ok) {
+              appendMessage({ role: 'assistant' as const, content: t().configError(result.reason) });
+            } else {
+              configManager.update(result.config, 'tui');
+              await configManager.saveProjectConfig();
+              appendMessage({ role: 'assistant' as const, content: t().configSet(command.path, String(result.normalizedValue)) });
             }
+          } catch (e) {
+            appendMessage({ role: 'assistant' as const, content: t().configError(String(e)) });
           }
         } else if (command.path) {
           // 显示某个 section 的配置
@@ -1356,10 +1339,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     setShowSessionPicker(false);
   }, []);
 
-  /** 权限请求回调：向引擎传递用户的允许/拒绝决策 */
-  const handlePermissionSelect = useCallback((reply: 'once' | 'always' | 'reject', message?: string) => {
-    bridgeRef.current.respondPermission(reply, message);
-  }, []);
+  /** SPEC S0-1: 权限请求回调 — 显式回传 requestId + originRole 用于定向响应 */
+  const handlePermissionSelect = useCallback(
+    (requestId: string, originRole: import('./bridge.js').PermissionOriginRole, reply: 'once' | 'always' | 'reject', message?: string) => {
+      bridgeRef.current.respondPermission(requestId, originRole, reply, message);
+    },
+    [],
+  );
 
   const handleQuestionReply = useCallback((requestId: string, answers: string[][]) => {
     bridgeRef.current.respondQuestion(requestId, answers);

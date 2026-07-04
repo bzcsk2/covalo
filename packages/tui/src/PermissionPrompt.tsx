@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { Box, Text, useInput } from '@covalo/ink';
-import type { PermissionRequest, PermissionReply } from '@covalo/core';
+import type { PermissionReply } from '@covalo/core';
+import type { TuiPermissionPrompt } from './bridge.js';
 import { t } from './i18n/index.js';
 
 interface PermissionPromptProps {
-  request: PermissionRequest;
-  onSelect: (reply: PermissionReply, message?: string) => void;
+  /** SPEC S0-1: request 类型扩展为 TuiPermissionPrompt，包含 originRole */
+  request: TuiPermissionPrompt;
+  /** SPEC S0-1: onSelect 显式回传 requestId + originRole，避免 closure 读旧 state */
+  onSelect: (requestId: string, originRole: TuiPermissionPrompt['originRole'], reply: PermissionReply, message?: string) => void;
 }
 
 type PermissionStage = "permission" | "always" | "reject";
@@ -75,15 +78,15 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
         if (!alive.current) return;
 
         if (opt.value === 'once') {
-          onSelect('once');
+          onSelect(request.id, request.originRole, 'once');
         } else if (opt.value === 'always') {
           setStage("always");
           setSelected(0);
         } else {
-          onSelect('reject');
+          onSelect(request.id, request.originRole, 'reject');
         }
       } else if (key.escape) {
-        if (alive.current) onSelect('reject');
+        if (alive.current) onSelect(request.id, request.originRole, 'reject');
       }
     } else if (stage === "always") {
       if (key.upArrow) {
@@ -95,7 +98,7 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
         if (!alive.current) return;
 
         if (opt.value === 'confirm') {
-          onSelect('always');
+          onSelect(request.id, request.originRole, 'always');
         } else {
           setStage("permission");
           setSelected(0);
@@ -115,7 +118,7 @@ export function PermissionPrompt({ request, onSelect }: PermissionPromptProps) {
         }
       } else if (key.return) {
         if (alive.current) {
-          onSelect('reject', rejectMessage || undefined);
+          onSelect(request.id, request.originRole, 'reject', rejectMessage || undefined);
         }
       }
     }

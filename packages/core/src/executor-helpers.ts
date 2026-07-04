@@ -50,7 +50,7 @@ export async function evaluatePermission(
   tools: Map<string, AgentTool>,
   permissionEngine?: PermissionEngine,
   hookManager?: HookManager,
-  requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>,
+  requestPermission?: (toolName: string, args: Record<string, unknown>) => { requestId: string; promise: Promise<boolean> },
   parsedArgs?: Record<string, unknown>,
 ): Promise<PermissionOutcome> {
   const handler = tools.get(tc.function.name)
