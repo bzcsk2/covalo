@@ -21,6 +21,9 @@ export const SENSITIVE_READ_PATTERNS = [
   /(^|\/|\\)\.netrc$/,
   /(^|\/|\\)\.htpasswd$/,
   /(^|\/|\\)token\.json$/,
+  // S1-3: 补齐 secret 模式（API provider 凭据目录）
+  /(^|\/|\\)\.openai\//,
+  /(^|\/|\\)\.anthropic\//,
 ]
 
 export const SENSITIVE_WRITE_PATTERNS = [
@@ -33,6 +36,14 @@ export const SENSITIVE_WRITE_PATTERNS = [
   /(^|\/|\\)pnpm-lock\.yaml$/,
   /(^|\/|\\)opencode\.jsonc?$/,
   /(^|\/|\\)\.opencode\//,
+  // S1-3: 治理文件模式 — 读允许，写/edit/apply_patch 需要拒绝或 ask
+  /(^|\/|\\)\.covalo_patches\//,
+  /(^|\/|\\)\.claude\//,
+  /(^|\/|\\)\.github\/workflows\//,
+  /(^|\/|\\)\.gitlab-ci\.yml$/,
+  /(^|\/|\\)Jenkinsfile$/,
+  /(^|\/|\\)composer\.lock$/,
+  /(^|\/|\\)Gemfile\.lock$/,
 ]
 
 export function isSensitive(path: string): boolean {

@@ -2,7 +2,7 @@ import type { ToolCall } from "./types.js"
 import type { LoopEvent } from "./interface.js"
 import type { ContextManager } from "./context/manager.js"
 import type { AsyncSessionWriter } from "./session.js"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { PendingInstruction } from "./loop.js"
 
 // ─── Tool Call ID Normalize ───
@@ -86,6 +86,73 @@ export function createDuplicateDetector(): DuplicateDetector {
         }
       }
       return { duplicate: false, blocked: false, count }
+    },
+  }
+}
+
+// ─── Repeated Tool-Failure Tracker ───
+
+/**
+ * S2-1: 按 {toolName, normalizedArgs, errorSignature} 追踪重复失败。
+ * 同一 signature 连续失败 N 次才报告 blocked=true，避免误伤调试流程
+ * （如：typecheck 失败 → 修复 → typecheck 又失败但参数或错误信息不同，不算重复）。
+ */
+export interface RepeatedFailureTracker {
+  record: (
+    toolName: string,
+    args: Record<string, unknown>,
+    errorContent: string,
+  ) => { count: number; threshold: number; blocked: boolean }
+  /** 成功调用时清除该 (toolName, args) 下所有失败签名的计数 */
+  clear: (toolName: string, args: Record<string, unknown>) => void
+}
+
+export const REPEATED_FAILURE_THRESHOLD = 3
+
+export function createRepeatedFailureTracker(): RepeatedFailureTracker {
+  // fullKey → count
+  const counts = new Map<string, number>()
+  // argsHashPrefix(16 char) → Set<fullKey>
+  const argsIndex = new Map<string, Set<string>>()
+
+  function argsHashPrefix(toolName: string, args: Record<string, unknown>): string {
+    return createHash("sha256")
+      .update(toolName)
+      .update(JSON.stringify(args))
+      .digest("hex")
+      .slice(0, 16)
+  }
+
+  function fullKey(toolName: string, args: Record<string, unknown>, errorContent: string): string {
+    return createHash("sha256")
+      .update(toolName)
+      .update(JSON.stringify(args))
+      .update(errorContent.slice(0, 300))
+      .digest("hex")
+      .slice(0, 16)
+  }
+
+  return {
+    record(toolName, args, errorContent) {
+      const k = fullKey(toolName, args, errorContent)
+      const count = (counts.get(k) ?? 0) + 1
+      counts.set(k, count)
+      const ak = argsHashPrefix(toolName, args)
+      if (!argsIndex.has(ak)) argsIndex.set(ak, new Set())
+      argsIndex.get(ak)!.add(k)
+      return {
+        count,
+        threshold: REPEATED_FAILURE_THRESHOLD,
+        blocked: count >= REPEATED_FAILURE_THRESHOLD,
+      }
+    },
+    clear(toolName, args) {
+      const ak = argsHashPrefix(toolName, args)
+      const keys = argsIndex.get(ak)
+      if (keys) {
+        for (const k of keys) counts.delete(k)
+        argsIndex.delete(ak)
+      }
     },
   }
 }

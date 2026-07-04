@@ -87,6 +87,109 @@ describe("matchDeniedShellPattern", () => {
   })
 })
 
+// ============================================================
+// S1-4: Shell deny 模式补全 — 提权扩展 / rm 高危目标 / PowerShell 模式
+// ============================================================
+describe("S1-4: shell deny pattern extensions", () => {
+  // ── POSIX: PRIVILEGE_ESCALATION 扩展（su/doas/pkexec/runuser/gosu/setpriv）──
+  it("denies su privilege escalation", () => {
+    expect(matchDeniedShellPattern("su root", "bash")).not.toBeNull()
+  })
+
+  it("denies doas", () => {
+    expect(matchDeniedShellPattern("doas /bin/sh", "bash")).not.toBeNull()
+  })
+
+  it("denies pkexec", () => {
+    expect(matchDeniedShellPattern("pkexec bash", "bash")).not.toBeNull()
+  })
+
+  it("denies runuser", () => {
+    expect(matchDeniedShellPattern("runuser -u root -- ls", "bash")).not.toBeNull()
+  })
+
+  it("denies gosu", () => {
+    expect(matchDeniedShellPattern("gosu root bash", "bash")).not.toBeNull()
+  })
+
+  it("denies setpriv", () => {
+    expect(matchDeniedShellPattern("setpriv --reuid 0 --regid 0 bash", "bash")).not.toBeNull()
+  })
+
+  // ── POSIX: rm 高危目标（~、$HOME、$PWD）──
+  it("denies rm -rf ~ (home shortcut)", () => {
+    expect(matchDeniedShellPattern("rm -rf ~", "bash")).not.toBeNull()
+  })
+
+  it("denies rm -rf $HOME", () => {
+    expect(matchDeniedShellPattern("rm -rf $HOME", "bash")).not.toBeNull()
+  })
+
+  it("denies rm -rf $PWD", () => {
+    expect(matchDeniedShellPattern("rm -rf $PWD", "bash")).not.toBeNull()
+  })
+
+  it("denies rm --recursive ~ variant", () => {
+    expect(matchDeniedShellPattern("rm --recursive ~", "bash")).not.toBeNull()
+  })
+
+  // ── POSIX: 业务目录不被误拦（关键回归保护）──
+  it("does NOT deny rm -rf src/ (business directory)", () => {
+    expect(matchDeniedShellPattern("rm -rf src/", "bash")).toBeNull()
+  })
+
+  it("does NOT deny rm -rf dist/ (business directory)", () => {
+    expect(matchDeniedShellPattern("rm -rf dist/", "bash")).toBeNull()
+  })
+
+  it("does NOT deny rm -rf node_modules/foo (business path)", () => {
+    expect(matchDeniedShellPattern("rm -rf node_modules/foo", "bash")).toBeNull()
+  })
+
+  // ── PowerShell: Remove-Item / rm / del + -Recurse/-Force/-rf + 根路径 ──
+  it("denies PowerShell Remove-Item -Recurse -Force C:\\", () => {
+    expect(matchDeniedShellPattern("Remove-Item -Recurse -Force C:\\", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell rm -rf /", () => {
+    expect(matchDeniedShellPattern("rm -rf /", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell del -Recurse ~", () => {
+    expect(matchDeniedShellPattern("del -Recurse ~", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell Remove-Item -LiteralPath C:\\Windows", () => {
+    expect(matchDeniedShellPattern('Remove-Item -LiteralPath C:\\Windows', "powershell")).not.toBeNull()
+  })
+
+  // ── PowerShell: gsudo / Start-Process -Verb ──
+  it("denies PowerShell gsudo", () => {
+    expect(matchDeniedShellPattern("gsudo whoami", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell Start-Process -Verb RunAs", () => {
+    expect(matchDeniedShellPattern("Start-Process cmd -Verb RunAs", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell Start-Process -Verb Elevated", () => {
+    expect(matchDeniedShellPattern("Start-Process powershell -Verb Elevated", "powershell")).not.toBeNull()
+  })
+
+  // ── PowerShell: 其他危险模式 ──
+  it("denies PowerShell Format-Volume", () => {
+    expect(matchDeniedShellPattern("Format-Volume -DriveLetter C", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell Clear-Disk", () => {
+    expect(matchDeniedShellPattern("Clear-Disk -Number 0", "powershell")).not.toBeNull()
+  })
+
+  it("denies PowerShell Set-ExecutionPolicy", () => {
+    expect(matchDeniedShellPattern("Set-ExecutionPolicy Unrestricted", "powershell")).not.toBeNull()
+  })
+})
+
 describe("matchSensitivePathInCommand", () => {
   it("cat .env is rejected", () => {
     expect(matchSensitivePathInCommand("cat .env")).toBe(".env")

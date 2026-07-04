@@ -12,6 +12,7 @@ import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 import {
   createToolCallIdNormalizer,
   createDuplicateDetector,
+  createRepeatedFailureTracker,
   injectPendingInstruction,
 } from "./loop-helpers.js"
 import { EarlyStopDetector } from "./early-stop.js"
@@ -172,6 +173,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   let turnCount = 0
   let consecutiveErrors = 0
   const recentToolCalls = createDuplicateDetector()
+  // S2-1: 按 {toolName, args, errorContent} 追踪重复失败；同签名连续 3 次报告 blocked
+  const repeatedFailures = createRepeatedFailureTracker()
   // L8: per-loop 独立的 tool call ID normalizer 实例，避免 subagent 并发时
   // 共享模块级全局 seq 导致 per-turn reset 语义被破坏
   const toolCallIdNormalizer = createToolCallIdNormalizer()
@@ -896,6 +899,34 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                             toolEvent.content,
                           )
                         }
+                      }
+                      // S2-1: 重复失败签名追踪
+                      // 同 {toolName, args, errorContent} 连续 3 次才报告 blocked
+                      // 不同错误或修复后的新错误不算重复
+                      if (isErr) {
+                        const failure = repeatedFailures.record(
+                          toolEvent.toolName,
+                          argsResult.args,
+                          toolEvent.content ?? "",
+                        )
+                        if (failure.blocked) {
+                          yield {
+                            role: "warning",
+                            content: `Repeated tool failure: "${toolEvent.toolName}" failed ${failure.count} times with identical arguments and error. Stop retrying; re-read context, adjust the plan, or report the blocker.`,
+                            severity: "warning" as const,
+                          }
+                          sessionWriter?.enqueue({
+                            ts: Date.now(),
+                            type: "event",
+                            payload: {
+                              role: "warning",
+                              content: `repeated_failure_blocked: ${toolEvent.toolName}`,
+                            },
+                          })
+                        }
+                      } else {
+                        // 成功调用：清除该 (toolName, args) 下所有失败签名的计数
+                        repeatedFailures.clear(toolEvent.toolName, argsResult.args)
                       }
                     }
                   }

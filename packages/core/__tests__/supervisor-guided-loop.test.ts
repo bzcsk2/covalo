@@ -124,7 +124,8 @@ describe("buildSupervisorRequestMessages", () => {
       attemptedStrategies: [],
     })
     expect(messages.length).toBe(2)
-    expect(messages[1].content).toContain("EvidenceBundle:")
+    // S1-1: EvidenceBundle 用 <EVIDENCE_DATA> 包裹作为不可信数据
+    expect(messages[1].content).toContain("<EVIDENCE_DATA>")
     expect(messages[1].content).toContain("fix test")
   })
 })
@@ -321,5 +322,166 @@ describe("buildSupervisorDegradedMessage", () => {
     })
     expect(msg.length).toBeLessThan(250)
     expect(msg).toContain("Supervisor degraded")
+  })
+})
+
+// ============================================================
+// S2-4: consecutiveDegradedCount 节流 — 达阈值后跳过 supervisor 请求
+// ============================================================
+describe("S2-4: consecutiveDegradedCount throttle", () => {
+  it("达到 MAX_CONSECUTIVE_DEGRADED 时跳过 supervisor 请求", async () => {
+    const state = createSupervisorGuidanceState()
+    state.recentFailures = [{ signature: "sig1", count: 5, lastError: "boom" }]
+    state.consecutiveDegradedCount = 3 // 已达阈值
+
+    const out = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: ENABLED_POOL,
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: (id) => mockTarget(id),
+        createClient: () => mockClient(JSON.stringify(validAdvice())),
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+
+    // 应直接跳过，未触发也未注入
+    expect(out.triggered).toBe(false)
+    expect(out.injected).toBe(false)
+    expect(out.degradedMessage).toContain("skipped")
+    expect(out.degradedMessage).toContain("3")
+  })
+
+  it("失败累加 consecutiveDegradedCount，达阈值后下一次跳过", async () => {
+    const state = createSupervisorGuidanceState()
+    state.recentFailures = [{ signature: "sig1", count: 5, lastError: "boom" }]
+
+    // 第一次失败 — count 从 0 升到 1
+    const out1 = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: DEFAULT_SUPERVISOR_POOL, // 无可用候选，会失败
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: () => null,
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+    expect(out1.triggered).toBe(true)
+    expect(out1.injected).toBe(false)
+    expect(state.consecutiveDegradedCount).toBe(1)
+
+    // 第二次失败 — count 升到 2
+    state.recentFailures = [{ signature: "sig2", count: 5, lastError: "boom2" }]
+    const out2 = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: DEFAULT_SUPERVISOR_POOL,
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: () => null,
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+    expect(out2.triggered).toBe(true)
+    expect(state.consecutiveDegradedCount).toBe(2)
+
+    // 第三次失败 — count 升到 3（仍未节流，因为 2 < 3）
+    state.recentFailures = [{ signature: "sig3", count: 5, lastError: "boom3" }]
+    const out3 = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: DEFAULT_SUPERVISOR_POOL,
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: () => null,
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+    expect(out3.triggered).toBe(true)
+    expect(state.consecutiveDegradedCount).toBe(3)
+
+    // 第四次 — count=3 已达阈值，应跳过
+    state.recentFailures = [{ signature: "sig4", count: 5, lastError: "boom4" }]
+    const out4 = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: DEFAULT_SUPERVISOR_POOL,
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: () => null,
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+    expect(out4.triggered).toBe(false)
+    expect(out4.degradedMessage).toContain("skipped")
+    // count 仍为 3（因为 evaluate 早期返回，未进入累加分支）
+    expect(state.consecutiveDegradedCount).toBe(3)
+  })
+
+  it("成功请求后将 consecutiveDegradedCount 归零", async () => {
+    const state = createSupervisorGuidanceState()
+    state.recentFailures = [{ signature: "sig1", count: 5, lastError: "boom" }]
+    state.consecutiveDegradedCount = 2 // 之前已经失败过 2 次
+
+    const out = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: ENABLED_POOL, // 有可用候选，会成功
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: (id) => mockTarget(id),
+        createClient: () => mockClient(JSON.stringify(validAdvice())),
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+
+    expect(out.triggered).toBe(true)
+    expect(out.injected).toBe(true)
+    expect(state.consecutiveDegradedCount).toBe(0)
+  })
+
+  it("consecutiveDegradedCount 未达阈值时正常请求", async () => {
+    const state = createSupervisorGuidanceState()
+    state.recentFailures = [{ signature: "sig1", count: 5, lastError: "boom" }]
+    state.consecutiveDegradedCount = 2 // 接近但未达阈值 3
+
+    const out = await evaluateAndRequestSupervisorAdvice(
+      {
+        pool: ENABLED_POOL,
+        budget: new SupervisorBudgetTracker(),
+        state,
+        resolveTarget: (id) => mockTarget(id),
+        createClient: () => mockClient(JSON.stringify(validAdvice())),
+      },
+      buildSupervisorTriggerContext(state, {
+        recentFailures: state.recentFailures,
+        supervisorConfigured: true,
+      }),
+      mockLedger(),
+    )
+
+    // 应正常触发（未被节流）
+    expect(out.triggered).toBe(true)
+    expect(out.injected).toBe(true)
   })
 })

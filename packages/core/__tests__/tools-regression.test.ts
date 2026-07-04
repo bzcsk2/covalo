@@ -43,32 +43,33 @@ describe("write_file tool (B2: new tool)", () => {
     expect(out.size).toBe(11)
   })
 
+  // S1-3: 写入敏感路径返回 "Writing to protected file is denied"（区分 read 的 "sensitive"）
   it("should reject sensitive paths like api-key", async () => {
     const tool = createWriteFileTool()
     const result = await tool.execute({ path: "api-key", content: "sk-xxx" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
-    expect(JSON.parse(result.content as string).error).toContain("sensitive")
+    expect(JSON.parse(result.content as string).error).toContain("protected")
   })
 
   it("should reject sensitive paths like .env", async () => {
     const tool = createWriteFileTool()
     const result = await tool.execute({ path: ".env", content: "SECRET=1" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
-    expect(JSON.parse(result.content as string).error).toContain("sensitive")
+    expect(JSON.parse(result.content as string).error).toContain("protected")
   })
 
   it("should reject sensitive paths containing .git/", async () => {
     const tool = createWriteFileTool()
     const result = await tool.execute({ path: ".git/config", content: "[core]" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
-    expect(JSON.parse(result.content as string).error).toContain("sensitive")
+    expect(JSON.parse(result.content as string).error).toContain("protected")
   })
 
   it("should reject sensitive paths like known_hosts", async () => {
     const tool = createWriteFileTool()
     const result = await tool.execute({ path: "known_hosts", content: "github.com" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
-    expect(JSON.parse(result.content as string).error).toContain("sensitive")
+    expect(JSON.parse(result.content as string).error).toContain("protected")
   })
 
   it("should reject missing path argument", async () => {
