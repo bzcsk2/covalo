@@ -74,6 +74,12 @@ export interface SandboxResult {
   stderr: string;
   exitCode: number | null;
   timedOut: boolean;
+  /**
+   * Tier 1c: 实际执行命令的 shell（如 "/bin/sh"、"C:\Program Files\Git\bin\bash.exe"、"cmd.exe"）。
+   * 用于 eval report 追溯，避免 "cmd.exe 跑出错误答案却当正确分数" 的隐患。
+   * soft-workspace provider 总是填充此字段；其他 provider 可选填充。
+   */
+  shellUsed?: string;
 }
 
 export interface PreflightCheck {

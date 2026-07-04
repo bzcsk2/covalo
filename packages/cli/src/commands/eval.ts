@@ -23,22 +23,47 @@ interface ToolCheck {
   expected?: string
 }
 
-async function checkTool(name: string, expected?: string): Promise<ToolCheck> {
+/**
+ * Tier 1a: 平台感知的工具探测。
+ *
+ * 之前 `command -v ${name} 2>/dev/null` 是 POSIX shell 内建命令，Windows 下 spawnSync
+ * 默认走 cmd.exe，根本不认识 `command -v`，导致 `covalo eval doctor` 在 Windows 上
+ * 全部报 missing — 即便用户机器上装了 node/bun/git。
+ *
+ * 现在：
+ * - POSIX 用 `command -v`，stderr 重定向到 /dev/null
+ * - Windows 用 `where`（cmd.exe 内建），stderr 重定向到 nul
+ * - Windows 上额外尝试 `${name}.exe` 后缀（where 通常自动处理，显式再试一次以兼容少数情况）
+ */
+function findOnPath(name: string): string | null {
+  const isWin = process.platform === "win32"
+  const cmd = isWin ? `where ${name} 2>nul` : `command -v ${name} 2>/dev/null`
   try {
-    const out = execSync(`command -v ${name} 2>/dev/null`, { encoding: "utf-8", stdio: "pipe" }).toString().trim()
-    if (!out) return { name, found: false, source: "missing" }
-    let version = ""
-    try {
-      const v = execSync(`${name} --version 2>/dev/null`, { encoding: "utf-8", stdio: "pipe" }).toString().trim()
-      version = v.split("\n")[0] ?? ""
-    } catch {}
-    return { name, found: true, version: version || "ok", path: out, source: "host", expected }
+    const out = execSync(cmd, { encoding: "utf-8", stdio: "pipe" }).toString().trim().split(/\r?\n/)[0]
+    return out || null
   } catch {
-    return { name, found: false, source: "missing", expected }
+    return null
   }
 }
 
+async function checkTool(name: string, expected?: string): Promise<ToolCheck> {
+  const isWin = process.platform === "win32"
+  const probeName = isWin ? `${name}.exe` : name
+  const out = findOnPath(probeName) ?? findOnPath(name)
+  if (!out) return { name, found: false, source: "missing", expected }
+  let version = ""
+  try {
+    const v = execSync(`"${out}" --version`, { encoding: "utf-8", stdio: "pipe" }).toString().trim()
+    version = v.split("\n")[0] ?? ""
+  } catch {}
+  return { name, found: true, version: version || "ok", path: out, source: "host", expected }
+}
+
 function checkBwrap(): ToolCheck {
+  // Tier 1a: Windows 下 bwrap 物理上不可用，短路返回 missing，避免走 Unix 路径检查误导。
+  if (process.platform === "win32") {
+    return { name: "bwrap", found: false, source: "missing", expected: "Linux only (or WSL bridge)" }
+  }
   const paths = ["/usr/bin/bwrap", "/usr/local/bin/bwrap", join(homedir(), ".covalo", "bin", "bwrap")]
   for (const p of paths) {
     if (existsSync(p)) {
