@@ -85,6 +85,7 @@ export interface EffectiveHarnessPolicy {
 
   readBeforeWrite: "block" | "warn" | "off"
   textToolSalvage: "always" | "on-native-failure" | "off"
+  /** "enforce": hard-block repeated failing actions | "recover": observe counts and trigger mode recovery, do not block current batch | "observe": disabled / diagnostic only */
   branchBudget: "enforce" | "recover" | "observe"
   checkpoint: "frequent" | "safe-point" | "minimal"
   verification: "block" | "require-or-waive" | "warn"
@@ -98,5 +99,6 @@ export interface EffectiveHarnessPolicy {
 /** 项目级 harness 配置（.covalo/harness.json） */
 export interface ProjectHarnessConfig {
   strictness?: HarnessStrictness
+  /** 按模型名子串匹配覆盖严格度。例如 "claude" 匹配所有含 claude 的模型名。 */
   modelOverrides?: Record<string, HarnessStrictness>
 }

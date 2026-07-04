@@ -37,7 +37,7 @@ import {
   planRequestInstruction,
 } from "./task-ledger.js"
 import { getPromptLocale, setPromptLocale } from "./prompt-locale.js"
-import { resolveDefaultHarness, resolveModelProfile } from "./model-profile/resolver.js"
+import { resolveModelProfile } from "./model-profile/resolver.js"
 import { resolveHarnessStrictness, resolveEffectiveHarnessPolicy, readProjectHarnessConfig } from "./harness/index.js"
 import type { EffectiveHarnessPolicy, HarnessStrictness } from "./harness/index.js"
 import { ReadTracker } from "./read-before-write.js"
@@ -452,6 +452,9 @@ export class ReasonixEngine implements CoreEngine {
     }
     this.sessionId = sessionId
     // SPEC-A: session boundary — clear all context zones and submit-local state
+    // FIX-H3: 清空跨 session 的 harness strictness/policy 残留
+    this.sessionStrictness = undefined
+    this.effectivePolicy = null
     this.ctx.log.clear()
     this.ctx.clearTransientState()
     this.taskLedger = undefined
@@ -843,8 +846,16 @@ export class ReasonixEngine implements CoreEngine {
   }
 
   /**
+   * 设置会话级 Harness 严格度。
+   *
+   * 生效时机：
+   * - 如果当前没有 submit 正在运行，则下一次 submit 开始时生效。
+   * - 如果当前 submit 正在运行，不会改变本次 loop 的工具集、路由、验证或 checkpoint 策略。
+   *   新严格度会在下一次 submit 开始时重新解析并固化。
+   *
+   * 这是有意设计：避免同一次 loop 中途发生工具集/权限/路由突变。
+   *
    * @deprecated 使用 AgentProfile 中的 harness 配置代替
-   * ADV-HAR-01: 设置会话级 Harness 严格度
    */
   setHarnessStrictness(strictness: HarnessStrictness): void {
     this.sessionStrictness = strictness
@@ -1110,13 +1121,14 @@ Do not change goal status.`
       modelProfile,
     })
     this.effectivePolicy = resolveEffectiveHarnessPolicy(strictness, source)
-    const harnessProfile = resolveDefaultHarness(modelName, isLocal)  // 保留兼容：部分旧组件仍读取 HarnessProfile
-
     // ADV-HAR-03: 根据 effectivePolicy.shellPolicy 重新注册 bash 工具
     if (this.effectivePolicy.shellPolicy === "dual-track" || this.effectivePolicy.shellPolicy === "dual-track-conservative") {
       const { createBashTool } = await import("@covalo/tools")
       this.tools.set("bash", createBashTool({ dualTrack: true }))
     }
+
+    // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率
+    this.checkpointEngine.setCheckpointPolicy(this.effectivePolicy.checkpoint)
 
     // ADV-HAR-05: 根据 effectivePolicy.readBeforeWrite 配置 ReadTracker
     if (this.effectivePolicy.readBeforeWrite === "block") {
@@ -1382,9 +1394,9 @@ Do not change goal status.`
         // ADV-HAR-02: 使用 effectivePolicy 而不是 harnessProfile 的字段
         effectivePolicy: this.effectivePolicy ?? undefined,
         maxTurns: phaseMaxTurns,
-        requireVerificationBeforeFinal: (this.effectivePolicy?.verification === "block"
-          || this.effectivePolicy?.verification === "require-or-waive")
-          ?? harnessProfile.requireVerificationBeforeFinal,
+        requireVerificationBeforeFinal:
+          this.effectivePolicy?.verification === "block"
+          || this.effectivePolicy?.verification === "require-or-waive",
         verificationGateState: this.verificationGateState,
         refreshLedgerContext: () => {
           this.injectTaskLedgerContext(this.taskLedger)
