@@ -4,6 +4,18 @@ import { existsSync } from "node:fs";
 import type { ModelOutcomeRecord, ModelOutcomeAggregate } from "./model-outcome";
 import { aggregateByModel } from "./model-outcome";
 
+/**
+ * SPEC-09: Experimental storage for offline model outcome analytics.
+ *
+ * This module is experimental and is NOT wired into runtime by default.
+ * It is intended for future offline analysis of model outcome records
+ * (success/failure rates, token usage, latency buckets, etc.).
+ *
+ * Enabling runtime collection should be done via an explicit feature flag
+ * (e.g. COVALO_OUTCOME_STORE=true) to avoid adding disk I/O to the hot path
+ * of every model call. The class is kept here so the data shape and append
+ * semantics stay stable for future instrumentation work.
+ */
 export class OutcomeStore {
   private jsonlPath: string;
 

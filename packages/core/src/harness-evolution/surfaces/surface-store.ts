@@ -399,7 +399,12 @@ The runtime guard detects these risk patterns in prompts and commands:
 
 export class SurfaceStore {
   private overrideDir: string;
-  private cache: Map<HarnessSurface, { content: string; hash: string }> | null = null;
+  /**
+   * SPEC-13: cache 不再是声明未使用的死字段。
+   * get() / getHash() 命中时直接返回缓存，未命中时计算并填充。
+   * writeOverride() 后 invalidate 单 surface。
+   */
+  private cache: Map<HarnessSurface, { content: string; hash: string }> = new Map();
 
   constructor(baseDir?: string) {
     this.overrideDir = baseDir
@@ -415,22 +420,26 @@ export class SurfaceStore {
   /**
    * Get surface content.
    * User overrides take precedence, then embedded defaults.
+   * SPEC-13: 命中 cache 时直接返回，未命中时计算并填充 cache。
    */
   async get(surface: HarnessSurface): Promise<string> {
     this.validateSurface(surface);
+    const cached = this.cache.get(surface)
+    if (cached) return cached.content
+
     const override = await this.tryReadOverride(surface);
-    if (override !== null) return override;
-    const defaultContent = DEFAULT_CONTENT[surface];
-    if (!defaultContent) {
-      return `# ${surface}\n\nNo default content available for this surface.\n`;
-    }
-    return defaultContent;
+    const content = override ?? DEFAULT_CONTENT[surface] ?? `# ${surface}\n\nNo default content available for this surface.\n`;
+    const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
+    this.cache.set(surface, { content, hash });
+    return content;
   }
 
-  /** Get SHA256 hash of surface content. */
+  /** Get SHA256 hash of surface content. SPEC-13: 命中 cache 时直接返回 hash。 */
   async getHash(surface: HarnessSurface): Promise<string> {
-    const content = await this.get(surface);
-    return createHash("sha256").update(content).digest("hex").slice(0, 16);
+    const cached = this.cache.get(surface)
+    if (cached) return cached.hash
+    await this.get(surface)
+    return this.cache.get(surface)!.hash
   }
 
   /** Load all surfaces as a record. */

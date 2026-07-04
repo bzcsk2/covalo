@@ -130,10 +130,28 @@ export class CheckpointEngine {
   }
 
   /**
+   * SPEC-07: 实例级 promise chain 串行化所有 save 调用。
+   * shutdown / safe-point / loop 等并发路径可能在同一实例上交错调用 save，
+   * promise chain 保证按调用顺序串行执行，避免读-改-写竞态。
+   * 不使用全局 static lock，避免无关 session 相互阻塞。
+   */
+  private saveChain: Promise<RuntimeCheckpointV2> = Promise.resolve(this.getV2State())
+
+  async save(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
+    const run = this.saveChain
+      .catch(() => this.getV2State())
+      .then(() => this.saveUnlocked(input))
+
+    this.saveChain = run.catch(() => this.getV2State())
+    return run
+  }
+
+  /**
+   * 实际执行合并保存的函数（无锁版本，由 saveChain 串行调用）。
    * 合并保存：把 v2 附加字段写回到现有 checkpoint 文件。
    * 使用临时文件 + rename 保证原子性。
    */
-  async save(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
+  private async saveUnlocked(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
     this.applyInput(input)
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true })

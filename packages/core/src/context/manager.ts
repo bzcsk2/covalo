@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../types.js"
+import type { ChatMessage, ToolCall } from "../types.js"
 import { AppendOnlyLog } from "./append-log.js"
 import { ImmutablePrefix } from "./immutable.js"
 import { VolatileScratch } from "./scratch.js"
@@ -27,6 +27,43 @@ export interface ContextReductionResult {
   targetTokens: number
   removedMessages: number
   summaryTokens: number
+}
+
+/**
+ * SPEC-05: 截断工具调用参数/返回值，避免完整大 JSON 写入 summary。
+ * 长度上限 80 字符，超过用 … 省略。
+ */
+function clip(value: unknown, max = 80): string {
+  const raw = typeof value === "string" ? value : JSON.stringify(value)
+  if (!raw) return ""
+  const normalized = raw.replace(/\s+/g, " ").trim()
+  return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized
+}
+
+/**
+ * SPEC-05: 工具调用摘要 — 只保留工具名 + safeKeys 列出的少量参数（限长 60）。
+ * 不保留完整 arguments，不保留 reasoning_content。
+ * 摘要是"行为事实索引"，不是完整 replay log。
+ */
+const SUMMARY_SAFE_ARG_KEYS = ["path", "file", "filePath", "command", "cwd", "pattern", "query"]
+
+function summarizeToolCall(tc: ToolCall): string {
+  let argsSummary = ""
+  try {
+    const parsed = JSON.parse(tc.function.arguments)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const parts = SUMMARY_SAFE_ARG_KEYS
+        .filter(k => k in parsed)
+        .map(k => `${k}=${clip((parsed as Record<string, unknown>)[k], 60)}`)
+      argsSummary = parts.join(", ")
+    }
+  } catch {
+    // arguments 不是合法 JSON，跳过参数摘要
+  }
+
+  return argsSummary
+    ? `[tool_call: ${tc.function.name}(${argsSummary})]`
+    : `[tool_call: ${tc.function.name}]`
 }
 
 export class ContextManager {
@@ -425,11 +462,31 @@ export class ContextManager {
   private createSummaryContent(messages: ChatMessage[]): string {
     const existing = this.summary.getRawContent()
     const lines = messages.map((message) => {
+      const parts: string[] = []
+
       const raw = message.content ?? ""
       const content = raw.replace(/\s+/g, " ").trim()
-      const clipped = content.length > 240 ? `${content.slice(0, 239)}...` : content
-      return `${message.role}: ${clipped}`
-    }).filter(line => !line.endsWith(": "))
+      if (content) {
+        parts.push(content.length > 200 ? `${content.slice(0, 199)}…` : content)
+      }
+
+      // SPEC-05: 保留工具调用名称 + 少量安全参数，不保留 reasoning_content
+      if (message.tool_calls) {
+        for (const tc of message.tool_calls) {
+          parts.push(summarizeToolCall(tc))
+        }
+      }
+
+      // SPEC-05: tool 消息保留工具名 + 成功/失败状态
+      if (message.role === "tool") {
+        const status = message.is_error ? "error" : "ok"
+        parts.push(`[tool_result: ${message.name ?? "unknown"} ${status}]`)
+      }
+
+      // Intentionally do NOT include reasoning_content.
+      const combined = parts.join(" ").trim()
+      return combined ? `${message.role}: ${combined}` : null
+    }).filter((line): line is string => line !== null)
 
     return [
       "Previous conversation summary:",
