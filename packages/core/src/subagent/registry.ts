@@ -15,6 +15,13 @@ export class SubagentRegistry {
   }
 
   register(def: SubagentDefinition): void {
+    // T8: bubble 模式未实装，等价于 deny。注册时打印 warning，避免用户误以为会向父级申请。
+    if (def.permissionMode === "bubble") {
+      console.warn(
+        `[SubagentRegistry] "${def.name}" uses permissionMode="bubble", which is not implemented; ` +
+          `it behaves as deny. Use readonly, acceptEdits, or denyExec instead.`,
+      )
+    }
     const existing = this.definitions.get(def.name)
     if (existing) {
       this.definitions.set(def.name, { ...def })

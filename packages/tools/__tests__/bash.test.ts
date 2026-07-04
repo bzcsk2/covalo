@@ -124,12 +124,21 @@ describe("bash tool", () => {
   it("should resolve cwd relative to ctx.cwd", async () => {
     const { createBashTool } = await import("../src/shell-exec.js")
     const tmpDir = mkdtempSync(join(tmpdir(), "covalo-bash-cwd-"))
-    writeFileSync(join(tmpDir, "test.txt"), "cwd test")
+    writeFileSync(join(tmpDir, "marker.txt"), "cwd-ok\n")
     const tool = createBashTool()
-    const r = await tool.execute({ command: "cat test.txt", cwd: tmpDir }, { cwd: "/tmp", signal: new AbortController().signal } as any)
+    // D1: 跨平台验证 cwd 解析。
+    // 不直接比较路径字符串（Windows 上 mkdtempSync 返回 8.3 短名 ADMINI~1，
+    // PowerShell (Get-Location).Path 返回长名 Administrator，realpathSync 也无法归一化）。
+    // 改为在 tmpDir 下写一个 marker.txt，然后执行读取命令 — 如果能读到内容，说明 cwd 已正确设置。
+    const isWin = process.platform === "win32"
+    const cmd = isWin ? "Get-Content marker.txt" : "cat marker.txt"
+    // ctx.cwd 必须是一个存在的目录（resolvePath 会 realpath 它），且要包含 tmpDir 以通过 containment 检查。
+    // POSIX 用 "/tmp"，Windows 用 os.tmpdir()。
+    const ctxCwd = isWin ? tmpdir() : "/tmp"
+    const r = await tool.execute({ command: cmd, cwd: tmpDir }, { cwd: ctxCwd, signal: new AbortController().signal } as any)
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
-    expect(p.stdout.trim()).toBe("cwd test")
+    expect(p.stdout.trim()).toBe("cwd-ok")
     rmSync(tmpDir, { recursive: true, force: true })
   })
 

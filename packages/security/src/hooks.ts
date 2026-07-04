@@ -22,6 +22,15 @@ export interface ToolCallHooks {
 
 export type HookPhase = "before" | "after" | "loop_event"
 
+/**
+ * T12: loop_event hook 的最长等待时间。
+ *
+ * `runOnLoopEvent` 将 hook 调用加入 pending Set 并 await，若 hook 因异常或外部依赖卡住，
+ * drain() 会永久等待。这里加一个 30s 兜底超时 — 超时后 drain() 可以返回，但 hook
+ * 本身仍在后台运行（不会被中断），只是不再阻塞调用方。
+ */
+const HOOK_LOOP_EVENT_TIMEOUT_MS = 30_000
+
 export class HookManager {
   private hooks: ToolCallHooks[] = []
   private onHookError?: (error: unknown, phase: HookPhase) => void
@@ -88,7 +97,12 @@ export class HookManager {
       }
     })()
     this.pending.add(p)
-    await p.finally(() => this.pending.delete(p))
+    // T12: 30s 兜底超时 — 防止 hook 卡住导致 drain() 永久等待。
+    // 超时不会中断 hook 本身，只让当前 await 提前返回。
+    const timeout = new Promise<void>((resolve) =>
+      setTimeout(resolve, HOOK_LOOP_EVENT_TIMEOUT_MS),
+    )
+    await Promise.race([p, timeout]).finally(() => this.pending.delete(p))
   }
 
   /** Wait for all in-flight hook calls to complete (best-effort). */

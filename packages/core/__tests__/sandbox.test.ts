@@ -118,9 +118,12 @@ describe("provider-registry", () => {
     if (provider.id === "bwrap") {
       expect(capabilities.official).toBe(true);
     } else {
+      // A2: bwrap 不可用时回退到 soft-workspace — 走 detectBestProvider 的
+      // sandbox.benchmark 分支，直接返回 soft-workspace.canRun() 的 caps，
+      // reason 不含 "falling back"（那是 fallback 路径才有的标记）。
       expect(provider.id).toBe("soft-workspace");
       expect(capabilities.official).toBe(false);
-      expect(capabilities.reason).toContain("falling back");
+      expect(capabilities.reason).toContain("diagnostic only");
     }
   });
 
@@ -176,13 +179,16 @@ describe("soft-workspace", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  // A2: POSIX-only — Windows 默认 shell 不展开 $HOME，加平台 skip。
   it("run sets HOME to cwd", async () => {
+    if (process.platform === "win32") return // $HOME 展开是 POSIX shell 行为
     const p = new SoftWorkspaceProvider();
     const result = await p.run({ command: "echo $HOME", cwd: tmpDir, readRoots: [tmpDir], writeRoots: [tmpDir] });
     expect(result.stdout.trim()).toBe(tmpDir);
   });
 
   it("run passes env vars", async () => {
+    if (process.platform === "win32") return // $VAR 展开是 POSIX shell 行为
     const p = new SoftWorkspaceProvider();
     const result = await p.run({
       command: "echo $MY_VAR",

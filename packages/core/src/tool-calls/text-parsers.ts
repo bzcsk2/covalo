@@ -46,6 +46,18 @@ const COMPACT_TOOL_SUMMARY_PRESENT_RE = /\[调用工具:\s*[\w.,\s-]+\]+/
 const TOOL_JSON_KEY_HINT =
   /"(?:name|tool|function_name)"\s*:\s*"|"tool_calls"\s*:\s*\[|"function"\s*:\s*\{/
 
+/**
+ * T10: JSON tool lookahead 窗口大小。
+ *
+ * parseJsonToolObjects / stripLikelyToolJsonObjects 在遇到 `{` 时会先取 lookahead 窗口做
+ * key hint 快速过滤，避免每次都对完整 JSON 做 extractBalancedJson。窗口过小会漏掉
+ * key 靠后的工具调用（召回率下降），过大则增加每个候选位置的扫描成本。
+ *
+ * 之前硬编码为 200，调整为 500 以覆盖更大的 tool_call envelope（function name +
+ * arguments 字段嵌套）。
+ */
+const TOOL_JSON_LOOKAHEAD_CHARS = 500
+
 const FENCED_JSON_RE = /```(?:json|tool_call|tools?)?\s*\n([\s\S]*?)```/gi
 
 /**
@@ -267,7 +279,7 @@ function parseJsonToolObjects(text: string): ParsedEmbeddedToolCalls {
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "{") continue
     // Bounded check for key hints instead of full slice
-    const lookaheadEnd = Math.min(i + 200, text.length)
+    const lookaheadEnd = Math.min(i + TOOL_JSON_LOOKAHEAD_CHARS, text.length)
     const lookahead = text.slice(i, lookaheadEnd)
     if (!TOOL_JSON_KEY_HINT.test(lookahead)) continue
 
@@ -389,7 +401,7 @@ function stripLikelyToolJsonObjects(text: string): string {
   let i = 0
   while (i < text.length) {
     if (text[i] !== "{") { i++; continue }
-    const lookaheadEnd = Math.min(i + 200, text.length)
+    const lookaheadEnd = Math.min(i + TOOL_JSON_LOOKAHEAD_CHARS, text.length)
     const lookahead = text.slice(i, lookaheadEnd)
     if (!TOOL_JSON_KEY_HINT.test(lookahead)) { i++; continue }
     const extracted = extractBalancedJson(text, i)
