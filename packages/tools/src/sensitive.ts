@@ -24,6 +24,15 @@ export const SENSITIVE_READ_PATTERNS = [
   // S1-3: 补齐 secret 模式（API provider 凭据目录）
   /(^|\/|\\)\.openai\//,
   /(^|\/|\\)\.anthropic\//,
+  // FIX-04: 安全审计补充路径
+  /(^|\/|\\)\.kube(\/|\\)/,
+  /(^|\/|\\)kubeconfig$/,
+  /(^|\/|\\)\.terraform(\/|\\)/,
+  /(^|\/|\\)[^.\/\\][^\/\\]*\.tfstate$/,
+  /(^|\/|\\)[^.\/\\][^\/\\]*\.tfstate\.backup$/,
+  /(^|\/|\\)[^.\/\\][^\/\\]*\.gpg$/,
+  /(^|\/|\\)[^.\/\\][^\/\\]*\.asc$/,
+  /(^|\/|\\)\.config(\/|\\)gcloud(\/|\\)/,
 ]
 
 export const SENSITIVE_WRITE_PATTERNS = [

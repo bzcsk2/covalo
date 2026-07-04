@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isSensitive, SENSITIVE_READ_PATTERNS, SENSITIVE_WRITE_PATTERNS } from "../src/sensitive.js"
+import { isSensitive, isWriteProtected, SENSITIVE_READ_PATTERNS, SENSITIVE_WRITE_PATTERNS } from "../src/sensitive.js"
 
 describe("isSensitive", () => {
   it("should detect api-key file", () => {
@@ -53,16 +53,62 @@ describe("isSensitive", () => {
   it("should normalize backslashes to forward slashes", () => {
     expect(isSensitive("C:\\path\\.env")).toBe(true)
   })
+
+  // FIX-04: 新增路径模式
+  it("should detect .kube/config", () => {
+    expect(isSensitive("/home/user/.kube/config")).toBe(true)
+  })
+
+  it("should detect kubeconfig file", () => {
+    expect(isSensitive("/home/user/kubeconfig")).toBe(true)
+  })
+
+  it("should detect .terraform directory", () => {
+    expect(isSensitive("/home/user/project/.terraform/state")).toBe(true)
+  })
+
+  it("should detect .tfstate file", () => {
+    expect(isSensitive("/home/user/prod.tfstate")).toBe(true)
+  })
+
+  it("should detect .tfstate.backup file", () => {
+    expect(isSensitive("/home/user/prod.tfstate.backup")).toBe(true)
+  })
+
+  it("should detect .gpg file", () => {
+    expect(isSensitive("/home/user/secret.gpg")).toBe(true)
+  })
+
+  it("should detect .asc file", () => {
+    expect(isSensitive("/home/user/secret.asc")).toBe(true)
+  })
+
+  it("should detect gcloud credentials", () => {
+    expect(isSensitive("/home/user/.config/gcloud/application_default_credentials.json")).toBe(true)
+  })
+
+  it("should detect Windows path with .kube", () => {
+    expect(isSensitive("C:\\Users\\x\\.kube\\config")).toBe(true)
+  })
 })
 
 describe("SENSITIVE_READ_PATTERNS", () => {
-  it("should have at least 15 patterns", () => {
-    expect(SENSITIVE_READ_PATTERNS.length).toBeGreaterThanOrEqual(15)
+  it("should have at least 22 patterns", () => {
+    expect(SENSITIVE_READ_PATTERNS.length).toBeGreaterThanOrEqual(22)
   })
 })
 
 describe("SENSITIVE_WRITE_PATTERNS", () => {
   it("should be a superset of read patterns (includes lockfiles etc.)", () => {
     expect(SENSITIVE_WRITE_PATTERNS.length).toBeGreaterThan(SENSITIVE_READ_PATTERNS.length)
+  })
+
+  // FIX-04: 新增路径在 write patterns 中也有效
+  it("should redirect write to .kube/config", () => {
+    expect(isWriteProtected("/home/user/.kube/config")).toBe(true)
+  })
+
+  it("should redirect write to .terraform", () => {
+    expect(isWriteProtected("/home/user/project/.terraform/state")).toBe(true)
   })
 })

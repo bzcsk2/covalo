@@ -27,6 +27,8 @@ export interface ContextReductionResult {
   targetTokens: number
   removedMessages: number
   summaryTokens: number
+  /** VERIFY-05: protectedTail 占用过大时的告警 */
+  warning?: string
 }
 
 /**
@@ -371,6 +373,18 @@ export class ContextManager {
   async compactToTarget(targetRatio: number, signal?: AbortSignal): Promise<ContextReductionResult> {
     const targetTokens = Math.max(1, Math.floor(this.contextWindow * targetRatio))
     const beforeTokens = estimateTokens(this.buildMessages())
+
+    // VERIFY-05: protectedTail diagnostic（在 early-return 前统一计算）
+    const originalLog = [...this.log.messages]
+    const protectedStart = this.lastRoundStart(originalLog)
+    const protectedTail = protectedStart >= 0 ? originalLog.slice(protectedStart) : []
+    const protectedTailTokens = estimateTokens(protectedTail)
+    const warning = protectedTailTokens > this.contextWindow * 0.5
+      ? protectedTailTokens > this.contextWindow * 0.8
+        ? `protectedTail (${protectedTailTokens} tokens) exceeds 80% of context window (${this.contextWindow}). Consider splitting your task.`
+        : `protectedTail (${protectedTailTokens} tokens) exceeds 50% of context window (${this.contextWindow}). Compaction may be limited.`
+      : undefined
+
     if (beforeTokens <= targetTokens) {
       return {
         mode: "compress",
@@ -379,12 +393,10 @@ export class ContextManager {
         targetTokens,
         removedMessages: 0,
         summaryTokens: estimateTokens(this.summary.getMessages()),
+        warning,
       }
     }
 
-    const originalLog = [...this.log.messages]
-    const protectedStart = this.lastRoundStart(originalLog)
-    const protectedTail = protectedStart >= 0 ? originalLog.slice(protectedStart) : []
     let current = protectedStart >= 0 ? originalLog.slice(0, protectedStart) : [...originalLog]
     const removed: ChatMessage[] = []
 
@@ -442,6 +454,7 @@ export class ContextManager {
       targetTokens,
       removedMessages: removed.length,
       summaryTokens: estimateTokens(this.summary.getMessages()),
+      warning,
     }
   }
 

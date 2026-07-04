@@ -39,6 +39,9 @@ const USERMOD = /\busermod\b/
 const CHOWN_RECURSIVE = /\bchown\s+-R\b/
 const MOUNT = /\bmount\b/
 const UMOUNT = /\bumount\b/
+// HARDEN-02: find 删除操作（避免 rm 绕行）
+const FIND_DELETE = /\bfind\b[^;\n]*\s-delete\b/
+const FIND_EXEC_RM = /\bfind\b[^;\n]*\s-exec\s+rm\b/
 
 const POSIX_DENY_PATTERNS = [
   RM_DANGEROUS_TARGET,
@@ -59,6 +62,8 @@ const POSIX_DENY_PATTERNS = [
   CHOWN_RECURSIVE,
   MOUNT,
   UMOUNT,
+  FIND_DELETE,
+  FIND_EXEC_RM,
 ]
 
 // S1-4: PowerShell deny 模式补全

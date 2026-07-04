@@ -188,6 +188,27 @@ describe("S1-4: shell deny pattern extensions", () => {
   it("denies PowerShell Set-ExecutionPolicy", () => {
     expect(matchDeniedShellPattern("Set-ExecutionPolicy Unrestricted", "powershell")).not.toBeNull()
   })
+
+  // ── HARDEN-02: find 危险模式 ──
+  it("denies find -delete", () => {
+    expect(matchDeniedShellPattern("find / -delete", "bash")).not.toBeNull()
+  })
+
+  it("denies find -exec rm", () => {
+    expect(matchDeniedShellPattern("find / -name '*.tmp' -exec rm {} \\;", "bash")).not.toBeNull()
+  })
+
+  it("denies find with -exec rm -rf", () => {
+    expect(matchDeniedShellPattern("find ~ -name '*~' -exec rm -rf {} +", "bash")).not.toBeNull()
+  })
+
+  it("allows safe find -print", () => {
+    expect(matchDeniedShellPattern("find . -name '*.ts' -print", "bash")).toBeNull()
+  })
+
+  it("allows safe find -type", () => {
+    expect(matchDeniedShellPattern("find src -type f", "bash")).toBeNull()
+  })
 })
 
 describe("matchSensitivePathInCommand", () => {
