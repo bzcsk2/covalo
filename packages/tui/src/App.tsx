@@ -1319,8 +1319,17 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     // Guard against post-unmount setState
     if (!mountedRef.current) return;
     // WF-FIX-60: Also load session on supervisor engine for dual-runtime consistency
+    // SPEC S3-1: fire-and-forget 模式下也必须加 mounted guard，
+    // 避免 supervisor load 完成后对已卸载组件进行 setState
     if (dualRuntime) {
-      dualRuntime.loadSupervisorSession(sessionId).catch(() => {});
+      void dualRuntime
+        .loadSupervisorSession(sessionId)
+        .then(() => {
+          if (!mountedRef.current) return;
+          // 当前 load 完后无需 setState，留空占位；
+          // 未来若需要在此更新 supervisor 相关 UI，必须先过 mountedRef 检查
+        })
+        .catch(() => {});
     }
     const recoveredTimeline = timelineFromMessages(msgs);
     setBridgeState({

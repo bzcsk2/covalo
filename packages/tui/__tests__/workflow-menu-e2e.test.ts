@@ -92,6 +92,8 @@ function makeMockCoordinator() {
     reset: () => { state = null; finished = false; runCount = 0; },
     getState: () => state,
     isFinished: () => finished,
+    // SPEC S3-2: mock 提供 isInterrupted() 以匹配真实 WorkflowCoordinator API
+    isInterrupted: () => false,
     getGoalStore: () => goalStore,
     startedGoals,
     resumedInstructions,

@@ -67,6 +67,11 @@ export function routeWorkflowInput(opts: RouteWorkflowInputOpts): WorkflowRouteA
       return { type: 'supervisor_task', mode: 'subagent' }
 
     case 'eval':
+      // SPEC S3-3: eval 模式下普通文本路由到当前 activeRole 是当前产品语义的一部分。
+      // `/eval` 文案明确提示用户可以用 `/talk worker` 或 `/talk supervisor`
+      // 选择会话目标；固定的 eval 执行由 `/eval-start` 和 `/eval-cancel` 控制。
+      // 因此这里不 reject 普通文本，而是按 direct 路径路由到 activeRole。
+      // 不要按原审计报告建议"eval 模式下非命令输入全部 reject"。
       return { type: 'direct', role: activeRole, mode: 'alone' }
 
     case 'loop': {

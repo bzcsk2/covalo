@@ -46,6 +46,10 @@ const MAX_ACTIVITIES_PER_WORKER = 50;
 /** 终态 Worker 数量上限（completed / failed / cancelled） */
 const MAX_TERMINAL_WORKERS = 50;
 
+function isTerminalWorkerStatus(status: WorkerSnapshot['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
 function createInitialOrchestrationState(): OrchestrationState {
   return {
     workers: new Map(),
@@ -68,6 +72,12 @@ function createInitialOrchestrationState(): OrchestrationState {
  * ```
  */
 export class OrchestrationStore extends SubscribeStore<OrchestrationState> {
+  // SPEC S2-2: terminal worker 清理元数据。
+  // - workerSeenAt: 首次 upsert 时间（用于无 terminalAt 时的回退排序）
+  // - workerTerminalAt: 首次进入终态时间（用于按完成时间升序删除最旧）
+  private readonly workerSeenAt = new Map<string, number>();
+  private readonly workerTerminalAt = new Map<string, number>();
+
   constructor() {
     super(createInitialOrchestrationState());
   }
@@ -86,8 +96,11 @@ export class OrchestrationStore extends SubscribeStore<OrchestrationState> {
 
   /**
    * 重置 Store 为初始状态（Session 切换时调用）。
+   * SPEC S2-2: 同时清理 worker 元数据 map。
    */
   reset(): void {
+    this.workerSeenAt.clear();
+    this.workerTerminalAt.clear();
     this.replace(createInitialOrchestrationState());
   }
 
@@ -111,17 +124,37 @@ export class OrchestrationStore extends SubscribeStore<OrchestrationState> {
         const nextWorkers = new Map(prev.workers);
         nextWorkers.set(payload.worker.id, payload.worker);
 
+        // SPEC S2-2: 维护 worker 元数据（seenAt / terminalAt）。
+        // 必须在清理之前更新，以便清理逻辑能正确按完成时间排序。
+        if (!this.workerSeenAt.has(payload.worker.id)) {
+          this.workerSeenAt.set(payload.worker.id, Date.now());
+        }
+        if (isTerminalWorkerStatus(payload.worker.status) && !this.workerTerminalAt.has(payload.worker.id)) {
+          this.workerTerminalAt.set(payload.worker.id, Date.now());
+        }
+
         // Prune terminal workers if exceeding limit
-        const terminalWorkers = Array.from(nextWorkers.entries())
-          .filter(([, w]) => w.status === 'completed' || w.status === 'failed' || w.status === 'cancelled');
-        if (terminalWorkers.length > MAX_TERMINAL_WORKERS) {
-          // Remove excess oldest terminal workers (sorted by elapsedMs descending = newest first)
-          const excess = terminalWorkers
-            .sort(([, a], [, b]) => b.elapsedMs - a.elapsedMs)
-            .slice(MAX_TERMINAL_WORKERS);
-          const excessIds = new Set(excess.map(([id]) => id));
-          for (const id of excessIds) {
+        const terminalEntries = Array.from(nextWorkers.entries())
+          .filter(([, w]) => isTerminalWorkerStatus(w.status));
+        if (terminalEntries.length > MAX_TERMINAL_WORKERS) {
+          // SPEC S2-2: 按 (terminalAt ?? seenAt ?? 0) 升序删除最旧 ——
+          // 不再用 elapsedMs（运行时长）作为排序键，避免长耗时 worker 被误判为"最新"。
+          const sortedByAge = terminalEntries
+            .map(([id]) => {
+              const terminalAt = this.workerTerminalAt.get(id) ?? 0;
+              const seenAt = this.workerSeenAt.get(id) ?? 0;
+              return { id, age: terminalAt || seenAt };
+            })
+            .sort((a, b) => a.age - b.age);  // 升序：最旧在前
+          const excessIds = sortedByAge
+            .slice(0, terminalEntries.length - MAX_TERMINAL_WORKERS)
+            .map(item => item.id);
+          const excessSet = new Set(excessIds);
+          for (const id of excessSet) {
             nextWorkers.delete(id);
+            // SPEC S2-2: 同步清理元数据
+            this.workerSeenAt.delete(id);
+            this.workerTerminalAt.delete(id);
           }
         }
 
@@ -137,12 +170,18 @@ export class OrchestrationStore extends SubscribeStore<OrchestrationState> {
       case 'worker_remove': {
         if (payload.workerId === '*') {
           // Wildcard: clear all workers and activities
+          // SPEC S2-2: 同步清理元数据
+          this.workerSeenAt.clear();
+          this.workerTerminalAt.clear();
           return { ...prev, workers: new Map(), activities: new Map() };
         }
         const nextWorkers = new Map(prev.workers);
         nextWorkers.delete(payload.workerId);
         const nextActivities = new Map(prev.activities);
         nextActivities.delete(payload.workerId);
+        // SPEC S2-2: 清理对应元数据
+        this.workerSeenAt.delete(payload.workerId);
+        this.workerTerminalAt.delete(payload.workerId);
         return { ...prev, workers: nextWorkers, activities: nextActivities };
       }
 

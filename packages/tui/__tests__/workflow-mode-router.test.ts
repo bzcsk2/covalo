@@ -121,6 +121,26 @@ describe('routeWorkflowInput', () => {
       const r = routeWorkflowInput({ mode: 'eval', lifecycle: { status: 'idle' }, activeRole: 'worker', input: '/help', inputKind: 'command' });
       expect(r).toEqual({ type: 'direct', role: 'worker', mode: 'alone' });
     });
+
+    // SPEC S3-3: 防止未来误改为"eval 模式下非命令输入全部 reject"。
+    // 当前产品语义允许 /talk worker 或 /talk supervisor 切换会话目标，
+    // 普通文本应作为 direct 消息路由到当前 activeRole。
+    it('does NOT reject plain text in eval mode (regression guard for S3-3)', () => {
+      const r = routeWorkflowInput({ mode: 'eval', lifecycle: { status: 'running' }, activeRole: 'worker', input: 'just chatting', inputKind: 'text' });
+      expect(r.type).toBe('direct');
+      if (r.type === 'direct') {
+        expect(r.role).toBe('worker');
+        expect(r.mode).toBe('alone');
+      }
+    });
+
+    it('respects /talk supervisor selection in eval mode (regression guard for S3-3)', () => {
+      const r = routeWorkflowInput({ mode: 'eval', lifecycle: { status: 'idle' }, activeRole: 'supervisor', input: 'plan something', inputKind: 'text' });
+      expect(r.type).toBe('direct');
+      if (r.type === 'direct') {
+        expect(r.role).toBe('supervisor');
+      }
+    });
   });
 
   describe('commands in any mode', () => {
