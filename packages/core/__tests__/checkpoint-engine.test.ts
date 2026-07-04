@@ -284,3 +284,135 @@ describe("CheckpointEngine forced policy", () => {
     await fs.rm(tmp, { recursive: true, force: true })
   })
 })
+
+describe("SPEC-I: checkpoint persists taskLedger and verificationGate", () => {
+  let tmp: string
+  beforeEach(async () => { tmp = await makeTempDir() })
+  afterEach(async () => { await fs.rm(tmp, { recursive: true, force: true }) })
+
+  it("save 时传入 taskLedger 后 loadV2 恢复该字段", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = {
+      goal: "test goal",
+      plan: [{ title: "step1", status: "done" }],
+      changedFiles: ["a.ts"],
+      verificationPending: false,
+      evictedFileCount: 0,
+      evictedCommandCount: 0,
+    }
+
+    await engine.save({
+      trigger: "step_completed",
+      taskLedger,
+    })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.taskLedger).toBeDefined()
+    expect(v2!.taskLedger!.goal).toBe("test goal")
+    expect(v2!.taskLedger!.changedFiles).toEqual(["a.ts"])
+  })
+
+  it("save 时传入 verificationGate 后 loadV2 恢复该字段", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const verificationGate = { continuationCount: 3 }
+
+    await engine.save({
+      trigger: "step_completed",
+      verificationGate,
+    })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.verificationGate).toBeDefined()
+    expect(v2!.verificationGate!.continuationCount).toBe(3)
+  })
+
+  it("save 同时传入 taskLedger 和 verificationGate", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = {
+      goal: "combined goal",
+      plan: [],
+      changedFiles: ["b.ts", "c.ts"],
+      verificationPending: true,
+      evictedFileCount: 1,
+      evictedCommandCount: 0,
+    }
+    const verificationGate = { continuationCount: 5 }
+
+    await engine.save({
+      trigger: "tool_failed",
+      taskLedger,
+      verificationGate,
+    })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.taskLedger!.goal).toBe("combined goal")
+    expect(v2!.taskLedger!.changedFiles).toEqual(["b.ts", "c.ts"])
+    expect(v2!.taskLedger!.verificationPending).toBe(true)
+    expect(v2!.verificationGate!.continuationCount).toBe(5)
+  })
+
+  it("不传 taskLedger/verificationGate 时不覆盖已有值", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = { goal: "first", plan: [], changedFiles: [], verificationPending: false, evictedFileCount: 0, evictedCommandCount: 0 }
+    const verificationGate = { continuationCount: 1 }
+
+    // 第一次 save 传入两个字段
+    await engine.save({ trigger: "tool_failed", taskLedger, verificationGate })
+
+    // 第二次 save 不传 taskLedger/verificationGate
+    await engine.save({ trigger: "step_completed" })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    // 因为 save 用的是 undefined 检查，不传不会覆盖
+    expect(v2!.taskLedger).toBeDefined()
+    expect(v2!.taskLedger!.goal).toBe("first")
+    expect(v2!.verificationGate).toBeDefined()
+    expect(v2!.verificationGate!.continuationCount).toBe(1)
+  })
+
+  it("cloneV2 对 taskLedger 做深拷贝 — 外部 mutation 不影响内部状态", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = {
+      goal: "deep copy test",
+      plan: [{ id: "s1", text: "step 1", status: "pending" as const }],
+      changedFiles: ["a.ts"],
+      commandsRun: [{ commandHash: "h1", success: true }],
+      verificationPending: false,
+      lastVerification: { command: "npm test", exitCode: 0, summary: "passed" },
+      blockers: ["blocker1"],
+      evictedFileCount: 0,
+      evictedCommandCount: 0,
+    }
+
+    await engine.save({ trigger: "tool_failed", taskLedger })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.taskLedger!.plan).toHaveLength(1)
+
+    // 外部 mutation
+    v2!.taskLedger!.plan.push({ id: "s2", text: "injected", status: "done" as const })
+    v2!.taskLedger!.changedFiles.push("injected.ts")
+    v2!.taskLedger!.commandsRun.push({ commandHash: "injected", success: false })
+    v2!.taskLedger!.blockers.push("injected-blocker")
+    v2!.taskLedger!.lastVerification!.exitCode = 1
+    v2!.taskLedger!.goal = "mutated"
+
+    // 再次 loadV2 — 内部状态不应受影响
+    const v2Again = await engine.loadV2()
+    expect(v2Again).not.toBeNull()
+    expect(v2Again!.taskLedger!.plan).toHaveLength(1)
+    expect(v2Again!.taskLedger!.plan[0].id).toBe("s1")
+    expect(v2Again!.taskLedger!.changedFiles).toEqual(["a.ts"])
+    expect(v2Again!.taskLedger!.commandsRun).toHaveLength(1)
+    expect(v2Again!.taskLedger!.commandsRun[0].commandHash).toBe("h1")
+    expect(v2Again!.taskLedger!.blockers).toEqual(["blocker1"])
+    expect(v2Again!.taskLedger!.lastVerification!.exitCode).toBe(0)
+    expect(v2Again!.taskLedger!.goal).toBe("deep copy test")
+  })
+})
+

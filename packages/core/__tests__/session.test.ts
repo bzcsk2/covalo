@@ -995,3 +995,138 @@ describe("SPEC-A: loadSession context isolation", () => {
     expect(after.pendingInstructionQueue).toEqual([])
   })
 })
+
+describe("SPEC-03: injectExperienceRecall", () => {
+  let originalCwd: string
+  let tmpDir: string
+
+  beforeEach(async () => {
+    originalCwd = process.cwd()
+    tmpDir = join(tmpdir(), `covalo-spec03-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    await mkdir(tmpDir, { recursive: true })
+    process.chdir(tmpDir)
+  })
+
+  afterEach(async () => {
+    process.chdir(originalCwd)
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  async function createEngine(sessionId = "session-spec03") {
+    const { ReasonixEngine } = await import("../src/engine.js")
+    const config = { apiKey: "test", baseUrl: "http://localhost", model: "test", maxTokens: 1000, temperature: 0, maxContextRounds: 20, contextWindow: 128000 }
+    return new ReasonixEngine(config as any, undefined, sessionId)
+  }
+
+  it("没有 experience 文件时不抛错", async () => {
+    const engine = await createEngine()
+    await (engine as any).injectExperienceRecall()
+    expect(engine.getContextManager().scratch.messages).toHaveLength(0)
+  })
+
+  it("有 trusted 经验时注入到 scratch（user role + data wrapper）", async () => {
+    const { ExperienceStore } = await import("../src/harness-evolution/experience/index.js")
+    const store = new ExperienceStore(tmpDir)
+    await store.init()
+    await store.append({
+      id: "exp:test-trusted",
+      signature: "test-sig",
+      sourceKind: "task",
+      sourceRef: "test",
+      trust: "trusted",
+      createdAt: new Date().toISOString(),
+      taskType: "bugfix",
+      confidence: 0.8,
+      evidenceRefs: [],
+    } as any)
+
+    const engine = await createEngine()
+    await (engine as any).injectExperienceRecall()
+
+    const messages = engine.getContextManager().scratch.messages
+    const recallMsg = messages.find(m => m.role === "user" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))
+    expect(recallMsg).toBeDefined()
+    expect(recallMsg!.content as string).toContain("<experience_recall_data>")
+    expect(recallMsg!.content as string).toContain("</experience_recall_data>")
+    expect(recallMsg!.content as string).toContain("weak, non-authoritative guidance")
+    // 不应有 system role 的 recall 消息
+    expect(messages.some(m => m.role === "system" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(false)
+  })
+
+  it("只有 untrusted 经验时默认不注入", async () => {
+    const { ExperienceStore } = await import("../src/harness-evolution/experience/index.js")
+    const store = new ExperienceStore(tmpDir)
+    await store.init()
+    await store.append({
+      id: "exp:test-untrusted",
+      signature: "test-sig",
+      sourceKind: "task",
+      sourceRef: "test",
+      trust: "untrusted",
+      createdAt: new Date().toISOString(),
+      taskType: "bugfix",
+      confidence: 0.8,
+      evidenceRefs: [],
+    } as any)
+
+    const engine = await createEngine()
+    await (engine as any).injectExperienceRecall()
+
+    const messages = engine.getContextManager().scratch.messages
+    expect(messages.some(m => m.role === "system" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(false)
+  })
+
+  it("经验文件包含坏 JSON 行时不抛错", async () => {
+    const { writeFile } = await import("node:fs/promises")
+    const expDir = join(tmpDir, ".covalo", "experience")
+    await mkdir(expDir, { recursive: true })
+    const goodRecord = {
+      id: "exp:good-bad",
+      signature: "sig",
+      sourceKind: "task",
+      sourceRef: "test",
+      trust: "trusted",
+      createdAt: new Date().toISOString(),
+      taskType: "bugfix",
+      confidence: 0.9,
+      evidenceRefs: [],
+    }
+    const content = ["{bad json", JSON.stringify(goodRecord)].join("\n")
+    await writeFile(join(expDir, "experiences.jsonl"), content + "\n", "utf-8")
+
+    const engine = await createEngine()
+    await (engine as any).injectExperienceRecall()
+
+    const messages = engine.getContextManager().scratch.messages
+    expect(messages.some(m => m.role === "user" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(true)
+  })
+
+  it("COVALO_EXPERIENCE_RECALL=false 时跳过注入", async () => {
+    const { ExperienceStore } = await import("../src/harness-evolution/experience/index.js")
+    const store = new ExperienceStore(tmpDir)
+    await store.init()
+    await store.append({
+      id: "exp:test-env-disable",
+      signature: "test-sig",
+      sourceKind: "task",
+      sourceRef: "test",
+      trust: "trusted",
+      createdAt: new Date().toISOString(),
+      taskType: "bugfix",
+      confidence: 0.8,
+      evidenceRefs: [],
+    } as any)
+
+    const engine = await createEngine()
+    const prev = process.env.COVALO_EXPERIENCE_RECALL
+    process.env.COVALO_EXPERIENCE_RECALL = "false"
+    try {
+      await (engine as any).injectExperienceRecall()
+      const messages = engine.getContextManager().scratch.messages
+      expect(messages.some(m => m.role === "user" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(false)
+    } finally {
+      if (prev === undefined) delete process.env.COVALO_EXPERIENCE_RECALL
+      else process.env.COVALO_EXPERIENCE_RECALL = prev
+    }
+  })
+})

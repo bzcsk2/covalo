@@ -29,8 +29,16 @@ export class ExperienceStore {
       return { records: [], total: 0, appliedFilters: filter };
     }
     const content = await readFile(this.jsonlPath, "utf-8");
-    const lines = content.trim().split("\n").filter(Boolean);
-    const all: ExperienceRecord[] = lines.map(l => JSON.parse(l) as ExperienceRecord);
+    const MAX_RECALL_LINES = 5000;
+    const lines = content.trim().split("\n").filter(Boolean).slice(-MAX_RECALL_LINES);
+    const all: ExperienceRecord[] = [];
+    for (const line of lines) {
+      try {
+        all.push(JSON.parse(line) as ExperienceRecord);
+      } catch {
+        continue;
+      }
+    }
 
     // Load superseded IDs (records referenced by any record's supersedes field)
     const supersededIds = new Set<string>();

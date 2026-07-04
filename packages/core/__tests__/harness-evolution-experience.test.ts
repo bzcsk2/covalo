@@ -128,3 +128,72 @@ describe("RecallPolicy", () => {
     expect(output).toContain("test_fail");
   });
 });
+
+describe("SPEC-08: ExperienceStore recall defensive optimization", () => {
+  const BAD_LINE_DIR = "/tmp/covalo-test-exp-bad-" + Math.random().toString(36).slice(2, 8);
+
+  test("recall 跳过坏 JSON 行，返回正常记录", async () => {
+    const store = new ExperienceStore(BAD_LINE_DIR);
+    await store.init();
+
+    // 手动写入混合好坏行的文件
+    const { writeFile } = await import("node:fs/promises");
+    const goodRecord = makeRecord({ id: "exp:good1", trust: "trusted", confidence: 0.9 });
+    const content = [
+      "{bad json line 1",
+      JSON.stringify(goodRecord),
+      "{another bad line",
+      JSON.stringify(makeRecord({ id: "exp:good2", trust: "trusted", confidence: 0.8 })),
+    ].join("\n");
+    await writeFile(store["jsonlPath"], content + "\n", "utf-8");
+
+    const result = await store.recall({ trust: ["trusted"] });
+    expect(result.records.length).toBe(2);
+    expect(result.records.some(r => r.id === "exp:good1")).toBe(true);
+    expect(result.records.some(r => r.id === "exp:good2")).toBe(true);
+  });
+
+  test("recall 限制最多解析最近 5000 行", async () => {
+    const store = new ExperienceStore(BAD_LINE_DIR);
+    await store.init();
+
+    const { writeFile } = await import("node:fs/promises");
+    // 写入 5102 行，超过 5000 限制
+    const lines: string[] = [];
+    for (let i = 0; i < 5102; i++) {
+      lines.push(JSON.stringify(makeRecord({ id: `exp:limit-${i}`, trust: "trusted", confidence: 0.5 })));
+    }
+    // 最后一条有特殊标记
+    lines.push(JSON.stringify(makeRecord({ id: "exp:last-visible", trust: "trusted", confidence: 1.0 })));
+    await writeFile(store["jsonlPath"], lines.join("\n") + "\n", "utf-8");
+
+    const result = await store.recall({ trust: ["trusted"] });
+    // 应该只解析最后 5000 行（5001 条记录）
+    // exp:limit-2 应在第 5000 行之外被截断（index 2 = 第 3 行，在前面被截掉）
+    expect(result.records.some(r => r.id === "exp:limit-2")).toBe(false);
+    // 最后一条应该在可见范围内
+    expect(result.records.some(r => r.id === "exp:last-visible")).toBe(true);
+  });
+
+  test("recall 坏行不会导致 superseded 计算出错", async () => {
+    const store = new ExperienceStore(BAD_LINE_DIR);
+    await store.init();
+
+    const { writeFile } = await import("node:fs/promises");
+    const old = makeRecord({ id: "exp:supersede-old", trust: "trusted", confidence: 0.7 });
+    const newer = makeRecord({ id: "exp:supersede-new", trust: "trusted", confidence: 0.9, supersedes: ["exp:supersede-old"] });
+    const content = [
+      "{bad line",
+      JSON.stringify(old),
+      "{another bad",
+      JSON.stringify(newer),
+    ].join("\n");
+    await writeFile(store["jsonlPath"], content + "\n", "utf-8");
+
+    const result = await store.recall({ trust: ["trusted"] });
+    // superseded 记录不应返回
+    expect(result.records.some(r => r.id === "exp:supersede-old")).toBe(false);
+    expect(result.records.some(r => r.id === "exp:supersede-new")).toBe(true);
+  });
+});
+

@@ -224,6 +224,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       await checkpointEngine.save({
         trigger,
         branchBudget: branchBudgetTracker,
+        taskLedger: taskLedger?.snapshot(),
+        verificationGate: verificationGateState ? { ...verificationGateState } : undefined,
         ...extras,
       })
     } catch (e) {
