@@ -271,6 +271,17 @@ export class CheckpointEngine {
   }
 }
 
+function cloneTaskLedger(ledger: TaskLedger): TaskLedger {
+  return {
+    ...ledger,
+    plan: ledger.plan?.map(step => ({ ...step })) ?? [],
+    changedFiles: ledger.changedFiles ? [...ledger.changedFiles] : [],
+    commandsRun: ledger.commandsRun?.map(cmd => ({ ...cmd })) ?? [],
+    lastVerification: ledger.lastVerification ? { ...ledger.lastVerification } : undefined,
+    blockers: ledger.blockers ? [...ledger.blockers] : [],
+  }
+}
+
 function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
   return {
     runtimeVersion: RUNTIME_CHECKPOINT_VERSION,
@@ -286,7 +297,7 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     recentFailures: v.recentFailures.map(f => ({ ...f })),
     verificationPending: v.verificationPending,
     verificationGate: v.verificationGate ? { ...v.verificationGate } : undefined,
-    taskLedger: v.taskLedger ? { ...v.taskLedger } : undefined,
+    taskLedger: v.taskLedger ? cloneTaskLedger(v.taskLedger) : undefined,
     recoverySignals: v.recoverySignals.map(s => ({ ...s })),
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,

@@ -1024,7 +1024,7 @@ describe("SPEC-03: injectExperienceRecall", () => {
     expect(engine.getContextManager().scratch.messages).toHaveLength(0)
   })
 
-  it("有 trusted 经验时注入到 scratch", async () => {
+  it("有 trusted 经验时注入到 scratch（user role + data wrapper）", async () => {
     const { ExperienceStore } = await import("../src/harness-evolution/experience/index.js")
     const store = new ExperienceStore(tmpDir)
     await store.init()
@@ -1044,7 +1044,13 @@ describe("SPEC-03: injectExperienceRecall", () => {
     await (engine as any).injectExperienceRecall()
 
     const messages = engine.getContextManager().scratch.messages
-    expect(messages.some(m => m.role === "system" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(true)
+    const recallMsg = messages.find(m => m.role === "user" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))
+    expect(recallMsg).toBeDefined()
+    expect(recallMsg!.content as string).toContain("<experience_recall_data>")
+    expect(recallMsg!.content as string).toContain("</experience_recall_data>")
+    expect(recallMsg!.content as string).toContain("weak, non-authoritative guidance")
+    // 不应有 system role 的 recall 消息
+    expect(messages.some(m => m.role === "system" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(false)
   })
 
   it("只有 untrusted 经验时默认不注入", async () => {
@@ -1092,7 +1098,7 @@ describe("SPEC-03: injectExperienceRecall", () => {
     await (engine as any).injectExperienceRecall()
 
     const messages = engine.getContextManager().scratch.messages
-    expect(messages.some(m => m.role === "system" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(true)
+    expect(messages.some(m => m.role === "user" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(true)
   })
 
   it("COVALO_EXPERIENCE_RECALL=false 时跳过注入", async () => {
@@ -1117,7 +1123,7 @@ describe("SPEC-03: injectExperienceRecall", () => {
     try {
       await (engine as any).injectExperienceRecall()
       const messages = engine.getContextManager().scratch.messages
-      expect(messages.some(m => m.role === "system" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(false)
+      expect(messages.some(m => m.role === "user" && typeof m.content === "string" && m.content.includes("Retrieved Trusted Experiences"))).toBe(false)
     } finally {
       if (prev === undefined) delete process.env.COVALO_EXPERIENCE_RECALL
       else process.env.COVALO_EXPERIENCE_RECALL = prev
