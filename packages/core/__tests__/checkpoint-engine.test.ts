@@ -284,3 +284,94 @@ describe("CheckpointEngine forced policy", () => {
     await fs.rm(tmp, { recursive: true, force: true })
   })
 })
+
+describe("SPEC-I: checkpoint persists taskLedger and verificationGate", () => {
+  let tmp: string
+  beforeEach(async () => { tmp = await makeTempDir() })
+  afterEach(async () => { await fs.rm(tmp, { recursive: true, force: true }) })
+
+  it("save 时传入 taskLedger 后 loadV2 恢复该字段", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = {
+      goal: "test goal",
+      plan: [{ title: "step1", status: "done" }],
+      changedFiles: ["a.ts"],
+      verificationPending: false,
+      evictedFileCount: 0,
+      evictedCommandCount: 0,
+    }
+
+    await engine.save({
+      trigger: "step_completed",
+      taskLedger,
+    })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.taskLedger).toBeDefined()
+    expect(v2!.taskLedger!.goal).toBe("test goal")
+    expect(v2!.taskLedger!.changedFiles).toEqual(["a.ts"])
+  })
+
+  it("save 时传入 verificationGate 后 loadV2 恢复该字段", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const verificationGate = { continuationCount: 3 }
+
+    await engine.save({
+      trigger: "step_completed",
+      verificationGate,
+    })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.verificationGate).toBeDefined()
+    expect(v2!.verificationGate!.continuationCount).toBe(3)
+  })
+
+  it("save 同时传入 taskLedger 和 verificationGate", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = {
+      goal: "combined goal",
+      plan: [],
+      changedFiles: ["b.ts", "c.ts"],
+      verificationPending: true,
+      evictedFileCount: 1,
+      evictedCommandCount: 0,
+    }
+    const verificationGate = { continuationCount: 5 }
+
+    await engine.save({
+      trigger: "tool_failed",
+      taskLedger,
+      verificationGate,
+    })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    expect(v2!.taskLedger!.goal).toBe("combined goal")
+    expect(v2!.taskLedger!.changedFiles).toEqual(["b.ts", "c.ts"])
+    expect(v2!.taskLedger!.verificationPending).toBe(true)
+    expect(v2!.verificationGate!.continuationCount).toBe(5)
+  })
+
+  it("不传 taskLedger/verificationGate 时不覆盖已有值", async () => {
+    const engine = new CheckpointEngine(tmp, "sess-spece")
+    const taskLedger = { goal: "first", plan: [], changedFiles: [], verificationPending: false, evictedFileCount: 0, evictedCommandCount: 0 }
+    const verificationGate = { continuationCount: 1 }
+
+    // 第一次 save 传入两个字段
+    await engine.save({ trigger: "tool_failed", taskLedger, verificationGate })
+
+    // 第二次 save 不传 taskLedger/verificationGate
+    await engine.save({ trigger: "step_completed" })
+
+    const v2 = await engine.loadV2()
+    expect(v2).not.toBeNull()
+    // 因为 save 用的是 undefined 检查，不传不会覆盖
+    expect(v2!.taskLedger).toBeDefined()
+    expect(v2!.taskLedger!.goal).toBe("first")
+    expect(v2!.verificationGate).toBeDefined()
+    expect(v2!.verificationGate!.continuationCount).toBe(1)
+  })
+})
+

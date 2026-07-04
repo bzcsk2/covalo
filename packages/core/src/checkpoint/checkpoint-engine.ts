@@ -285,6 +285,8 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     recentTools: v.recentTools.map(t => ({ ...t })),
     recentFailures: v.recentFailures.map(f => ({ ...f })),
     verificationPending: v.verificationPending,
+    verificationGate: v.verificationGate ? { ...v.verificationGate } : undefined,
+    taskLedger: v.taskLedger ? { ...v.taskLedger } : undefined,
     recoverySignals: v.recoverySignals.map(s => ({ ...s })),
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,

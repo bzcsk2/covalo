@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, appendFileSync } from "node:fs"
 import { dirname, resolve, join } from "node:path"
 import type { AgentRunScore } from "./types.js"
 import type { AgentBenchmarkLeaderboardEntry, AgentBenchmarkSuiteSummary, AgentBenchmarkRunScore } from "./types.js"
@@ -23,8 +23,7 @@ export class AgentScoreStore {
     const path = this.pathForWorkflow(workflowId)
     mkdirSync(dirname(path), { recursive: true })
     const line = JSON.stringify(score)
-    const existing = existsSync(path) ? readFileSync(path, "utf8") : ""
-    writeFileSync(path, existing + line + "\n", "utf8")
+    appendFileSync(path, line + "\n", "utf8")
   }
 
   list(workflowId: string): AgentRunScore[] {
