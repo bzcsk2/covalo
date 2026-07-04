@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Covalo — Terminal-native AI Loop Agent</title>
+  <meta name="description" content="Covalo is a terminal-native AI loop agent for making cheap, free, and local models complete real engineering work through supervised execution loops." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%8A%3C/text%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --bg-2: #111726;
+      --surface: rgba(255, 255, 255, 0.03);
+      --surface-hover: rgba(255, 255, 255, 0.06);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.15);
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --text-dim: #6e7681;
+      --accent: #7c9eff;
+      --accent-2: #ff9b50;
+      --accent-3: #56d364;
+      --gradient: linear-gradient(135deg, #7c9eff 0%, #b27cff 50%, #ff9b50 100%);
+      --gradient-soft: linear-gradient(135deg, rgba(124, 158, 255, 0.15) 0%, rgba(178, 124, 255, 0.10) 50%, rgba(255, 155, 80, 0.08) 100%);
+      --mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow-x: hidden;
+    }
+
+    /* Background ambience */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 20% 0%, rgba(124, 158, 255, 0.12), transparent 60%),
+        radial-gradient(ellipse 60% 50% at 80% 10%, rgba(178, 124, 255, 0.10), transparent 60%),
+        radial-gradient(ellipse 70% 60% at 50% 100%, rgba(255, 155, 80, 0.06), transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Nav */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: rgba(10, 14, 26, 0.7);
+      border-bottom: 1px solid var(--border);
+    }
+
+    nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 14px;
+      padding-bottom: 14px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      letter-spacing: -0.01em;
+    }
+
+    .logo-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: var(--gradient);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      box-shadow: 0 4px 16px rgba(124, 158, 255, 0.35);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text); }
+
+    .lang-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: var(--sans);
+    }
+
+    .lang-toggle:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+
+    .lang-toggle svg { width: 14px; height: 14px; }
+
+    /* Hero */
+    .hero {
+      padding: 96px 0 64px;
+      text-align: center;
+      position: relative;
+    }
+
+    .badges {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-family: var(--mono);
+    }
+
+    .badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .hero h1 {
+      font-size: clamp(40px, 7vw, 76px);
+      font-weight: 800;
+      line-height: 1.05;
+      letter-spacing: -0.035em;
+      margin-bottom: 24px;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+    }
+
+    .hero .tagline {
+      font-size: clamp(17px, 2.2vw, 21px);
+      color: var(--text-muted);
+      max-width: 720px;
+      margin: 0 auto 36px;
+      line-height: 1.55;
+    }
+
+    .hero .tagline strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .cta-row {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 56px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 22px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+      font-family: var(--sans);
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: var(--gradient);
+      color: #0a0e1a;
+      box-shadow: 0 8px 24px rgba(124, 158, 255, 0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 32px rgba(124, 158, 255, 0.45);
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+
+    .btn-secondary:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    /* Install command */
+    .install-card {
+      max-width: 580px;
+      margin: 0 auto;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    }
+
+    .install-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .install-card-header .dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .install-card-header .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .install-card-header .dot:nth-child(1) { background: #ff5f57; }
+    .install-card-header .dot:nth-child(2) { background: #febc2e; }
+    .install-card-header .dot:nth-child(3) { background: #28c840; }
+
+    .install-card-header .title {
+      margin-left: 8px;
+      font-size: 12px;
+      color: var(--text-dim);
+      font-family: var(--mono);
+    }
+
+    .install-card-body {
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .install-line {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: var(--mono);
+      font-size: 14px;
+    }
+
+    .install-line .prompt {
+      color: var(--accent);
+      user-select: none;
+    }
+
+    .install-line .cmd { color: var(--text); }
+
+    .install-line .copy-btn {
+      margin-left: auto;
+      padding: 4px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-family: var(--sans);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .install-line .copy-btn:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    /* Sections */
+    section {
+      padding: 80px 0;
+      position: relative;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    .section-eyebrow {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: var(--gradient-soft);
+      border: 1px solid rgba(124, 158, 255, 0.2);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      font-family: var(--mono);
+    }
+
+    .section-title {
+      font-size: clamp(28px, 4vw, 40px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+      line-height: 1.15;
+    }
+
+    .section-subtitle {
+      font-size: 16px;
+      color: var(--text-muted);
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    /* Feature grid */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+    }
+
+    .feature-card {
+      padding: 28px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      transition: all 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: var(--gradient-soft);
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+
+    .feature-card:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-2px);
+    }
+
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-card > * { position: relative; z-index: 1; }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      margin-bottom: 16px;
+      background: var(--gradient-soft);
+      border: 1px solid rgba(124, 158, 255, 0.2);
+    }
+
+    .feature-title {
+      font-size: 17px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* Architecture */
+    .arch-diagram {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 36px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.7;
+      color: var(--text-muted);
+    }
+
+    .arch-diagram pre {
+      margin: 0;
+      white-space: pre;
+    }
+
+    .arch-diagram .kw { color: var(--accent); }
+    .arch-diagram .arrow { color: var(--accent-2); }
+    .arch-diagram .comment { color: var(--text-dim); }
+
+    .arch-packages {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .arch-package {
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13px;
+    }
+
+    .arch-package .name {
+      font-family: var(--mono);
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .arch-package .desc {
+      color: var(--text-muted);
+      font-size: 12.5px;
+    }
+
+    /* Commands table */
+    .commands-wrap {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .commands-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .commands-table th,
+    .commands-table td {
+      padding: 14px 22px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .commands-table th {
+      background: rgba(255, 255, 255, 0.02);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    .commands-table tr:last-child td { border-bottom: none; }
+
+    .commands-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+    .cmd-name {
+      font-family: var(--mono);
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 13.5px;
+    }
+
+    .cmd-desc { color: var(--text-muted); font-size: 14px; }
+
+    /* Workflow diagram */
+    .workflow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 32px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      margin-top: 24px;
+    }
+
+    .workflow-step {
+      padding: 10px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      font-family: var(--mono);
+    }
+
+    .workflow-step.supervisor {
+      background: rgba(124, 158, 255, 0.1);
+      border-color: rgba(124, 158, 255, 0.3);
+      color: var(--accent);
+    }
+
+    .workflow-step.worker {
+      background: rgba(255, 155, 80, 0.1);
+      border-color: rgba(255, 155, 80, 0.3);
+      color: var(--accent-2);
+    }
+
+    .workflow-arrow {
+      color: var(--text-dim);
+      font-size: 18px;
+    }
+
+    /* Code blocks */
+    .code-block {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 22px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.7;
+      color: var(--text);
+    }
+
+    .code-block .prompt { color: var(--accent); user-select: none; }
+    .code-block .comment { color: var(--text-dim); }
+
+    /* CTA section */
+    .cta-section {
+      text-align: center;
+      padding: 80px 0;
+    }
+
+    .cta-section .section-title {
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+    }
+
+    /* Footer */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    footer .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    footer a:hover { color: var(--text); }
+
+    .footer-links {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .nav-links { gap: 14px; }
+      .nav-links a:not(.lang-toggle) { display: none; }
+      .hero { padding: 60px 0 40px; }
+      section { padding: 60px 0; }
+      .workflow { padding: 20px; }
+      .workflow-step { padding: 8px 12px; font-size: 12px; }
+    }
+
+    /* Fade-in animation */
+    .fade-in {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+
+    .fade-in.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="logo">
+      <div class="logo-mark">⚡</div>
+      <span>Covalo</span>
+    </div>
+    <div class="nav-links">
+      <a href="#features" data-i18n="nav.features">Features</a>
+      <a href="#architecture" data-i18n="nav.architecture">Architecture</a>
+      <a href="#install" data-i18n="nav.install">Install</a>
+      <a href="#commands" data-i18n="nav.commands">Commands</a>
+      <a href="https://github.com/bzcsk2/covalo" target="_blank" rel="noopener">GitHub</a>
+      <button class="lang-toggle" id="langToggle" aria-label="Switch language">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span id="langLabel">中文</span>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+  <div class="container">
+    <div class="badges">
+      <span class="badge"><span class="dot" style="background:#ff9b50"></span>Bun 1.3+</span>
+      <span class="badge"><span class="dot" style="background:#3178c6"></span>TypeScript</span>
+      <span class="badge"><span class="dot" style="background:#56d364"></span>MIT License</span>
+      <span class="badge"><span class="dot" style="background:#7c9eff"></span>TUI · Ink/React</span>
+    </div>
+
+    <h1>Covalo</h1>
+
+    <p class="tagline" data-i18n="hero.tagline">
+      A terminal-native AI loop agent that makes <strong>cheap, free, and local models</strong> complete real engineering work through supervised execution loops.
+    </p>
+
+    <div class="cta-row">
+      <a href="#install" class="btn btn-primary">
+        <span data-i18n="hero.cta.install">Get Started</span>
+        <span>→</span>
+      </a>
+      <a href="https://github.com/bzcsk2/covalo" target="_blank" rel="noopener" class="btn btn-secondary" data-i18n="hero.cta.source">
+        View on GitHub
+      </a>
+    </div>
+
+    <div class="install-card fade-in">
+      <div class="install-card-header">
+        <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        <span class="title">bash</span>
+      </div>
+      <div class="install-card-body">
+        <div class="install-line">
+          <span class="prompt">$</span>
+          <span class="cmd">npm install -g covalo</span>
+          <button class="copy-btn" data-copy="npm install -g covalo" data-i18n="copy">Copy</button>
+        </div>
+        <div class="install-line">
+          <span class="prompt">$</span>
+          <span class="cmd">cd your-project</span>
+          <button class="copy-btn" data-copy="cd your-project" data-i18n="copy">Copy</button>
+        </div>
+        <div class="install-line">
+          <span class="prompt">$</span>
+          <span class="cmd">covalo</span>
+          <button class="copy-btn" data-copy="covalo" data-i18n="copy">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Features -->
+<section id="features">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-eyebrow" data-i18n="features.eyebrow">Core Highlights</span>
+      <h2 class="section-title" data-i18n="features.title">Built for cost-aware engineering</h2>
+      <p class="section-subtitle" data-i18n="features.subtitle">
+        Put strong models where they matter, let cheap models do the bulk of the work, and keep the loop observable, resumable, and governed.
+      </p>
+    </div>
+
+    <div class="feature-grid">
+      <div class="feature-card fade-in">
+        <div class="feature-icon">💰</div>
+        <h3 class="feature-title" data-i18n="features.cost.title">Lower Cost</h3>
+        <p class="feature-desc" data-i18n="features.cost.desc">
+          Cache-aware context management, tool-call repair, and multi-provider routing maximize prefix-cache hits and reduce wasted tokens.
+        </p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">🧠</div>
+        <h3 class="feature-title" data-i18n="features.weak.title">Weak-model Friendly</h3>
+        <p class="feature-desc" data-i18n="features.weak.desc">
+          Adjustable harness levels, small-step execution, failure recovery, and verification gates make unreliable models productive.
+        </p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">⚔️</div>
+        <h3 class="feature-title" data-i18n="features.workflow.title">Supervisor + Worker</h3>
+        <p class="feature-desc" data-i18n="features.workflow.desc">
+          A two-role execution structure: Supervisor plans and reviews; Worker executes and reports. Escalate on repeated failure.
+        </p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">✏️</div>
+        <h3 class="feature-title" data-i18n="features.edit.title">Precise Editing</h3>
+        <p class="feature-desc" data-i18n="features.edit.desc">
+          Hash-anchored edits, fuzzy fallback matching, stale-read protection, and file snapshots for safe rollback.
+        </p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">🧩</div>
+        <h3 class="feature-title" data-i18n="features.tools.title">30+ Built-in Tools</h3>
+        <p class="feature-desc" data-i18n="features.tools.desc">
+          Files, shell, grep, edit, web, MCP, workflow, task, notebook, cron — plus Skills, plugins, and AgentMemory integration.
+        </p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">🛡️</div>
+        <h3 class="feature-title" data-i18n="features.safety.title">Safety First</h3>
+        <p class="feature-desc" data-i18n="features.safety.desc">
+          Deny-first permission engine, dangerous command blocking, SSRF-aware web requests, and isolated sub-agent permissions.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Architecture -->
+<section id="architecture">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-eyebrow" data-i18n="arch.eyebrow">Architecture</span>
+      <h2 class="section-title" data-i18n="arch.title">Kernel / Shell separation</h2>
+      <p class="section-subtitle" data-i18n="arch.subtitle">
+        The engine emits events through an async stream, so CLI, TUI, tests, and future IDE/web shells consume the same runtime without coupling.
+      </p>
+    </div>
+
+    <div class="arch-diagram fade-in">
+<pre><span class="comment">CLI / TUI / future IDE shell</span>
+             │
+             ▼
+     <span class="kw">AsyncGenerator&lt;LoopEvent&gt;</span>
+             │
+             ▼
+        <span class="kw">CoreEngine</span>
+             │
+   ┌─────────┼─────────┐
+   │         │         │
+ <span class="kw">Model</span>   <span class="kw">Context</span>  <span class="kw">Tools</span>
+ Client   Manager   Executor</pre>
+    </div>
+
+    <div class="arch-packages">
+      <div class="arch-package">
+        <div class="name">packages/core</div>
+        <div class="desc" data-i18n="arch.pkg.core">Agent loop, API adaptation, context, cache, retry, workflow primitives</div>
+      </div>
+      <div class="arch-package">
+        <div class="name">packages/tui</div>
+        <div class="desc" data-i18n="arch.pkg.tui">Ink/React terminal UI, input, status, model picker, workflow display</div>
+      </div>
+      <div class="arch-package">
+        <div class="name">packages/tools</div>
+        <div class="desc" data-i18n="arch.pkg.tools">File, shell, search, edit, web, MCP, workflow, task, notebook tools</div>
+      </div>
+      <div class="arch-package">
+        <div class="name">packages/plugin</div>
+        <div class="desc" data-i18n="arch.pkg.plugin">Plugin/content-pack runtime, hooks, schema validation</div>
+      </div>
+      <div class="arch-package">
+        <div class="name">packages/memory</div>
+        <div class="desc" data-i18n="arch.pkg.memory">AgentMemory integration and memory tools</div>
+      </div>
+      <div class="arch-package">
+        <div class="name">packages/security</div>
+        <div class="desc" data-i18n="arch.pkg.security">Deny-first PermissionEngine, HookManager, FileSnapshot</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Install -->
+<section id="install">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-eyebrow" data-i18n="install.eyebrow">Quick Start</span>
+      <h2 class="section-title" data-i18n="install.title">Install and run in minutes</h2>
+      <p class="section-subtitle" data-i18n="install.subtitle">
+        Covalo runs on Bun 1.3+ and works on Linux, macOS, and Windows.
+      </p>
+    </div>
+
+    <h3 style="font-size:18px; margin-bottom:14px; font-weight:600;" data-i18n="install.global.title">Global install</h3>
+    <div class="code-block fade-in" style="margin-bottom: 28px;">
+<span class="comment"># npm</span>
+<span class="prompt">$</span> npm install -g covalo
+
+<span class="comment"># or bun</span>
+<span class="prompt">$</span> bun install -g covalo
+    </div>
+
+    <h3 style="font-size:18px; margin-bottom:14px; font-weight:600;" data-i18n="install.start.title">Start in a project</h3>
+    <div class="code-block fade-in" style="margin-bottom: 28px;">
+<span class="prompt">$</span> cd your-project
+<span class="prompt">$</span> covalo
+<span class="comment"># inside Covalo, run:</span>
+<span class="comment">#   /help      — main usage entry</span>
+<span class="comment">#   /model     — switch models / configure providers</span>
+<span class="comment">#   /workflow  — start Supervisor / Worker workflow</span>
+    </div>
+
+    <h3 style="font-size:18px; margin-bottom:14px; font-weight:600;" data-i18n="install.source.title">Develop from source</h3>
+    <div class="code-block fade-in">
+<span class="prompt">$</span> git clone https://github.com/bzcsk2/covalo.git
+<span class="prompt">$</span> cd covalo
+<span class="prompt">$</span> bun install
+<span class="prompt">$</span> bun run dev
+    </div>
+  </div>
+</section>
+
+<!-- Workflow -->
+<section>
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-eyebrow" data-i18n="workflow.eyebrow">Workflow</span>
+      <h2 class="section-title" data-i18n="workflow.title">Supervisor + Worker loop</h2>
+      <p class="section-subtitle" data-i18n="workflow.subtitle">
+        A fixed two-role execution structure that avoids the fragile pattern of one agent wandering through an unbounded loop.
+      </p>
+    </div>
+
+    <div class="workflow fade-in">
+      <div class="workflow-step supervisor" data-i18n="workflow.step1">Supervisor plans</div>
+      <span class="workflow-arrow">→</span>
+      <div class="workflow-step worker" data-i18n="workflow.step2">Worker executes</div>
+      <span class="workflow-arrow">→</span>
+      <div class="workflow-step worker" data-i18n="workflow.step3">Worker reports</div>
+      <span class="workflow-arrow">→</span>
+      <div class="workflow-step supervisor" data-i18n="workflow.step4">Supervisor reviews</div>
+      <span class="workflow-arrow">→</span>
+      <div class="workflow-step" data-i18n="workflow.step5">Continue / Correct / Escalate</div>
+    </div>
+  </div>
+</section>
+
+<!-- Commands -->
+<section id="commands">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-eyebrow" data-i18n="commands.eyebrow">Commands</span>
+      <h2 class="section-title" data-i18n="commands.title">Common commands</h2>
+      <p class="section-subtitle" data-i18n="commands.subtitle">
+        Type /help inside Covalo for full guidance. Here are the most-used commands.
+      </p>
+    </div>
+
+    <div class="commands-wrap fade-in">
+      <table class="commands-table">
+        <thead>
+          <tr>
+            <th data-i18n="commands.col.cmd">Command</th>
+            <th data-i18n="commands.col.purpose">Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="cmd-name">/model</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.model">Switch chat target without losing state; configure providers, API keys, and local models.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/workflow</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.workflow">Start the Supervisor / Worker workflow.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/sessions</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.sessions">List and restore previous sessions after exit or crash.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/skill</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.skill">Browse and activate built-in engineering skills.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/status</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.status">Inspect runtime, model, provider, tool, and session state.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/context</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.context">Adjust context strategy.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/thinking</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.thinking">Adjust reasoning intensity.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/harness</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.harness">Adjust execution constraints for weak or local models.</td>
+          </tr>
+          <tr>
+            <td><span class="cmd-name">/help</span></td>
+            <td class="cmd-desc" data-i18n="commands.row.help">Show command help and usage guidance.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="container fade-in">
+    <h2 class="section-title" data-i18n="cta.title">Start building with Covalo today</h2>
+    <p class="section-subtitle" style="margin-bottom:32px;" data-i18n="cta.subtitle">
+      Make cheap, free, and local models useful enough to keep working.
+    </p>
+    <div class="cta-row">
+      <a href="https://github.com/bzcsk2/covalo" target="_blank" rel="noopener" class="btn btn-primary">
+        <span data-i18n="cta.github">View on GitHub</span>
+        <span>→</span>
+      </a>
+      <a href="https://www.npmjs.com/package/covalo" target="_blank" rel="noopener" class="btn btn-secondary" data-i18n="cta.npm">
+        npm package
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div>
+      <span data-i18n="footer.copyright">MIT Licensed · Made by the Covalo community</span>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/bzcsk2/covalo" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://www.npmjs.com/package/covalo" target="_blank" rel="noopener">npm</a>
+      <a href="https://github.com/bzcsk2/covalo/blob/main/CHANGELOG.md" target="_blank" rel="noopener" data-i18n="footer.changelog">Changelog</a>
+      <a href="https://github.com/bzcsk2/covalo/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" data-i18n="footer.contributing">Contributing</a>
+      <a href="https://github.com/bzcsk2/covalo/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="footer.security">Security</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // i18n dictionary
+  const I18N = {
+    en: {
+      "nav.features": "Features",
+      "nav.architecture": "Architecture",
+      "nav.install": "Install",
+      "nav.commands": "Commands",
+      "hero.tagline": 'A terminal-native AI loop agent that makes <strong>cheap, free, and local models</strong> complete real engineering work through supervised execution loops.',
+      "hero.cta.install": "Get Started",
+      "hero.cta.source": "View on GitHub",
+      "copy": "Copy",
+      "features.eyebrow": "Core Highlights",
+      "features.title": "Built for cost-aware engineering",
+      "features.subtitle": "Put strong models where they matter, let cheap models do the bulk of the work, and keep the loop observable, resumable, and governed.",
+      "features.cost.title": "Lower Cost",
+      "features.cost.desc": "Cache-aware context management, tool-call repair, and multi-provider routing maximize prefix-cache hits and reduce wasted tokens.",
+      "features.weak.title": "Weak-model Friendly",
+      "features.weak.desc": "Adjustable harness levels, small-step execution, failure recovery, and verification gates make unreliable models productive.",
+      "features.workflow.title": "Supervisor + Worker",
+      "features.workflow.desc": "A two-role execution structure: Supervisor plans and reviews; Worker executes and reports. Escalate on repeated failure.",
+      "features.edit.title": "Precise Editing",
+      "features.edit.desc": "Hash-anchored edits, fuzzy fallback matching, stale-read protection, and file snapshots for safe rollback.",
+      "features.tools.title": "30+ Built-in Tools",
+      "features.tools.desc": "Files, shell, grep, edit, web, MCP, workflow, task, notebook, cron — plus Skills, plugins, and AgentMemory integration.",
+      "features.safety.title": "Safety First",
+      "features.safety.desc": "Deny-first permission engine, dangerous command blocking, SSRF-aware web requests, and isolated sub-agent permissions.",
+      "arch.eyebrow": "Architecture",
+      "arch.title": "Kernel / Shell separation",
+      "arch.subtitle": "The engine emits events through an async stream, so CLI, TUI, tests, and future IDE/web shells consume the same runtime without coupling.",
+      "arch.pkg.core": "Agent loop, API adaptation, context, cache, retry, workflow primitives",
+      "arch.pkg.tui": "Ink/React terminal UI, input, status, model picker, workflow display",
+      "arch.pkg.tools": "File, shell, search, edit, web, MCP, workflow, task, notebook tools",
+      "arch.pkg.plugin": "Plugin/content-pack runtime, hooks, schema validation",
+      "arch.pkg.memory": "AgentMemory integration and memory tools",
+      "arch.pkg.security": "Deny-first PermissionEngine, HookManager, FileSnapshot",
+      "install.eyebrow": "Quick Start",
+      "install.title": "Install and run in minutes",
+      "install.subtitle": "Covalo runs on Bun 1.3+ and works on Linux, macOS, and Windows.",
+      "install.global.title": "Global install",
+      "install.start.title": "Start in a project",
+      "install.source.title": "Develop from source",
+      "workflow.eyebrow": "Workflow",
+      "workflow.title": "Supervisor + Worker loop",
+      "workflow.subtitle": "A fixed two-role execution structure that avoids the fragile pattern of one agent wandering through an unbounded loop.",
+      "workflow.step1": "Supervisor plans",
+      "workflow.step2": "Worker executes",
+      "workflow.step3": "Worker reports",
+      "workflow.step4": "Supervisor reviews",
+      "workflow.step5": "Continue / Correct / Escalate",
+      "commands.eyebrow": "Commands",
+      "commands.title": "Common commands",
+      "commands.subtitle": "Type /help inside Covalo for full guidance. Here are the most-used commands.",
+      "commands.col.cmd": "Command",
+      "commands.col.purpose": "Purpose",
+      "commands.row.model": "Switch chat target without losing state; configure providers, API keys, and local models.",
+      "commands.row.workflow": "Start the Supervisor / Worker workflow.",
+      "commands.row.sessions": "List and restore previous sessions after exit or crash.",
+      "commands.row.skill": "Browse and activate built-in engineering skills.",
+      "commands.row.status": "Inspect runtime, model, provider, tool, and session state.",
+      "commands.row.context": "Adjust context strategy.",
+      "commands.row.thinking": "Adjust reasoning intensity.",
+      "commands.row.harness": "Adjust execution constraints for weak or local models.",
+      "commands.row.help": "Show command help and usage guidance.",
+      "cta.title": "Start building with Covalo today",
+      "cta.subtitle": "Make cheap, free, and local models useful enough to keep working.",
+      "cta.github": "View on GitHub",
+      "cta.npm": "npm package",
+      "footer.copyright": "MIT Licensed · Made by the Covalo community",
+      "footer.changelog": "Changelog",
+      "footer.contributing": "Contributing",
+      "footer.security": "Security"
+    },
+    zh: {
+      "nav.features": "特性",
+      "nav.architecture": "架构",
+      "nav.install": "安装",
+      "nav.commands": "命令",
+      "hero.tagline": '一个终端原生 AI Loop Agent，让<strong>便宜、免费、本地模型</strong>也能稳定完成真实工程任务，通过监督式执行闭环交付。',
+      "hero.cta.install": "开始使用",
+      "hero.cta.source": "在 GitHub 查看",
+      "copy": "复制",
+      "features.eyebrow": "核心亮点",
+      "features.title": "为成本敏感的工程而生",
+      "features.subtitle": "把强模型用在最有价值的位置，让便宜模型负责大量施工，整个闭环可观测、可恢复、有边界。",
+      "features.cost.title": "更低成本",
+      "features.cost.desc": "缓存友好的上下文管理、工具调用修复、多 Provider 路由，最大化 prefix-cache 命中率，减少无效 token 消耗。",
+      "features.weak.title": "小模型友好",
+      "features.weak.desc": "可调 harness 强度、小步执行、失败恢复、Verification Gate，让不稳定模型也能稳定产出。",
+      "features.workflow.title": "Supervisor + Worker",
+      "features.workflow.desc": "固定双角色执行结构：Supervisor 规划与审查，Worker 执行与汇报，重复失败自动升级。",
+      "features.edit.title": "精准编辑",
+      "features.edit.desc": "Hash 锚定编辑、Fuzzy 兜底匹配、Stale-read 保护、文件快照，安全可回滚。",
+      "features.tools.title": "30+ 内置工具",
+      "features.tools.desc": "文件、Shell、grep、编辑、Web、MCP、Workflow、Task、Notebook、Cron——还支持 Skills、Plugin、AgentMemory。",
+      "features.safety.title": "安全优先",
+      "features.safety.desc": "Deny-first 权限引擎、危险命令拦截、SSRF 防护、子 Agent 权限隔离。",
+      "arch.eyebrow": "架构",
+      "arch.title": "核壳分离",
+      "arch.subtitle": "引擎通过 AsyncGenerator<LoopEvent> 输出事件流，CLI、TUI、测试和未来的 IDE/Web 壳层消费同一套运行时，无耦合。",
+      "arch.pkg.core": "推理循环、API 适配、上下文、缓存、工具修复、workflow 基础",
+      "arch.pkg.tui": "Ink/React 终端界面、输入、状态栏、模型选择、workflow 展示",
+      "arch.pkg.tools": "文件、Shell、搜索、编辑、Web、MCP、Workflow、Task、Notebook 工具",
+      "arch.pkg.plugin": "Plugin/content-pack、Hook、Schema 工具验证",
+      "arch.pkg.memory": "AgentMemory 集成和 memory tools",
+      "arch.pkg.security": "Deny-first PermissionEngine、HookManager、FileSnapshot",
+      "install.eyebrow": "快速开始",
+      "install.title": "几分钟内安装运行",
+      "install.subtitle": "Covalo 基于 Bun 1.3+，支持 Linux、macOS、Windows。",
+      "install.global.title": "全局安装",
+      "install.start.title": "在项目中启动",
+      "install.source.title": "从源码开发",
+      "workflow.eyebrow": "工作流",
+      "workflow.title": "Supervisor + Worker 闭环",
+      "workflow.subtitle": "固定双角色执行结构，避免单体 Agent 在无界 Loop 中自我迷失。",
+      "workflow.step1": "Supervisor 规划",
+      "workflow.step2": "Worker 执行",
+      "workflow.step3": "Worker 汇报",
+      "workflow.step4": "Supervisor 审查",
+      "workflow.step5": "继续 / 修正 / 升级",
+      "commands.eyebrow": "命令",
+      "commands.title": "常用命令",
+      "commands.subtitle": "在 Covalo 中输入 /help 获取完整指引。以下是最常用命令。",
+      "commands.col.cmd": "命令",
+      "commands.col.purpose": "作用",
+      "commands.row.model": "切换对话对象与模型配置，状态不丢失。",
+      "commands.row.workflow": "启动 Supervisor / Worker 双 Agent 工作流。",
+      "commands.row.sessions": "查看和恢复历史会话，支持异常退出后的恢复。",
+      "commands.row.skill": "浏览和启用内置工程技能。",
+      "commands.row.status": "查看系统、模型、Provider、工具和 Session 状态。",
+      "commands.row.context": "修改上下文策略。",
+      "commands.row.thinking": "调整思考强度。",
+      "commands.row.harness": "根据模型能力调整执行约束强度。",
+      "commands.row.help": "查看帮助，也可以直接提问。",
+      "cta.title": "今天就开始用 Covalo 构建",
+      "cta.subtitle": "让便宜、免费、本地模型也能稳定工作。",
+      "cta.github": "在 GitHub 查看",
+      "cta.npm": "npm 包",
+      "footer.copyright": "MIT 许可证 · 由 Covalo 社区打造",
+      "footer.changelog": "更新日志",
+      "footer.contributing": "贡献指南",
+      "footer.security": "安全策略"
+    }
+  };
+
+  // Language toggle
+  let currentLang = "en";
+
+  function applyLang(lang) {
+    currentLang = lang;
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    const dict = I18N[lang];
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      const key = el.getAttribute("data-i18n");
+      const value = dict[key];
+      if (value !== undefined) {
+        // Support HTML in tagline
+        el.innerHTML = value;
+      }
+    });
+    // Update label on toggle button (shows the OTHER language)
+    document.getElementById("langLabel").textContent = lang === "en" ? "中文" : "English";
+    // Persist
+    try { localStorage.setItem("covalo-lang", lang); } catch (e) {}
+  }
+
+  // Initialize language (from localStorage or browser)
+  function initLang() {
+    let saved = null;
+    try { saved = localStorage.getItem("covalo-lang"); } catch (e) {}
+    if (saved && I18N[saved]) {
+      applyLang(saved);
+    } else {
+      const browserLang = (navigator.language || "en").toLowerCase();
+      applyLang(browserLang.startsWith("zh") ? "zh" : "en");
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    initLang();
+    document.getElementById("langToggle").addEventListener("click", () => {
+      applyLang(currentLang === "en" ? "zh" : "en");
+    });
+
+    // Copy-to-clipboard
+    document.querySelectorAll(".copy-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const text = btn.getAttribute("data-copy");
+        try {
+          await navigator.clipboard.writeText(text);
+          const original = btn.textContent;
+          btn.textContent = currentLang === "zh" ? "已复制" : "Copied";
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch (e) {
+          // fallback
+        }
+      });
+    });
+
+    // Fade-in on scroll
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("visible");
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: "0px 0px -50px 0px" });
+
+    document.querySelectorAll(".fade-in").forEach((el) => observer.observe(el));
+  });
+</script>
+
+</body>
+</html>
