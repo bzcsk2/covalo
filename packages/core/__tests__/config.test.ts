@@ -49,21 +49,25 @@ describe("getApiKeyEnvVar", () => {
 
 
 describe("loadConfig - 环境变量", () => {
-  const OLD_ENV = { ...process.env }
+  // 注意：不能用 `process.env = { ...OLD_ENV }` 替换整个 process.env。
+  // Bun 的 process.env 是 Proxy 对象，spread 展开后是普通对象，再赋值回去会丢失
+  // Proxy 特性（如大小写不敏感、自动 stringify 等），更严重的是 spread 可能不完整
+  // 捕获 PATH 等关键变量，导致后续测试中 which("node") 找不到可执行文件。
+  // 改为只清理本 describe 中用到的 env vars。
+  const TEST_ENV_KEYS = [
+    "COVALO_PROVIDER", "DEEPSEEK_MODEL", "DEEPSEEK_BASE_URL",
+    "ZEN_MODEL", "ZEN_BASE_URL", "ZEN_API_KEY", "DEEPSEEK_API_KEY",
+  ] as const
   let tmpDir: string
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "covalo-config-"))
     vi.spyOn(process, "cwd").mockReturnValue(tmpDir)
-    delete process.env.COVALO_PROVIDER
-    delete process.env.DEEPSEEK_MODEL
-    delete process.env.DEEPSEEK_BASE_URL
-    delete process.env.ZEN_MODEL
-    delete process.env.ZEN_BASE_URL
+    for (const key of TEST_ENV_KEYS) delete process.env[key]
   })
 
   afterEach(() => {
-    process.env = { ...OLD_ENV }
+    for (const key of TEST_ENV_KEYS) delete process.env[key]
     vi.restoreAllMocks()
     rmSync(tmpDir, { recursive: true, force: true })
   })
@@ -132,23 +136,22 @@ describe("loadConfig - 环境变量", () => {
 })
 
 describe("saveLastConfig / loadConfig 持久化", () => {
-  const OLD_ENV = { ...process.env }
+  // 同上：不能用 `process.env = { ...OLD_ENV }`，会丢失 PATH 等关键变量。
+  const TEST_ENV_KEYS = [
+    "COVALO_PROVIDER", "DEEPSEEK_API_KEY", "ZEN_API_KEY",
+    "DEEPSEEK_MODEL", "DEEPSEEK_BASE_URL", "ZEN_MODEL", "ZEN_BASE_URL",
+    "OPENAI_COMPATIBLE_MODEL", "OPENAI_COMPATIBLE_BASE_URL",
+  ] as const
   let tmpDir: string
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "covalo-config-"))
     vi.spyOn(process, "cwd").mockReturnValue(tmpDir)
-    delete process.env.COVALO_PROVIDER
-    delete process.env.DEEPSEEK_API_KEY
-    delete process.env.ZEN_API_KEY
-    delete process.env.DEEPSEEK_MODEL
-    delete process.env.DEEPSEEK_BASE_URL
-    delete process.env.ZEN_MODEL
-    delete process.env.ZEN_BASE_URL
+    for (const key of TEST_ENV_KEYS) delete process.env[key]
   })
 
   afterEach(() => {
-    process.env = { ...OLD_ENV }
+    for (const key of TEST_ENV_KEYS) delete process.env[key]
     vi.restoreAllMocks()
     rmSync(tmpDir, { recursive: true, force: true })
   })

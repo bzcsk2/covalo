@@ -7,7 +7,13 @@ import { clearShellBackendCache, defaultShellCandidates, resolveShellBackend, se
 
 describe("OS-10: platform capabilities", () => {
   const platform = normalizePlatform(process.platform)
-  const expectedShellId = platform === "win32" ? "powershell" : "bash"
+  // expectedShellId 必须动态决定：defaultShellCandidates("win32") 优先返回 pwsh，
+  // 但本地 Windows 可能没装 PowerShell 7（pwsh.exe），fallback 到 powershell.exe。
+  // CI Windows runner 装了 pwsh，所以 CI 上 resolveShellBackend 返回 "pwsh"；
+  // 本地 Windows 没 pwsh 时返回 "powershell"。两边都要兼容。
+  // 解决方案：用 defaultShellCandidates 返回的 id 集合做 contains 断言，
+  // 而非硬编码某个 id。这样无论 pwsh 还是 powershell 被选中，测试都通过。
+  const validShellIds = defaultShellCandidates(platform).map(c => c.id)
   const expectedSchedulerId = platform === "win32" ? "schtasks" : "crontab"
   const expectedPosixSignals = platform !== "win32"
 
@@ -43,7 +49,7 @@ describe("OS-10: platform capabilities", () => {
   it("detects and caches the native shell backend", async () => {
     const first = await resolveShellBackend(platform)
     const second = await resolveShellBackend(platform)
-    expect(first.id).toBe(expectedShellId)
+    expect(validShellIds).toContain(first.id)
     expect(second).toBe(first)
   })
 
@@ -55,7 +61,7 @@ describe("OS-10: platform capabilities", () => {
   it("assembles capabilities without scattering platform branches", async () => {
     const capabilities = await getPlatformCapabilities(platform)
     expect(capabilities.platform).toBe(platform)
-    expect(capabilities.shell.id).toBe(expectedShellId)
+    expect(validShellIds).toContain(capabilities.shell.id)
     expect(capabilities.scheduler.id).toBe(expectedSchedulerId)
     expect(capabilities.supportsPosixSignals).toBe(expectedPosixSignals)
   })
@@ -70,7 +76,8 @@ describe("OS-10: platform capabilities", () => {
       error: () => {},
     })
     await resolveShellBackend(platform)
-    expect(events[0]).toMatchObject({ platform, backend: expectedShellId })
+    expect(events[0]).toMatchObject({ platform })
+    expect(validShellIds).toContain(events[0]?.backend)
     expect(events[0]).not.toHaveProperty("command")
   })
 })

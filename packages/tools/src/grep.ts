@@ -29,6 +29,28 @@ function sanitizeIncludePattern(raw: string): string | null {
   return trimmed
 }
 
+/**
+ * Expand brace expansion in glob patterns.
+ *
+ * CI 上 `*.{ts,tsx}` 在 rg 的某些版本/场景下 brace 支持不稳定，回退到 grep 时
+ * `grep --include=*.{ts,tsx}` 完全不支持 brace（把花括号当字面字符），导致零匹配。
+ * 这里在调用 rg/grep/findstr 之前先把 brace 展开成多个简单 glob，然后对每个 glob
+ * 各传一次 `-g` / `--include`。
+ *
+ * - `*.{ts,tsx}` → `["*.ts", "*.tsx"]`
+ * - `*.{js,ts,tsx}` → `["*.js", "*.ts", "*.tsx"]`
+ * - `*.ts` → `["*.ts"]` (无 brace，原样返回)
+ * - `prefix{x,y}suffix` → `["prefixxsuffix", "prefixysuffix"]`
+ */
+function expandBrace(pattern: string): string[] {
+  const match = pattern.match(/^([^{]*)\{([^}]+)\}(.*)$/)
+  if (!match) return [pattern]
+  const [, prefix = "", body = "", suffix = ""] = match
+  const alternatives = body.split(",").map(s => s.trim()).filter(Boolean)
+  if (alternatives.length === 0) return [pattern]
+  return alternatives.map(alt => `${prefix}${alt}${suffix}`)
+}
+
 export function createGrepTool(): AgentTool {
   return {
     name: "grep",
@@ -72,6 +94,10 @@ export function createGrepTool(): AgentTool {
         return { content: safeStringify({ error: `Invalid include pattern: ${rawInclude}` }), isError: true }
       }
 
+      // Expand brace patterns like `*.{ts,tsx}` → `["*.ts", "*.tsx"]` before passing to rg/grep/findstr.
+      // rg 在某些版本对 brace 支持不稳定；grep 的 --include 完全不支持 brace。
+      const includes = include ? expandBrace(include) : []
+
       if (isSensitive(searchPath) || isSensitive(searchPath + "/")) {
         return { content: safeStringify({ error: `Searching sensitive path is denied: ${args.path ?? ctx.cwd}` }), isError: true }
       }
@@ -83,7 +109,7 @@ export function createGrepTool(): AgentTool {
 
       let stdout: string
       try {
-        stdout = await runSearch(pattern, searchPath, include ?? undefined, ctx.signal)
+        stdout = await runSearch(pattern, searchPath, includes, ctx.signal)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         return { content: safeStringify({ error: `Search failed: ${msg}` }), isError: true }
@@ -117,16 +143,17 @@ export function createGrepTool(): AgentTool {
   }
 }
 
-function runSearch(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
-  return tryRg(pattern, searchPath, include, signal)
-    .catch(() => tryGrep(pattern, searchPath, include, signal))
-    .catch(() => tryFindstr(pattern, searchPath, include, signal))
+function runSearch(pattern: string, searchPath: string, includes: string[], signal?: AbortSignal): Promise<string> {
+  return tryRg(pattern, searchPath, includes, signal)
+    .catch(() => tryGrep(pattern, searchPath, includes, signal))
+    .catch(() => tryFindstr(pattern, searchPath, includes, signal))
 }
 
-function tryRg(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+function tryRg(pattern: string, searchPath: string, includes: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const rgArgs = ["-n", "--no-heading"]
-    if (include) rgArgs.push("-g", include)
+    // S1-7: brace 已在 expandBrace 中展开为多个简单 glob，对每个 glob 各传一次 -g。
+    for (const inc of includes) rgArgs.push("-g", inc)
     rgArgs.push("--", pattern, searchPath)
 
     const proc = spawn("rg", rgArgs, { signal, timeout: TIMEOUT_MS })
@@ -154,10 +181,11 @@ function tryRg(pattern: string, searchPath: string, include?: string, signal?: A
   })
 }
 
-function tryGrep(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+function tryGrep(pattern: string, searchPath: string, includes: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const grepArgs = ["-rn"]
-    if (include) grepArgs.push(`--include=${include}`)
+    // S1-7: 对每个展开后的 glob 各传一次 --include（grep 不支持 brace expansion）。
+    for (const inc of includes) grepArgs.push(`--include=${inc}`)
     grepArgs.push("--", pattern, searchPath)
 
     const proc = spawn("grep", grepArgs, { signal, timeout: TIMEOUT_MS })
@@ -196,11 +224,11 @@ function isRegexPattern(pattern: string): boolean {
   return /[.+*?^${}()|[\]\\]/.test(pattern) && !/^[a-zA-Z0-9_\s-]+$/.test(pattern)
 }
 
-function tryFindstr(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+function tryFindstr(pattern: string, searchPath: string, includes: string[], signal?: AbortSignal): Promise<string> {
   // If the pattern is a true regex (not just a literal string), use Node.js-based
   // regex search because findstr /r produces broken output (no line breaks) on Windows pipe.
   if (isRegexPattern(pattern)) {
-    return tryNodeGrep(pattern, searchPath, include, signal)
+    return tryNodeGrep(pattern, searchPath, includes, signal)
   }
 
   return new Promise((resolve, reject) => {
@@ -211,12 +239,16 @@ function tryFindstr(pattern: string, searchPath: string, include?: string, signa
     // Normalize path separators for findstr
     const normalizedPath = searchPath.replace(/\//g, "\\")
 
-    let target = normalizedPath
-    if (include) {
-      // include is a glob like "*.ts" — findstr uses wildcards directly
-      findstrArgs.push("/c:" + pattern, normalizedPath + "\\" + include)
+    if (includes.length > 0) {
+      // S1-7: brace 已展开为多个简单 glob。findstr 用空格分隔多个 target 通配符，
+      // 例如 `findstr /s /n /c:"pattern" path\*.ts path\*.tsx`。
+      findstrArgs.push("/c:" + pattern)
+      for (const inc of includes) {
+        findstrArgs.push(normalizedPath + "\\" + inc)
+      }
     } else {
       // For directories, findstr /s with a directory target searches all files recursively
+      let target = normalizedPath
       try {
         const stat = fs.statSync(searchPath)
         if (stat.isDirectory()) {
@@ -257,11 +289,22 @@ function tryFindstr(pattern: string, searchPath: string, include?: string, signa
  * (Windows pipe strips line breaks in /r mode). Reads files directly and
  * applies JS RegExp pattern.
  */
-function tryNodeGrep(pattern: string, searchPath: string, include?: string, signal?: AbortSignal): Promise<string> {
+function tryNodeGrep(pattern: string, searchPath: string, includes: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     try {
       const stat = fs.statSync(searchPath)
       let files: string[] = []
+
+      // S1-7: 把每个 include 转换成"后缀匹配"条件。
+      // expandBrace 已经把 `*.{ts,tsx}` 展开成 `["*.ts", "*.tsx"]`，
+      // 这里对每个 glob 取 `*` 之后的部分作为后缀（如 `*.ts` → `.ts`），
+      // 文件名匹配任意一个后缀即收集。
+      const suffixes = includes.map(inc => inc.replace(/^\*/, ""))
+
+      const matchesAnyInclude = (fileName: string): boolean => {
+        if (suffixes.length === 0) return true
+        return suffixes.some(suffix => fileName.endsWith(suffix))
+      }
 
       const collectFiles = (dir: string) => {
         if (signal?.aborted) { reject(new Error("aborted")); return }
@@ -272,10 +315,7 @@ function tryNodeGrep(pattern: string, searchPath: string, include?: string, sign
             if (entry.name === "node_modules" || entry.name === ".git") continue
             collectFiles(fullPath)
           } else if (entry.isFile()) {
-            if (include) {
-              const ext = include.replace(/^\*/, "")
-              if (!entry.name.endsWith(ext)) continue
-            }
+            if (!matchesAnyInclude(entry.name)) continue
             files.push(fullPath)
           }
         }

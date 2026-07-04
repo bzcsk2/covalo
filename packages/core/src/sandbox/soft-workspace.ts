@@ -30,12 +30,17 @@ export class SoftWorkspaceProvider implements SandboxProvider {
   private resolveContainedCwd(cwd: string, allowRoots: string[]): string {
     if (allowRoots.length === 0) return cwd;
 
+    // macOS 上 /var 是 /private/var 的符号链接，mkdtempSync 返回 /var/folders/...
+    // 而 realpathSync 解析后变成 /private/var/folders/...。
+    // 包含检测必须用 resolved 路径比较（避免符号链接绕过），
+    // 但返回给调用方的 cwd 必须保持原始路径，否则 HOME 等环境变量
+    // 会指向解析后的路径，与调用方传入的路径不一致（macOS CI 失败根因）。
     const resolved = resolveReal(cwd);
     for (const root of allowRoots) {
       const resolvedRoot = resolveReal(root);
       const rel = relative(resolvedRoot, resolved);
       if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
-        return resolved;
+        return cwd;
       }
     }
     throw new SandboxCwdError(

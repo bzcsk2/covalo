@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { SurfaceStore } from "../src/harness-evolution/surfaces/surface-store";
-import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -76,9 +76,10 @@ describe("SurfaceStore", () => {
   });
 
   test("user override takes precedence over default", async () => {
-    const overrideDir = join(TEST_BASE, ".covalo", "harness", "surfaces");
-    mkdirSync(overrideDir, { recursive: true });
-    writeFileSync(join(overrideDir, "supervisor-system-prompt.md"), "Custom supervisor content", "utf-8");
+    // 之前的测试已经触发过 store.get("supervisor-system-prompt")（如 getAll / getHash），
+    // cache 中已填入默认内容。这里直接 writeFileSync 不会清 cache，导致后续 get 命中默认内容失败。
+    // 改用 store.writeOverride API：它写文件后会自动 invalidate cache，保证测试一致性。
+    await store.writeOverride("supervisor-system-prompt", "Custom supervisor content");
 
     const content = await store.get("supervisor-system-prompt");
     expect(content).toBe("Custom supervisor content");

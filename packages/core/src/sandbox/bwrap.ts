@@ -159,19 +159,40 @@ export class BwrapProvider implements SandboxProvider {
 
     try {
       execFileSync(bwrap, ["--version"], { encoding: "utf-8", stdio: "pipe" });
-      return {
-        available: true,
-        official: true,
-        providerId: "bwrap",
-      };
     } catch {
       return {
         available: false,
         official: false,
         providerId: "bwrap",
-        reason: `bwrap found at ${bwrap} but failed to execute`,
+        reason: `bwrap found at ${bwrap} but failed to execute --version`,
       };
     }
+
+    // 冒烟测试：实际跑一次最小 namespace 操作。
+    // GitHub ubuntu-latest runner 对 unprivileged user namespace 有 AppArmor/seccomp 限制，
+    // `bwrap --version` 能成功（不创建 namespace），但 `bwrap --ro-bind / / true` 会失败。
+    // 如果不在这里冒烟，run() 时才会发现不可用，导致 integration test 误报。
+    try {
+      execFileSync(bwrap, ["--ro-bind", "/", "/", "--dev", "/dev", "true"], {
+        encoding: "utf-8",
+        stdio: "pipe",
+        timeout: 5000,
+      });
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return {
+        available: false,
+        official: false,
+        providerId: "bwrap",
+        reason: `bwrap binary present but namespace smoke test failed (likely AppArmor/seccomp restriction): ${reason.slice(0, 120)}`,
+      };
+    }
+
+    return {
+      available: true,
+      official: true,
+      providerId: "bwrap",
+    };
   }
 
   private buildArgs(input: SandboxCommand): string[] {

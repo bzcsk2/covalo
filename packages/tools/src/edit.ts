@@ -7,6 +7,24 @@ import { checkStale } from "./stale-read.js"
 import { isWriteProtected } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 
+/**
+ * CL-12: 检测文件是否为二进制内容，拒绝编辑二进制文件。
+ *
+ * 检测策略（跨平台一致，不依赖平台 API）：
+ * 1. null byte（0x00）—— 二进制文件的强信号
+ * 2. UTF-8 round-trip 失败 —— buffer 含无效 UTF-8 字节（如 0xff）时，
+ *    toString("utf-8") 会把无效字节替换为 U+FFFD，导致 round-trip buffer
+ *    与原始 buffer 不一致。这能捕获 Windows/POSOS 上所有无效编码情况。
+ */
+function isBinaryBuffer(buffer: Buffer): boolean {
+  // null byte 是二进制的经典信号
+  if (buffer.includes(0)) return true
+  // 无效 UTF-8 检测：round-trip 后 buffer 不同则说明含无效字节
+  const asString = buffer.toString("utf-8")
+  if (!buffer.equals(Buffer.from(asString, "utf-8"))) return true
+  return false
+}
+
 function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex")
 }
@@ -108,7 +126,12 @@ export function createEditTool(): AgentTool {
       }
 
       // CRLF normalization: detect original style, normalize to LF for comparison
-      const raw = await readFile(path, "utf-8")
+      // CL-12: 先读为 Buffer 做二进制检测，避免把二进制文件当 utf-8 文本编辑
+      const rawBuffer = await readFile(path)
+      if (isBinaryBuffer(rawBuffer)) {
+        return { content: safeStringify({ error: "Cannot edit binary file (invalid UTF-8 encoding detected)", path: args.path }), isError: true }
+      }
+      const raw = rawBuffer.toString("utf-8")
       const lineEnding = detectLineEnding(raw)
       const normalizedContent = toLF(raw)
       const normalizedOld = toLF(oldString)
