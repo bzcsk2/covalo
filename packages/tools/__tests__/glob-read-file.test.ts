@@ -362,15 +362,18 @@ describe("grep", () => {
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
     // Handle both Unix (path:num:text) and Windows (C:\path:num:text) output formats
+    // D2: rg/grep 在 Windows 上输出的路径分隔符可能混合 \ 和 /（searchPath 用 \，
+    // 但 rg 在 searchPath 后追加文件名时用 /）。比较前把所有路径归一化到 / 再比对。
+    const toNorm = (s: string) => s.replace(/\\/g, "/")
     const filePaths = p.results.map((line: string) => {
       const lastColon = line.lastIndexOf(":")
       const secondLastColon = lastColon > 0 ? line.lastIndexOf(":", lastColon - 1) : -1
       return secondLastColon >= 0 ? line.substring(0, secondLastColon) : line.split(":")[0]
-    })
-    expect(filePaths).not.toContain(join(tmpDir, ".env"))
-    expect(filePaths).not.toContain(join(tmpDir, ".npmrc"))
-    expect(filePaths).not.toContain(join(tmpDir, ".ssh", "id_rsa"))
-    expect(filePaths).toContain(join(tmpDir, "normal.txt"))
+    }).map(toNorm)
+    expect(filePaths).not.toContain(toNorm(join(tmpDir, ".env")))
+    expect(filePaths).not.toContain(toNorm(join(tmpDir, ".npmrc")))
+    expect(filePaths).not.toContain(toNorm(join(tmpDir, ".ssh", "id_rsa")))
+    expect(filePaths).toContain(toNorm(join(tmpDir, "normal.txt")))
   })
 
   it("non-sensitive regular files are searchable", async () => {

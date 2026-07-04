@@ -133,8 +133,10 @@ describe("bash tool", () => {
     const isWin = process.platform === "win32"
     const cmd = isWin ? "Get-Content marker.txt" : "cat marker.txt"
     // ctx.cwd 必须是一个存在的目录（resolvePath 会 realpath 它），且要包含 tmpDir 以通过 containment 检查。
-    // POSIX 用 "/tmp"，Windows 用 os.tmpdir()。
-    const ctxCwd = isWin ? tmpdir() : "/tmp"
+    // macOS 上 tmpdir() 返回 /var/folders/...（/var 是 /private/var 的 symlink），
+    // mkdtempSync 返回的 tmpDir 在 /var/folders/ 下，不在 /tmp 下。
+    // 所以 POSIX 也必须用 tmpdir() 作为 ctxCwd，确保 containment 检查通过。
+    const ctxCwd = tmpdir()
     const r = await tool.execute({ command: cmd, cwd: tmpDir }, { cwd: ctxCwd, signal: new AbortController().signal } as any)
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
