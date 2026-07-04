@@ -4,9 +4,9 @@ import type { ScrollBoxHandle } from '@covalo/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine, LoopEvent } from '@covalo/core';
 import type { ChatMessage, DeepreefConfig } from '@covalo/core';
-import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS, resolveApiKey, loadRoleConfig, getCategory, getSuite, runFixedEval, saveEvalReport } from '@covalo/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS, resolveApiKey, loadRoleConfig, getCategory, getSuite, runFixedEval, saveEvalReport, DEFAULT_WORKFLOW_CONFIG } from '@covalo/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@covalo/core';
-import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
+import { createBridge, timelineFromMessages, WorkflowDriveError, type BridgeState } from './bridge.js';
 import type { DualAgentRuntime } from '@covalo/core/dual-agent-runtime/dual-runtime.js';
 import type { WorkflowCoordinator } from '@covalo/core/workflow-coordinator/coordinator.js';
 import { TranscriptProvider } from './store/TranscriptContext.js';
@@ -177,6 +177,14 @@ interface SkillRecord {
  * @param text - 用户输入文本
  * @returns 去重后的技能名称列表
  */
+function getWorkflowIdFromError(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'workflowId' in err) {
+    const id = (err as { workflowId?: unknown }).workflowId
+    return typeof id === 'string' ? id : undefined
+  }
+  return undefined
+}
+
 function extractSkillTags(text: string): string[] {
   const names = new Set<string>();
   for (const match of text.matchAll(/(?:^|\s)#([A-Za-z0-9_.-]+)/g)) {
@@ -481,7 +489,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [workflowState, setWorkflowState] = useState<WorkflowState>({
     phase: 'idle',
     iteration: 0,
-    maxRounds: 9,
+    maxRounds: DEFAULT_WORKFLOW_CONFIG.maxRounds,
     goal: '',
     supervisorStatus: 'idle',
     workerStatus: 'idle',
@@ -801,10 +809,36 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
       return;
     }
-    // /workflow 命令 — 打开工作流模式选择菜单（alone / subagent / loop / eval）
-    if (command?.name === 'workflow') {
-      setShowWorkflowMenu(true);
-      return;
+    // /reset 命令 — 重置当前 workflow 状态
+    if (command?.name === 'reset') {
+      workflowCoordinatorRef.current?.interrupt()
+      workflowCoordinatorRef.current?.reset()
+      dualRuntimeRef.current?.reset()
+
+      workflowRunningRef.current = false
+
+      if (workflowMode === 'loop') {
+        setWorkflowLifecycle({ status: 'awaiting_goal' })
+      } else {
+        setWorkflowLifecycle({ status: 'idle' })
+      }
+
+      setWorkflowState(prev => ({
+        ...prev,
+        phase: 'idle',
+        goal: '',
+        iteration: 0,
+        supervisorStatus: 'idle',
+        workerStatus: 'idle',
+      }))
+
+      appendMessage({
+        role: 'assistant' as const,
+        content: workflowMode === 'loop'
+          ? t().workflowResetLoop
+          : t().workflowReset,
+      })
+      return
     }
     // /alone /subagent /loop — quick mode switch aliases
     if (command?.name === 'alone' || command?.name === 'subagent' || command?.name === 'loop') {
@@ -1039,79 +1073,16 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       })();
       return;
     }
-    // /goal 命令 — 目标管理（仅 loop 模式有效）
-    if (command?.name === 'goal') {
-      if (workflowMode !== 'loop') {
-        appendMessage({ role: 'assistant' as const, content: t().goalOnlyLoop });
-        return;
-      }
-      const sessionId = engineRef.current.getSessionId();
-      const goalStore = new GoalStore();
-      const goal = goalStore.getGoal(sessionId);
-      if (command.objective) {
-        try {
-          goalStore.createGoal(sessionId, command.objective);
-          appendMessage({ role: 'assistant' as const, content: t().goalSet(command.objective) });
-        } catch {
-          goalStore.replaceGoal(sessionId, command.objective);
-          appendMessage({ role: 'assistant' as const, content: t().goalReplaced(command.objective) });
-        }
-      } else if (command.subcommand === 'edit' && command.arg) {
-        if (goal) {
-          goalStore.setTokenBudget(sessionId, goal.tokenBudget);
-          const updated = goalStore.getGoal(sessionId);
-          if (updated) {
-            updated.objective = command.arg;
-            goalStore.replaceGoal(sessionId, command.arg, goal.tokenBudget);
-          }
-          appendMessage({ role: 'assistant' as const, content: t().goalUpdated(command.arg) });
-        } else {
-          appendMessage({ role: 'assistant' as const, content: t().goalNoActiveToEdit });
-        }
-      } else if (command.subcommand === 'edit') {
-        appendMessage({ role: 'assistant' as const, content: t().goalUsage });
-      } else if (command.subcommand === 'pause') {
-        if (goal) { goalStore.systemSetStatus(sessionId, 'paused'); }
-        appendMessage({ role: 'assistant' as const, content: goal ? t().goalPause : t().goalNoActive });
-      } else if (command.subcommand === 'resume') {
-        if (goal) { goalStore.systemSetStatus(sessionId, 'active'); }
-        appendMessage({ role: 'assistant' as const, content: goal ? t().goalResume : t().goalNoActive });
-      } else if (command.subcommand === 'clear') {
-        if (goal) { goalStore.clearGoal(sessionId); }
-        appendMessage({ role: 'assistant' as const, content: goal ? t().goalClear : t().goalNoActive });
-      } else if (command.subcommand === 'budget' && command.arg) {
-        const budget = parseInt(command.arg, 10);
-        if (isNaN(budget) || budget <= 0) {
-          appendMessage({ role: 'assistant' as const, content: t().goalInvalidBudget });
-        } else if (goal) {
-          goalStore.setTokenBudget(sessionId, budget);
-          appendMessage({ role: 'assistant' as const, content: t().goalBudgetSet(budget) });
-        } else {
-          appendMessage({ role: 'assistant' as const, content: t().goalNoBudgetSet });
-        }
-      } else if (command.subcommand === 'no-budget') {
-        if (goal) {
-          goalStore.setTokenBudget(sessionId, undefined);
-          appendMessage({ role: 'assistant' as const, content: t().goalBudgetRemoved });
-        } else {
-          appendMessage({ role: 'assistant' as const, content: t().goalNoActive });
-        }
-      } else {
-        // /goal — show current goal status
-        if (goal) {
-          const budgetInfo = goal.tokenBudget ? ` | Budget: ${goal.tokensUsed}/${goal.tokenBudget}` : '';
-          appendMessage({
-            role: 'assistant' as const,
-            content: t().goalStatusLine(goal.objective, goal.status, goal.tokensUsed, budgetInfo, goal.timeUsedSeconds),
-          });
-        } else {
-          appendMessage({
-            role: 'assistant' as const,
-            content: t().goalNoBudgetSet,
-          });
-        }
-      }
-      return;
+    // /goal 已移除 - goal 管理现在由 supervisor 工具完成
+    // /workflow 已移除 - 使用 /alone /subagent /loop /eval 直接切换
+
+    // Unknown slash command rejection
+    if (submitted.startsWith('/') && !command) {
+      appendMessage({
+        role: 'assistant' as const,
+        content: `Unknown command: ${submitted.trim()}`,
+      })
+      return
     }
 
     // SFR-50: 使用统一模式路由器
@@ -1167,10 +1138,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         try { goalStore.createGoal(sessionId, goal); } catch { goalStore.replaceGoal(sessionId, goal); }
         const workflowId = sessionId;
         setWorkflowLifecycle({ status: 'running', workflowId });
+        const workflowMaxRounds =
+          workflowCoordinatorRef.current?.getConfig().maxRounds
+          ?? DEFAULT_WORKFLOW_CONFIG.maxRounds
         setWorkflowState({
           phase: 'supervisor_analyse',
           iteration: 1,
-          maxRounds: 9,
+          maxRounds: workflowMaxRounds,
           goal,
           supervisorStatus: 'analyse',
           workerStatus: 'idle',
@@ -1180,6 +1154,11 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           if (finalStatus) {
             setWorkflowLifecycle({ status: finalStatus as WorkflowLifecycle['status'], workflowId, reason } as WorkflowLifecycle);
             return;
+          }
+          if (phase === 'waiting_user') {
+            setWorkflowLifecycle({ status: 'waiting_user', workflowId })
+          } else if (workflowLifecycleRef.current.status === 'waiting_user') {
+            setWorkflowLifecycle({ status: 'running', workflowId })
           }
           const phaseMap: Record<string, { supervisor: WorkflowState['supervisorStatus']; worker: WorkflowState['workerStatus'] }> = {
             supervisor_analyse: { supervisor: 'analyse', worker: 'idle' },
@@ -1199,7 +1178,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             workerStatus: mapped.worker,
           }));
         }, workflowId).catch((err: unknown) => {
-          setWorkflowLifecycle({ status: 'failed', workflowId: 'wf-' + Date.now(), reason: (err as Error).message });
+          const reason = err instanceof Error ? err.message : String(err)
+          const failedWorkflowId = getWorkflowIdFromError(err) ?? workflowId
+          setWorkflowLifecycle({ status: 'failed', workflowId: failedWorkflowId, reason })
         }).finally(() => {
           workflowRunningRef.current = false;
         });
@@ -1207,9 +1188,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
       case 'resume_workflow': {
         if (workflowRunningRef.current) {
+          appendMessage({
+            role: 'assistant' as const,
+            content: t().workflowAlreadyRunning,
+          })
           return;
         }
-        const workflowId = lifecycle.status === 'blocked' ? lifecycle.workflowId : 'wf-' + Date.now();
+        const workflowId = lifecycle.status === 'blocked' ? lifecycle.workflowId : `wf-${Date.now()}`;
         workflowRunningRef.current = true;
         setWorkflowLifecycle({ status: 'running', workflowId });
         scrollRef.current?.scrollToBottom();
@@ -1217,6 +1202,11 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           if (finalStatus) {
             setWorkflowLifecycle({ status: finalStatus as WorkflowLifecycle['status'], workflowId, reason } as WorkflowLifecycle);
             return;
+          }
+          if (phase === 'waiting_user') {
+            setWorkflowLifecycle({ status: 'waiting_user', workflowId })
+          } else if (workflowLifecycleRef.current.status === 'waiting_user') {
+            setWorkflowLifecycle({ status: 'running', workflowId })
           }
           const phaseMap: Record<string, { supervisor: WorkflowState['supervisorStatus']; worker: WorkflowState['workerStatus'] }> = {
             supervisor_analyse: { supervisor: 'analyse', worker: 'idle' },
@@ -1236,7 +1226,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             workerStatus: mapped.worker,
           }));
         }).catch((err: unknown) => {
-          setWorkflowLifecycle({ status: 'failed', workflowId, reason: (err as Error).message });
+          const reason = err instanceof Error ? err.message : String(err)
+          const failedWorkflowId = getWorkflowIdFromError(err) ?? workflowId
+          setWorkflowLifecycle({ status: 'failed', workflowId: failedWorkflowId, reason })
         }).finally(() => {
           workflowRunningRef.current = false;
         });

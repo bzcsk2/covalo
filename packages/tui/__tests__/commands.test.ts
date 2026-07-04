@@ -97,16 +97,8 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     cmdEval: '',
     cmdTheme: '',
     cmdThinking: '',
-    cmdWorkflow: '',
     cmdTalk: '',
-    cmdGoal: '',
-    cmdGoalSet: '',
-    cmdGoalEdit: '',
-    cmdGoalPause: '',
-    cmdGoalResume: '',
-    cmdGoalClear: '',
-    cmdGoalBudget: '',
-    cmdGoalNoBudget: '',
+    cmdReset: '',
     evalStarted: () => '',
     evalProgress: () => '',
     evalSkipped: () => '',
@@ -124,21 +116,6 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     harnessProjectUsage: '',
     workflowInstructionQueued: () => '',
     inputTargetSwitched: () => '',
-    goalSet: () => '',
-    goalReplaced: () => '',
-    goalUpdated: () => '',
-    goalNoActive: '',
-    goalNoActiveToEdit: '',
-    goalPause: '',
-    goalResume: '',
-    goalClear: '',
-    goalInvalidBudget: '',
-    goalBudgetSet: () => '',
-    goalBudgetRemoved: '',
-    goalStatusLine: () => '',
-    goalOnlyLoop: '',
-    goalNoBudgetSet: '',
-    goalUsage: '',
     welcomeTagline: '',
     welcomePanelAgent: '',
     welcomePanelComponents: '',
@@ -310,23 +287,15 @@ describe("CL-52: slash command routing helpers", () => {
     expect(parseSlashCommand("/lang")).toEqual({ name: "lang" })
     expect(parseSlashCommand("/status")).toEqual({ name: "status" })
     expect(parseSlashCommand("/context")).toEqual({ name: "context" })
+    expect(parseSlashCommand("/reset")).toEqual({ name: "reset" })
   })
 
   it("keeps normal and unknown input outside slash routing", () => {
     expect(parseSlashCommand("hello")).toBeNull()
     expect(parseSlashCommand("/unknown")).toBeNull()
-  })
-
-  it("parses /goal commands", () => {
-    expect(parseSlashCommand("/goal")).toEqual({ name: "goal" })
-    expect(parseSlashCommand("/goal fix all bugs")).toEqual({ name: "goal", subcommand: "status", objective: "fix all bugs" })
-    expect(parseSlashCommand("/goal edit")).toEqual({ name: "goal", subcommand: "edit" })
-    expect(parseSlashCommand("/goal pause")).toEqual({ name: "goal", subcommand: "pause" })
-    expect(parseSlashCommand("/goal resume")).toEqual({ name: "goal", subcommand: "resume" })
-    expect(parseSlashCommand("/goal clear")).toEqual({ name: "goal", subcommand: "clear" })
-    expect(parseSlashCommand("/goal budget 50000")).toEqual({ name: "goal", subcommand: "budget", arg: "50000" })
-    expect(parseSlashCommand("/goal no-budget")).toEqual({ name: "goal", subcommand: "no-budget" })
-    expect(parseSlashCommand("/goal edit fix the tests")).toEqual({ name: "goal", subcommand: "edit", arg: "fix the tests" })
+    // Removed commands return null (no longer parsed)
+    expect(parseSlashCommand("/goal")).toBeNull()
+    expect(parseSlashCommand("/workflow")).toBeNull()
   })
 
   it("parses and validates thinking modes", () => {
@@ -410,16 +379,15 @@ describe("CL-52: slash command routing helpers", () => {
     })
   })
 
-  it("buildHelpText includes new commands", () => {
+  it("buildHelpText includes /reset command", () => {
     const help = buildHelpText("worker", stubStrings({
       cmdTheme: "theme description",
       cmdThinking: "thinking description",
-      cmdWorkflow: "workflow description",
     }))
 
     expect(help).toContain("/theme")
     expect(help).toContain("/thinking")
-    expect(help).toContain("/workflow")
+    expect(help).toContain("/reset")
   })
 
   it("formats skill lists with truncation and preserves malformed fallback", () => {

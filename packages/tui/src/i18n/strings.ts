@@ -110,16 +110,8 @@ export interface Strings {
   helpDeprecatedAgentNote: string;
   cmdTheme: string;
   cmdThinking: string;
-  cmdWorkflow: string;
   cmdTalk: string;
-  cmdGoal: string;
-  cmdGoalSet: string;
-  cmdGoalEdit: string;
-  cmdGoalPause: string;
-  cmdGoalResume: string;
-  cmdGoalClear: string;
-  cmdGoalBudget: string;
-  cmdGoalNoBudget: string;
+  cmdReset: string;
   // P0: App command feedback
   evalStarted: (models: number, cases: number, runs: number) => string;
   evalProgress: (index: number, total: number, model: string, caseId: string, score?: number, grade?: string) => string;
@@ -138,22 +130,6 @@ export interface Strings {
   harnessProjectUsage: string;
   workflowInstructionQueued: (content: string) => string;
   inputTargetSwitched: (role: string) => string;
-  // P0: goal
-  goalSet: (objective: string) => string;
-  goalReplaced: (objective: string) => string;
-  goalUpdated: (objective: string) => string;
-  goalNoActive: string;
-  goalNoActiveToEdit: string;
-  goalPause: string;
-  goalResume: string;
-  goalClear: string;
-  goalInvalidBudget: string;
-  goalBudgetSet: (budget: number) => string;
-  goalBudgetRemoved: string;
-  goalStatusLine: (objective: string, status: string, tokensUsed: number, budgetInfo: string, timeUsedSeconds: number) => string;
-  goalOnlyLoop: string;
-  goalNoBudgetSet: string;
-  goalUsage: string;
   // P0: welcome
   welcomeTagline: string;
   welcomePanelAgent: string;
@@ -260,6 +236,8 @@ export interface Strings {
   workflowAlreadyRunning: string;
   workflowModeChanged: (mode: string) => string;
   workflowLoopStarted: string;
+  workflowResetLoop: string;
+  workflowReset: string;
   workflowContinuationGuard: string;
   workflowStuckGuard: string;
   // P0: agent/worker labels

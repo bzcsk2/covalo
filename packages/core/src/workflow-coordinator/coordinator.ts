@@ -952,25 +952,50 @@ ${adjustment.recommendedMaxTokens ? `- Recommended max output budget: ${adjustme
     return this.getState()!
   }
 
-  resumeInterruptedWorkflow(instruction: string): WorkflowLoopState {
+  private isResumableBlockedReason(reason?: string): boolean {
+    return reason === "Interrupted by user"
+      || reason === "Goal is paused"
+      || reason === "User rejected question"
+  }
+
+  resumeBlockedWorkflow(instruction = ""): WorkflowLoopState {
     if (!this.state) {
       throw new Error("No workflow in progress")
     }
-    if (this.state.currentPhase !== "blocked" || this.state.blockedReason !== "Interrupted by user") {
-      throw new Error("Only a workflow interrupted by the user can be resumed")
+
+    if (this.state.currentPhase !== "blocked") {
+      throw new Error(`Workflow is not blocked; current phase is ${this.state.currentPhase}`)
     }
 
+    if (!this.isResumableBlockedReason(this.state.blockedReason)) {
+      throw new Error(`Workflow cannot be resumed from blocked reason: ${this.state.blockedReason ?? "unknown"}`)
+    }
+
+    const reason = this.state.blockedReason
     this.pendingEvents = []
-    this.state.resumeInstruction = instruction
+    this.state.resumeInstruction = instruction.trim() || undefined
     this.state.blockedReason = undefined
-    // The interrupted iteration never completed, so retry it instead of
-    // consuming another round from the workflow budget.
-    this.state.iteration = Math.max(0, this.state.iteration - 1)
+
+    if (reason === "Interrupted by user") {
+      this.state.iteration = Math.max(0, this.state.iteration - 1)
+    }
+
     const result = this.transition("supervisor_analyse")
     if (!result.success) {
       throw new Error(result.error)
     }
+
     return this.getState()!
+  }
+
+  resumeInterruptedWorkflow(instruction: string): WorkflowLoopState {
+    if (!this.state) {
+      throw new Error("No workflow in progress")
+    }
+    if (this.state.blockedReason !== "Interrupted by user") {
+      throw new Error("Only a workflow interrupted by the user can be resumed")
+    }
+    return this.resumeBlockedWorkflow(instruction)
   }
 
   private isValidTransition(from: WorkflowPhase, to: WorkflowPhase): boolean {

@@ -84,6 +84,11 @@ function makeMockCoordinator() {
       state = { currentPhase: 'supervisor_analyse', iteration: 2, workflowId: 'wf-1' };
       finished = false;
     },
+    resumeBlockedWorkflow: (instruction: string) => {
+      resumedInstructions.push(instruction);
+      state = { currentPhase: 'supervisor_analyse', iteration: 2, workflowId: 'wf-1' };
+      finished = false;
+    },
     reset: () => { state = null; finished = false; runCount = 0; },
     getState: () => state,
     isFinished: () => finished,

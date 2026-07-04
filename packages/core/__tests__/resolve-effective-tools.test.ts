@@ -45,9 +45,9 @@ describe("resolveEffectiveTools — phase-scoped supervisor loop", () => {
     const names = toolNames(result)
     expect(names).toContain("get_goal")
     expect(names).toContain("list_dir")
+    expect(names).toContain("update_goal")
     expect(names).not.toContain("read_file")
     expect(names).not.toContain("grep")
-    expect(names).not.toContain("update_goal")
     expect(names).not.toContain("bash")
     expect(names).not.toContain("edit")
     expect(names).not.toContain("write_file")
@@ -80,7 +80,7 @@ describe("resolveEffectiveTools — phase-scoped supervisor loop", () => {
     expect(names).not.toContain("read_mailbox")
   })
 
-  it("supervisor_intervene: minimal tools (get_goal only)", () => {
+  it("supervisor_intervene: minimal tools (get_goal + update_goal)", () => {
     const result = resolveEffectiveTools({
       registeredTools: toolMap(),
       role: "supervisor",
@@ -88,7 +88,8 @@ describe("resolveEffectiveTools — phase-scoped supervisor loop", () => {
       workflowPhase: "supervisor_intervene",
     })
     const names = toolNames(result)
-    expect(names).toEqual(["get_goal"])
+    expect(names).toContain("get_goal")
+    expect(names).toContain("update_goal")
     expect(names).not.toContain("list_dir")
     expect(names).not.toContain("read_file")
     expect(names).not.toContain("grep")
@@ -96,14 +97,15 @@ describe("resolveEffectiveTools — phase-scoped supervisor loop", () => {
     expect(names).not.toContain("edit")
   })
 
-  it("no workflowPhase defaults to conservative (get_goal only)", () => {
+  it("no workflowPhase defaults to conservative (get_goal + update_goal)", () => {
     const result = resolveEffectiveTools({
       registeredTools: toolMap(),
       role: "supervisor",
       mode: "loop",
     })
     const names = toolNames(result)
-    expect(names).toEqual(["get_goal"])
+    expect(names).toContain("get_goal")
+    expect(names).toContain("update_goal")
     expect(names).not.toContain("list_dir")
     expect(names).not.toContain("read_file")
     expect(names).not.toContain("grep")

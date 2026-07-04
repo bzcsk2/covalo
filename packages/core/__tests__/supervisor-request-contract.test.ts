@@ -152,8 +152,7 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
 
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
     const toolNames = toolsInRequest.map((t: any) => t.function.name).sort()
-    expect(toolNames).toEqual(["get_goal", "grep", "list_dir", "read_file"])
-    expect(toolNames).not.toContain("update_goal")
+    expect(toolNames).toEqual(["get_goal", "grep", "list_dir", "read_file", "update_goal"])
     expect(toolNames).not.toContain("read_mailbox")
     expect(toolNames).not.toContain("send_message")
     expect(toolNames).not.toContain("followup_task")
@@ -243,13 +242,12 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
 
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
     const toolNames = toolsInRequest.map((t: any) => t.function.name)
-    expect(toolNames.sort()).toEqual(["get_goal", "list_dir"])
+    expect(toolNames.sort()).toEqual(["get_goal", "list_dir", "update_goal"])
     expect(toolNames).not.toContain("read_file")
     expect(toolNames).not.toContain("grep")
     expect(toolNames).not.toContain("bash")
     expect(toolNames).not.toContain("write_file")
     expect(toolNames).not.toContain("edit")
-    expect(toolNames).not.toContain("update_goal")
   })
 
   // ─── 测试 4c: Worker alone 模式应有完整工具 ───
@@ -298,14 +296,15 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     expect(names).not.toContain("AgentTool")
     expect(names).toHaveLength(5)
 
-    // 5c: supervisor + loop (no phase → default: get_goal only)
+    // 5c: supervisor + loop (no phase → default: get_goal + update_goal)
     events = []
     for await (const e of engine.submit("task", undefined, "supervisor", "loop")) {
       events.push(e)
     }
     tools = capturedMessages?.opts?.tools ?? []
     names = tools.map((t: any) => t.function.name)
-    expect(names).toEqual(["get_goal"])
+    expect(names).toContain("get_goal")
+    expect(names).toContain("update_goal")
 
     // 5d: worker + alone → 全部工具（包含 bash/write_file）
     events = []
@@ -380,17 +379,18 @@ describe("SFR-00: 工具策略边界测试", () => {
     expect(subagent.tools).toHaveLength(6)
     expect(subagent.tools.find(t => t.function.name === "AgentTool")).toBeDefined()
 
-    // loop (no phase → default: get_goal only)
+    // loop (no phase → default: get_goal + update_goal)
     const loop = resolveEffectiveTools({
       registeredTools,
       role: "supervisor",
       mode: "loop",
       agentToolNames: undefined,
     })
-    expect(loop.tools.map(t => t.function.name)).toEqual(["get_goal"])
+    expect(loop.tools.map(t => t.function.name)).toContain("get_goal")
+    expect(loop.tools.map(t => t.function.name)).toContain("update_goal")
   })
 
-  it("loop 模式 Supervisor 默认只暴露 get_goal（回归测试）", async () => {
+  it("loop 模式 Supervisor 默认暴露 get_goal + update_goal（回归测试）", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const registeredTools = new Map()
     registerSupervisionToolsMock(registeredTools)
@@ -412,8 +412,9 @@ describe("SFR-00: 工具策略边界测试", () => {
       mode: "loop",
       agentToolNames: undefined,
     })
-    // Without workflowPhase, supervisor loop defaults to get_goal only
-    expect(result.tools.map(t => t.function.name)).toEqual(["get_goal"])
+    // Without workflowPhase, supervisor loop defaults to get_goal + update_goal
+    expect(result.tools.map(t => t.function.name)).toContain("get_goal")
+    expect(result.tools.map(t => t.function.name)).toContain("update_goal")
     expect(result.tools.find(t => t.function.name === "bash")).toBeUndefined()
     expect(result.tools.find(t => t.function.name === "write_file")).toBeUndefined()
     expect(result.tools.find(t => t.function.name === "read_mailbox")).toBeUndefined()
@@ -491,7 +492,7 @@ function registerSupervisionToolsMock(map: Map<string, any>) {
 }
 
 describe("SFR-00: 配置与诊断契约", () => {
-  it("[SFR-30] Supervisor loop 默认只暴露 get_goal（不会静默退化）", async () => {
+  it("[SFR-30] Supervisor loop 默认暴露 get_goal + update_goal", async () => {
     const engine = makeEngine()
     registerSupervisionTools(engine)
 
@@ -502,7 +503,8 @@ describe("SFR-00: 配置与诊断契约", () => {
     }
 
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
-    expect(toolsInRequest.map((t: any) => t.function.name)).toEqual(["get_goal"])
+    expect(toolsInRequest.map((t: any) => t.function.name)).toContain("get_goal")
+    expect(toolsInRequest.map((t: any) => t.function.name)).toContain("update_goal")
   })
 })
 
@@ -521,45 +523,45 @@ describe("Phase 6: 工具过滤重构 - phase-scoped", () => {
     return tools
   }
 
-  it("supervisor_analyse 只暴露 get_goal + list_dir", async () => {
+  it("supervisor_analyse 只暴露 get_goal + update_goal + list_dir", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const result = resolveEffectiveTools({ registeredTools: makeToolMap(ALL_TOOL_NAMES), role: "supervisor", mode: "loop", workflowPhase: "supervisor_analyse" })
     const names = result.tools.map(t => t.function.name).sort()
-    expect(names).toEqual(["get_goal", "list_dir"])
+    expect(names).toEqual(["get_goal", "list_dir", "update_goal"])
     expect(names).not.toContain("read_file")
     expect(names).not.toContain("grep")
-    expect(names).not.toContain("update_goal")
     expect(names).not.toContain("bash")
     expect(names).not.toContain("edit")
     expect(names).not.toContain("AgentTool")
   })
 
-  it("supervisor_check 暴露 get_goal + list_dir + read_file + grep", async () => {
+  it("supervisor_check 暴露 get_goal + update_goal + list_dir + read_file + grep", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const result = resolveEffectiveTools({ registeredTools: makeToolMap(ALL_TOOL_NAMES), role: "supervisor", mode: "loop", workflowPhase: "supervisor_check" })
     const names = result.tools.map(t => t.function.name).sort()
-    expect(names).toEqual(["get_goal", "grep", "list_dir", "read_file"])
-    expect(names).not.toContain("update_goal")
+    expect(names).toEqual(["get_goal", "grep", "list_dir", "read_file", "update_goal"])
     expect(names).not.toContain("bash")
     expect(names).not.toContain("edit")
     expect(names).not.toContain("AgentTool")
   })
 
-  it("supervisor_intervene 只暴露 get_goal", async () => {
+  it("supervisor_intervene 只暴露 get_goal + update_goal", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const result = resolveEffectiveTools({ registeredTools: makeToolMap(ALL_TOOL_NAMES), role: "supervisor", mode: "loop", workflowPhase: "supervisor_intervene" })
     const names = result.tools.map(t => t.function.name)
-    expect(names).toEqual(["get_goal"])
+    expect(names).toContain("get_goal")
+    expect(names).toContain("update_goal")
     expect(names).not.toContain("list_dir")
     expect(names).not.toContain("read_file")
     expect(names).not.toContain("grep")
   })
 
-  it("supervisor loop 无 phase 时默认只暴露 get_goal", async () => {
+  it("supervisor loop 无 phase 时默认暴露 get_goal + update_goal", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const result = resolveEffectiveTools({ registeredTools: makeToolMap(ALL_TOOL_NAMES), role: "supervisor", mode: "loop" })
     const names = result.tools.map(t => t.function.name)
-    expect(names).toEqual(["get_goal"])
+    expect(names).toContain("get_goal")
+    expect(names).toContain("update_goal")
   })
 
   it("Worker loop 不受 workflowPhase 影响", async () => {

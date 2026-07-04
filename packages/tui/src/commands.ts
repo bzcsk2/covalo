@@ -19,7 +19,7 @@ export type SlashCommand =
   | { name: "context" }
   | { name: "harness"; subcommand?: "status" | "strict" | "normal" | "loose" | "project" | "doctor" | "mine" | "propose" | "validate" | "promote" | "history" | "rollback"; arg?: string }
   | { name: "theme"; themeName?: string }
-  | { name: "workflow" }
+  | { name: "reset" }
   | { name: "alone" }
   | { name: "subagent" }
   | { name: "loop" }
@@ -28,7 +28,6 @@ export type SlashCommand =
   | { name: "eval"; legacy?: boolean; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
   | { name: "eval-start"; category: string; suite: string; env?: string }
   | { name: "eval-cancel" }
-  | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
   | { name: "config"; subcommand?: "open" | "reload" | "set"; path?: string; value?: string }
 
 const THINKING_MODES = ["off", "high", "max"]
@@ -82,9 +81,7 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     return { name: "harness" as const }
   }
 
-  if (trimmed === "/workflow" || trimmed.startsWith("/workflow")) {
-    return { name: "workflow" }
-  }
+  if (trimmed === "/reset") return { name: "reset" }
 
   if (trimmed.startsWith("/talk")) {
     const parts = trimmed.split(/\s+/)
@@ -154,22 +151,6 @@ export function parseSlashCommand(text: string): SlashCommand | null {
   if (trimmed === "/alone") return { name: "alone" }
   if (trimmed === "/subagent") return { name: "subagent" }
   if (trimmed === "/loop") return { name: "loop" }
-
-  if (trimmed.startsWith("/goal")) {
-    const parts = trimmed.split(/\s+/)
-    if (parts.length === 1) return { name: "goal" }
-    const sub = parts[1]
-    if (sub === "edit" && parts[2]) return { name: "goal", subcommand: "edit", arg: parts.slice(2).join(" ") }
-    if (sub === "edit") return { name: "goal", subcommand: "edit" }
-    if (sub === "pause") return { name: "goal", subcommand: "pause" }
-    if (sub === "resume") return { name: "goal", subcommand: "resume" }
-    if (sub === "clear") return { name: "goal", subcommand: "clear" }
-    if (sub === "no-budget") return { name: "goal", subcommand: "no-budget" }
-    if (sub === "budget" && parts[2]) return { name: "goal", subcommand: "budget", arg: parts[2] }
-    // /goal <objective> — 剩余部分作为 objective
-    const rest = parts.slice(1).join(" ")
-    return { name: "goal", subcommand: "status", objective: rest }
-  }
 
   if (trimmed.startsWith("/config")) {
     const parts = trimmed.split(/\s+/)
@@ -249,7 +230,7 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     `  /context     — ${cmdStrings.cmdContext}`,
     `  /theme       — ${cmdStrings.cmdTheme}`,
     `  /thinking    — ${cmdStrings.cmdThinking}`,
-    `  /workflow    — ${cmdStrings.cmdWorkflow}`,
+    `  /reset       — ${cmdStrings.cmdReset}`,
     `  /talk [role] — ${cmdStrings.cmdTalk}`,
     `  /harness     — ${cmdStrings.cmdThinking}`,
     `    /harness doctor     — Check harness health`,
@@ -259,14 +240,6 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     `    /harness promote    — Promote a patch`,
     `    /harness history    — Show evolution history`,
     `    /harness rollback   — Rollback a patch`,
-    `  /goal        — ${cmdStrings.cmdGoal}`,
-    `  /goal <obj>  — ${cmdStrings.cmdGoalSet}`,
-    `  /goal edit   — ${cmdStrings.cmdGoalEdit}`,
-    `  /goal pause  — ${cmdStrings.cmdGoalPause}`,
-    `  /goal resume — ${cmdStrings.cmdGoalResume}`,
-    `  /goal clear  — ${cmdStrings.cmdGoalClear}`,
-    `  /goal budget — ${cmdStrings.cmdGoalBudget}`,
-    `  /goal no-budget — ${cmdStrings.cmdGoalNoBudget}`,
     `  /config              — ${cmdStrings.cmdConfig}`,
     `  /config <key> <val>  — ${cmdStrings.cmdConfigSet}`,
     `  /config open         — ${cmdStrings.cmdConfigOpen}`,

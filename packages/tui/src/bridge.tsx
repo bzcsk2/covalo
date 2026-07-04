@@ -44,6 +44,19 @@ export type TimelineItem =
   | { id: string; kind: 'reasoning'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole }
   | { id: string; kind: 'tool'; roundId: string; tool: ToolStatus; role?: AgentRole };
 
+export class WorkflowDriveError extends Error {
+  workflowId?: string
+
+  constructor(message: string, options?: { workflowId?: string; cause?: unknown }) {
+    super(message)
+    this.name = 'WorkflowDriveError'
+    this.workflowId = options?.workflowId
+    if (options?.cause !== undefined) {
+      ;(this as Error & { cause?: unknown }).cause = options.cause
+    }
+  }
+}
+
 export interface BridgeState {
   timeline: TimelineItem[];
   isLoading: boolean;
@@ -151,6 +164,34 @@ function isToolLoopNotice(message: string): boolean {
   return message.startsWith('Tool call loop detected:')
     || message.startsWith('Tool call loop stopped:')
     || message.startsWith('Stopped repeated tool-call loop:');
+}
+
+type TuiLoopPhase = 'observe' | 'plan' | 'act' | 'verify' | 'reflect' | 'retry' | 'paused' | 'done' | 'failed'
+
+function workflowPhaseToLoopPhase(phase: string): TuiLoopPhase {
+  switch (phase) {
+    case 'idle':
+      return 'observe'
+    case 'supervisor_analyse':
+      return 'plan'
+    case 'worker_do':
+      return 'act'
+    case 'worker_report':
+      return 'verify'
+    case 'supervisor_check':
+      return 'reflect'
+    case 'supervisor_intervene':
+      return 'retry'
+    case 'waiting_user':
+    case 'blocked':
+      return 'paused'
+    case 'completed':
+      return 'done'
+    case 'failed':
+      return 'failed'
+    default:
+      return 'observe'
+  }
 }
 
 export function createBridge(
@@ -1027,14 +1068,6 @@ export function createBridge(
       permissionPrompt: null,
     }));
 
-    if (resumeInstruction !== undefined) {
-      workflowCoordinator.resumeInterruptedWorkflow(resumeInstruction);
-    } else {
-      if (workflowCoordinator.getState()) {
-        workflowCoordinator.reset();
-      }
-      workflowCoordinator.startWorkflow({ goal: goal!, workflowId });
-    }
     let activeRole: AgentRole = 'supervisor';
     let wfPhaseId = '';
     let wfPhaseTs = 0;
@@ -1189,6 +1222,14 @@ export function createBridge(
     };
 
     try {
+      if (resumeInstruction !== undefined) {
+        workflowCoordinator.resumeBlockedWorkflow(resumeInstruction)
+      } else {
+        if (workflowCoordinator.getState()) {
+          workflowCoordinator.reset();
+        }
+        workflowCoordinator.startWorkflow({ goal: goal!, workflowId });
+      }
       // Phase G: 主动重跑直到 goal 终结
       // TUI-level 防御性 guard（WorkflowCoordinator 已有 maxRounds，此处提供额外保险）
       const MAX_CONTINUATION_CYCLES = 50;
@@ -1220,8 +1261,8 @@ export function createBridge(
               orchestrationStore.apply({
                 kind: 'loop_transition',
                 transition: {
-                  from: (orchestrationStore.getSnapshot().loop.phase as any) ?? 'observe',
-                  to: wfEvent.phase as any,
+                  from: orchestrationStore.getSnapshot().loop.phase ?? 'observe',
+                  to: workflowPhaseToLoopPhase(wfEvent.phase),
                   attempt: wfEvent.iteration,
                   timestamp: Date.now(),
                 },
@@ -1435,10 +1476,20 @@ export function createBridge(
         }
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const failedWorkflowId = workflowCoordinator.getState()?.workflowId ?? workflowId
+
       commitBridge(prev => ({
         ...prev,
-        warnings: [...prev.warnings, `Workflow error: ${(err as Error).message ?? String(err)}`].slice(-MAX_WARNINGS),
-      }));
+        warnings: [...prev.warnings, `Workflow error: ${message}`].slice(-MAX_WARNINGS),
+      }))
+
+      onPhaseChange?.('failed', workflowCoordinator.getState()?.iteration ?? 0, 'failed', message)
+
+      throw new WorkflowDriveError(message, {
+        workflowId: failedWorkflowId,
+        cause: err,
+      })
     } finally {
       finalizeWorkflowTurn();
       // SFR-70: 确保 always 恢复 idle，即使中断或异常
