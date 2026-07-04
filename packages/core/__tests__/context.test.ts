@@ -204,6 +204,47 @@ describe("VolatileScratch", () => {
     ])
     expect(scratch.messages).toHaveLength(2)
   })
+
+  // SPEC-B: replaceSource 不应污染其他来源消息
+  it("should preserve supervisor_advice when replacing task_ledger", () => {
+    const scratch = new VolatileScratch()
+    scratch.append({ role: "user", content: "LEDGER: build plan" }, "task_ledger")
+    scratch.append({ role: "user", content: "SUPERVISOR: fix tests" }, "supervisor_advice")
+
+    scratch.replaceSource("task_ledger", [{ role: "user", content: "LEDGER: new plan" }])
+
+    const msgs = scratch.messages
+    expect(msgs).toHaveLength(2)
+    expect(msgs.some(m => m.content === "SUPERVISOR: fix tests")).toBe(true)
+    expect(msgs.some(m => m.content === "LEDGER: new plan")).toBe(true)
+  })
+
+  // SPEC-B: replaceSource 不应对同一来源产生重复条目
+  it("should not duplicate task_ledger on replaceSource", () => {
+    const scratch = new VolatileScratch()
+    scratch.replaceSource("task_ledger", [
+      { role: "user", content: "TASK 1" },
+      { role: "user", content: "TASK 2" },
+    ])
+    scratch.replaceSource("task_ledger", [
+      { role: "user", content: "TASK 3" },
+    ])
+
+    expect(scratch.messages).toHaveLength(1)
+    expect(scratch.messages[0].content).toBe("TASK 3")
+  })
+
+  // SPEC-B: removeSource 应按来源精确删除
+  it("should remove entries by source via removeSource", () => {
+    const scratch = new VolatileScratch()
+    scratch.append({ role: "user", content: "LEDGER: build" }, "task_ledger")
+    scratch.append({ role: "user", content: "ADVICE: fix" }, "supervisor_advice")
+
+    scratch.removeSource("task_ledger")
+
+    expect(scratch.messages).toHaveLength(1)
+    expect(scratch.messages[0].content).toBe("ADVICE: fix")
+  })
 })
 
 // === ContextManager 三区域集成测试 ===
@@ -241,6 +282,19 @@ describe("ContextManager - 三区域集成", () => {
 
     ctx.startTurn()
     expect(ctx.buildMessages()).toHaveLength(2)  // scratch 被清空
+    expect(ctx.scratch.messages).toHaveLength(0)
+  })
+
+  // SPEC-B: startTurn 应清空所有来源的 scratch 消息
+  it("should clear all scratch sources on startTurn", () => {
+    const ctx = new ContextManager()
+    ctx.prefix.build("You are an assistant.")
+    ctx.scratch.append({ role: "user", content: "LEDGER: plan" }, "task_ledger")
+    ctx.scratch.append({ role: "user", content: "ADVICE: fix" }, "supervisor_advice")
+    ctx.scratch.append({ role: "assistant", content: "thinking..." }, "runtime")
+
+    ctx.startTurn()
+
     expect(ctx.scratch.messages).toHaveLength(0)
   })
 

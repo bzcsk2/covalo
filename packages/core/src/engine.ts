@@ -143,6 +143,9 @@ export class ReasonixEngine implements CoreEngine {
   /** prefix.build 缓存：避免每次 submit 重复重建（P3-4-2） */
   private prefixCacheKey = ""
 
+  /** SPEC-G: 上次 build prefix 时的 system prompt 文本，用于检测 prompt 变化 */
+  private lastSystemPromptKey = ""
+
   /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve */
   private pendingPermission: { resolve: (v: boolean) => void; toolName: string; args: Record<string, unknown> } | null = null
 
@@ -312,6 +315,7 @@ export class ReasonixEngine implements CoreEngine {
       maxResultSizeChars: 200_000,
       previewChars: 2_000,
       maxFilesPerSession: 200,
+      baseDir: process.cwd(),
     }
 
     this.toolExecutor = new StreamingToolExecutor(
@@ -387,6 +391,22 @@ export class ReasonixEngine implements CoreEngine {
     }
     const engine = new ReasonixEngine(config, undefined, sessionId)
     await engine._loadSessionMessages(sessionId)
+
+    // SPEC-I: restore taskLedger and verificationGate from checkpoint
+    if (engine.checkpointEngine) {
+      const v2 = await engine.checkpointEngine.loadV2()
+      if (v2) {
+        if (v2.taskLedger) {
+          engine.taskLedger = new TaskLedgerTracker(v2.taskLedger.goal)
+          engine.taskLedger.applySnapshot(v2.taskLedger)
+          engine.injectTaskLedgerContext(engine.taskLedger)
+        }
+        if (v2.verificationGate) {
+          engine.verificationGateState = { ...v2.verificationGate }
+        }
+      }
+    }
+
     return engine
   }
 
@@ -524,10 +544,10 @@ export class ReasonixEngine implements CoreEngine {
   private injectTaskLedgerContext(ledger?: TaskLedgerTracker, includePlanRequest = false): void {
     if (!ledger) return
     const messages: ChatMessage[] = []
-    const formatted = ledger.formatForContext()
     if (includePlanRequest && ledger.plan.length === 0) {
-      messages.unshift({ role: "user", content: planRequestInstruction() })
+      messages.push({ role: "user", content: planRequestInstruction() })
     }
+    const formatted = ledger.formatForContext()
     if (formatted.trim()) {
       messages.push({ role: "user", content: formatted })
     }
@@ -697,6 +717,8 @@ export class ReasonixEngine implements CoreEngine {
           trigger: "final_draft",
           branchBudget: this.branchBudgetTracker,
           lastStopReason: "aborted",
+          taskLedger: this.taskLedger?.snapshot(),
+          verificationGate: this.verificationGateState,
         })
       }
     } catch (e) {
@@ -1005,7 +1027,12 @@ Do not change goal status.`
           : ""
     const layers = [baseLayer, roleLayer, modeLayer, activeSkillsPrompt].filter(Boolean)
     const systemPrompt = layers.join("\n\n")
-    this.ctx.prefix.build(systemPrompt)
+
+    // SPEC-G: 仅在 system prompt 实际变化时重建 prefix，避免无谓刷新
+    if (this.ctx.prefix.messages.length === 0 || this.lastSystemPromptKey !== systemPrompt) {
+      this.ctx.prefix.build(systemPrompt)
+      this.lastSystemPromptKey = systemPrompt
+    }
 
     this.ctx.startTurn()
 
@@ -1092,24 +1119,14 @@ Do not change goal status.`
     if (budget.ratio >= this.contextPolicy.triggerRatio) {
       let result
       if (this.contextPolicy.mode === "compact") {
-        const targetTokens = Math.floor(budget.window * this.contextPolicy.targetRatio)
-        const success = await this.ctx.runSummarize(targetTokens, abortController.signal)
-        if (success) {
-          result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
-          if (this.logger.isEnabled("info")) {
-            this.logger.info("context.reduction.compact.success", { ...result })
-          }
-        } else {
-          result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
-          if (this.logger.isEnabled("info")) {
-            this.logger.info("context.reduction.compact.fallback", { ...result })
-          }
-        }
+        result = await this.ctx.compactToTarget(
+          this.contextPolicy.targetRatio,
+          abortController.signal,
+        )
+        this.logger.info("context.reduction.compact", { ...result })
       } else {
         result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
-        if (this.logger.isEnabled("info")) {
-          this.logger.info("context.reduction.trim", { ...result })
-        }
+        this.logger.info("context.reduction.trim", { ...result })
       }
     }
     // P1-fix (A): buildMessages() 在外层 try 内、guard 之前持久化。

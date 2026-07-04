@@ -17,6 +17,10 @@
 import { describe, it, expect } from "vitest"
 import type { ChatClient } from "../src/interface.js"
 import type { DeepreefConfig } from "../src/config.js"
+import { mkdtempSync } from "node:fs"
+import { rm } from "node:fs/promises"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 
 /**
  * 创建 mock ChatClient，记录所有 chatCompletionsStream 调用的参数。
@@ -262,5 +266,53 @@ describeOrSkip("SA-1: engine.spawnSubagent target 解析集成测试", () => {
       c => c.model === "parent-model" && c.baseUrl === "https://parent.example.com/v1"
     )
     expect(childCall).toBeDefined()
+  })
+
+  it("SPEC-C: child inherits parent contextPolicy after setContextPolicy", async () => {
+    const { ReasonixEngine } = await import("../src/engine.js")
+
+    const parentTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
+    const parentClient = createTrackingMockClient(parentTracker, {
+      baseUrl: "https://parent.example.com/v1",
+      model: "parent-model",
+    })
+
+    const childTracker: { calls: Array<{ model: string; baseUrl: string }> } = { calls: [] }
+
+    const originalCwd = process.cwd()
+    const tmp = mkdtempSync(join(tmpdir(), "covalo-policy-inherit-"))
+    process.chdir(tmp)
+
+    const engine = new ReasonixEngine(
+      makeBaseConfig(),
+      undefined,
+      undefined,
+      parentClient,
+    )
+
+    engine.setChildClientFactory((target, _logger) => {
+      return createTrackingMockClient(childTracker, {
+        baseUrl: target.baseUrl,
+        model: target.model ?? "",
+      })
+    })
+
+    await engine.setContextPolicy({ mode: "compact", triggerRatio: 0.5, targetRatio: 0.2 })
+
+    const result = await engine.spawnSubagent({
+      description: "test policy inheritance",
+      prompt: "do nothing",
+      subagentType: "general-purpose",
+    })
+
+    expect(result.status).toBe("completed")
+
+    // 父引擎 policy 不受子引擎影响，且 parent 已提前设置 compact
+    expect(engine.getContextPolicy().mode).toBe("compact")
+    expect(engine.getContextPolicy().triggerRatio).toBe(0.5)
+    expect(engine.getContextPolicy().targetRatio).toBe(0.2)
+
+    process.chdir(originalCwd)
+    await rm(tmp, { recursive: true, force: true }).catch(() => {})
   })
 })

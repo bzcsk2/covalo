@@ -247,9 +247,9 @@ export function injectAdviceToContext(input: InjectAdviceInput): string {
     evidenceHash: input.evidenceHash,
     failureClass: input.advice.failureClass,
   })
-  input.ctx.scratch.append({ role: "user", content }, "supervisor_advice")
-  return content
-}
+   input.ctx.scratch.append({ role: "user", content }, "supervisor_advice")
+   return content
+ }
 
 /**
  * 记录工具结果到 Supervisor 指导状态（用于 EvidenceBundle）。

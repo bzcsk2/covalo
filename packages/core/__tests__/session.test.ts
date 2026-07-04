@@ -927,3 +927,71 @@ describe("CL-32: Session writer observability", () => {
     expect(lines2[1]).toBe(lines[1])
   })
 })
+
+describe("SPEC-A: loadSession context isolation", () => {
+  let tmpDir: string
+  let sessionDir: string
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `covalo-speca-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    sessionDir = join(tmpDir, ".covalo", "sessions")
+    await mkdir(sessionDir, { recursive: true })
+    SessionLoader.sessionDir = sessionDir
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it("should clear scratch and summary when switching sessions", async () => {
+    const { ReasonixEngine } = await import("../src/engine.js")
+    const config = { apiKey: "test", baseUrl: "http://localhost", model: "test", maxTokens: 1000, temperature: 0, maxContextRounds: 20, contextWindow: 128000 }
+    const engine = new ReasonixEngine(config as any, undefined, "session-a")
+
+    engine.getContextManager().scratch.append({ role: "assistant", content: "scratch A" })
+    engine.getContextManager().getSummary().replace("Summary A")
+
+    await engine.loadSession("session-b")
+
+    expect(engine.getContextManager().scratch.messages).toHaveLength(0)
+    expect(engine.getContextManager().getSummary().hasSummary()).toBe(false)
+
+    const messages = engine.getContextManager().buildMessages()
+    expect(messages.some(m => m.role === "assistant" && m.content === "scratch A")).toBe(false)
+    expect(messages.some(m => m.role === "system" && m.content?.includes("Summary A"))).toBe(false)
+  })
+
+  it("should reset taskLedger, verificationGateState, supervisorGuidanceState, and pendingInstructionQueue on session switch", async () => {
+    const { ReasonixEngine } = await import("../src/engine.js")
+    const config = { apiKey: "test", baseUrl: "http://localhost", model: "test", maxTokens: 1000, temperature: 0, maxContextRounds: 20, contextWindow: 128000 }
+    const engine = new ReasonixEngine(config as any, undefined, "session-a")
+
+    const state = engine as any
+    state.taskLedger = { goal: "test", snapshot: () => ({}) }
+    state.verificationGateState = { continuationCount: 5 }
+    state.supervisorGuidanceState = {
+      failureSignatureHistory: { sig: { count: 1, lastEvidenceHash: "hash" } },
+      requestedEvidenceHashes: ["hash1"],
+      recentFailures: [{ signature: "s", count: 1 }],
+      recentTools: [{ name: "bash", success: true, summary: "x" }],
+      stagnantRoundsAfterAdvice: 1,
+      adviceInjectionCount: 1,
+    }
+    state.pendingInstructionQueue = ["instr1", "instr2"]
+
+    await engine.loadSession("session-b")
+
+    const after = engine as any
+    expect(after.taskLedger).toBeUndefined()
+    expect(after.verificationGateState).toEqual({ continuationCount: 0 })
+    expect(after.supervisorGuidanceState).toEqual({
+      failureSignatureHistory: {},
+      requestedEvidenceHashes: [],
+      recentFailures: [],
+      recentTools: [],
+      stagnantRoundsAfterAdvice: 0,
+      adviceInjectionCount: 0,
+    })
+    expect(after.pendingInstructionQueue).toEqual([])
+  })
+})

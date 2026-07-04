@@ -44,6 +44,8 @@ export interface TaskLedger {
   verificationPending: boolean
   lastVerification?: LastVerification
   blockers: string[]
+  evictedFileCount?: number
+  evictedCommandCount?: number
 }
 
 /** 计划解析/序列化配置 */
@@ -194,6 +196,13 @@ export function formatLedgerForContext(ledger: TaskLedger, locale?: PromptLocale
     parts.push(`${isZh ? "阻塞项" : "BLOCKERS"}:\n${ledger.blockers.map(b => `- ${b}`).join("\n")}`)
   }
 
+  const evictedFileCount = ledger.evictedFileCount ?? 0
+  if (evictedFileCount > 0) {
+    parts.push(isZh
+      ? `更早的变更：${evictedFileCount} 个文件变更未在本 ledger 视图显示。`
+      : `EARLIER CHANGES: ${evictedFileCount} file changes omitted from this ledger view.`)
+  }
+
   return isZh ? `\n\n## 任务上下文\n${parts.join("\n\n")}` : `\n\n${parts.join("\n\n")}`
 }
 
@@ -280,6 +289,8 @@ export class TaskLedgerTracker {
   verificationPending = false
   lastVerification?: LastVerification
   blockers: string[] = []
+  evictedFileCount = 0
+  evictedCommandCount = 0
 
   constructor(
     goal: string,
@@ -342,6 +353,7 @@ export class TaskLedgerTracker {
     if (!this.changedFiles.includes(normalized)) {
       if (this.changedFiles.length >= MAX_CHANGED_FILES) {
         this.changedFiles.shift()
+        this.evictedFileCount++
       }
       this.changedFiles.push(normalized)
     }
@@ -357,6 +369,7 @@ export class TaskLedgerTracker {
     const entry: CommandRunEntry = { commandHash: hashCommand(command), success }
     if (this.commandsRun.length >= MAX_COMMANDS_RUN) {
       this.commandsRun.shift()
+      this.evictedCommandCount++
     }
     this.commandsRun.push(entry)
 
@@ -415,6 +428,8 @@ export class TaskLedgerTracker {
       verificationPending: this.verificationPending,
       lastVerification: this.lastVerification ? { ...this.lastVerification } : undefined,
       blockers: [...this.blockers],
+      evictedFileCount: this.evictedFileCount,
+      evictedCommandCount: this.evictedCommandCount,
     }
   }
 
@@ -427,9 +442,9 @@ export class TaskLedgerTracker {
     this.verificationPending = snapshot.verificationPending
     this.lastVerification = snapshot.lastVerification ? { ...snapshot.lastVerification } : undefined
     this.blockers = [...snapshot.blockers]
+    this.evictedFileCount = snapshot.evictedFileCount ?? 0
+    this.evictedCommandCount = snapshot.evictedCommandCount ?? 0
     this.planIngested = this.plan.length > 0
-    this.activeStepIndex = this.plan.findIndex(s => s.status === "active")
-    if (this.activeStepIndex < 0) this.activeStepIndex = 0
   }
 
   /** 格式化为上下文注入文本 */
