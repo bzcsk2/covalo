@@ -986,6 +986,11 @@ ${adjustment.recommendedMaxTokens ? `- Recommended max output budget: ${adjustme
 
     const reason = this.state.blockedReason
     this.pendingEvents = []
+    // SPEC S3-2: resume 本质上是准备一次新的 run，必须清掉上一轮 run 的 abort 状态。
+    // 否则中断后 resume 时，TUI 的 `while (runAgain && !isInterrupted())` guard
+    // 会因旧 abortController.signal.aborted === true 而拒绝进入循环，
+    // 导致 runWorkflow() 永远不会被调用。
+    this.abortController = undefined
     this.state.resumeInstruction = instruction.trim() || undefined
     this.state.blockedReason = undefined
 

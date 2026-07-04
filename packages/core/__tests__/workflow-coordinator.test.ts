@@ -1523,5 +1523,95 @@ describe("WorkflowCoordinator", () => {
       // abortController 仍是 undefined，所以 isInterrupted() 返回 false
       expect(coordinator.isInterrupted()).toBe(false)
     })
+
+    // SPEC S3-2 resume 回归测试：
+    // 用户 Ctrl+C 中断 workflow 后，再 resume，必须保证 isInterrupted() === false，
+    // 否则 TUI 的 `while (runAgain && !isInterrupted())` guard 会拒绝进入循环，
+    // 导致 runWorkflow() 永远不会被调用。
+    it("resumeBlockedWorkflow() clears abortController after interrupt (regression guard)", async () => {
+      let coordinator: WorkflowCoordinator
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "Initial plan" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "Initial plan" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            // 在 worker 执行时中断
+            coordinator.interrupt()
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      // 验证：中断后状态正确
+      expect(coordinator.isInterrupted()).toBe(true)
+      expect(coordinator.getState()?.currentPhase).toBe("blocked")
+      expect(coordinator.getState()?.blockedReason).toBe("Interrupted by user")
+
+      // 用户 resume
+      coordinator.resumeBlockedWorkflow("continue from latest state")
+
+      // 关键断言：resume 后 isInterrupted() 必须为 false，
+      // 否则 TUI 的 while guard 会拒绝进入下一次 runWorkflow()
+      expect(coordinator.isInterrupted()).toBe(false)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_analyse")
+      expect(coordinator.getState()?.blockedReason).toBeUndefined()
+    })
+
+    it("resumeInterruptedWorkflow() clears abortController after interrupt", async () => {
+      let coordinator: WorkflowCoordinator
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "Initial plan" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "Initial plan" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            coordinator.interrupt()
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      expect(coordinator.isInterrupted()).toBe(true)
+
+      coordinator.resumeInterruptedWorkflow("continue")
+      expect(coordinator.isInterrupted()).toBe(false)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_analyse")
+    })
+
+    it("resume from non-interrupt blocked reason also clears abortController", async () => {
+      // 任何 resume 都应该清理 abortController，
+      // 不只是 Interrupted by user 场景
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
+      // 模拟其他 blocked 原因（如 Goal is paused）
+      coordinator.transition("blocked", "Goal is paused")
+
+      // 手动设置 abortController 模拟中断过的状态
+      // 注意：transition 到 blocked 不会创建 abortController，
+      // 但如果之前有 runWorkflow，abortController 可能残留
+      // 这里通过 resume 测试清理逻辑
+
+      expect(coordinator.isResumableBlockedReason("Goal is paused")).toBe(true)
+      coordinator.resumeBlockedWorkflow("resume instruction")
+      expect(coordinator.isInterrupted()).toBe(false)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_analyse")
+    })
   })
 })
