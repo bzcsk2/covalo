@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 import type { DeepreefConfig } from "./config.js"
+import type { CovaloConfig } from "./config/schema.js"
 import { ContextManager } from "./context/manager.js"
 import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
 import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult, ChatClient } from "./interface.js"
@@ -85,6 +86,21 @@ function resolvePhaseMaxTurns(
     if (workflowPhase === "supervisor_intervene") return 1
   }
   return policyMaxTurns
+}
+
+/**
+ * S0-2: 运行时结构守卫，判断 config 是否真的是 CovaloConfig 形状。
+ * DeepreefConfig 上可能挂一个部分 tools 对象（如 e2e 测试只传 { approvalPolicy }），
+ * 这种对象不是 CovaloConfig，isToolAllowed 会访问 config.tools[role][mode] 而崩溃。
+ * 这里检查 isToolAllowed 必然访问的 worker/supervisor 键是否存在，避免裸 cast。
+ */
+function isCovaloConfigLike(config: unknown): config is CovaloConfig {
+  if (typeof config !== "object" || config === null) return false
+  const tools = (config as { tools?: unknown }).tools
+  if (typeof tools !== "object" || tools === null) return false
+  const t = tools as { worker?: unknown; supervisor?: unknown }
+  return typeof t.worker === "object" && t.worker !== null &&
+    typeof t.supervisor === "object" && t.supervisor !== null
 }
 
 /**
@@ -1250,6 +1266,12 @@ Do not change goal status.`
         } catch {}
       }
 
+      // S1-2: review 策略由 runtimeGuard.reviewPolicy 配置驱动
+      const toolsConfig = (this.config as unknown as Record<string, unknown>).tools as
+        | { runtimeGuard?: { reviewPolicy?: "allow" | "ask" | "block" } }
+        | undefined
+      const reviewPolicy = toolsConfig?.runtimeGuard?.reviewPolicy ?? "ask"
+
       if (guard.disposition === "allow") {
         yield { role: "status", content: "Runtime guard allowed", metadata: { runId: packetRunId } };
         this.logger.info("harness.guard.allow", { runId: packetRunId, mode, role, promptLength: userInput.length });
@@ -1259,7 +1281,19 @@ Do not change goal status.`
           guardBlocked = true;
           this.logger.warn("harness.guard.block", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), promptLength: userInput.length });
         } else {
-          this.logger.info("harness.guard.review", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind) });
+          // review disposition: 按 reviewPolicy 决定行为
+          if (reviewPolicy === "block") {
+            guardBlocked = true;
+            this.logger.warn("harness.guard.review_blocked", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), promptLength: userInput.length });
+          } else if (reviewPolicy === "ask") {
+            // ask: 若 approvalPolicy 为 always 则视为需要确认但无 UI 时阻断
+            const approvalPolicy = (toolsConfig as { approvalPolicy?: string } | undefined)?.approvalPolicy ?? "on-request"
+            guardBlocked = approvalPolicy === "always"
+            this.logger.info("harness.guard.review_ask", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), blocked: guardBlocked });
+          } else {
+            // allow: 仅记录日志，不阻断
+            this.logger.info("harness.guard.review_allowed", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind) });
+          }
         }
       }
       if (!guardBlocked) {
@@ -1283,12 +1317,18 @@ Do not change goal status.`
       // SFR-30: 使用 resolveEffectiveTools 统一计算有效工具列表
       const effectiveRole: "worker" | "supervisor" = role ?? (agentName === "supervisor" ? "supervisor" : "worker")
       const effectiveMode: WorkflowMode = mode ?? "alone"
+      // S0-2: 只在 config 是 CovaloConfig 形状时传入。
+      // DeepreefConfig.tools 可能是部分对象（如 e2e 测试只传 { approvalPolicy }），
+      // 不带 worker/supervisor 键时 isToolAllowed 会访问 config.tools[role][mode] 崩溃。
+      // 这里做结构守卫，避免把任意带 tools 字段的对象误当 CovaloConfig。
+      const maybeCovaloConfig = isCovaloConfigLike(this.config) ? (this.config as unknown as CovaloConfig) : undefined
       const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
         registeredTools: this.tools,
         role: effectiveRole,
         mode: effectiveMode,
         agentToolNames: ac.toolNames,
         workflowPhase,
+        config: maybeCovaloConfig,
       })
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {

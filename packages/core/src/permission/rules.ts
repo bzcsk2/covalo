@@ -7,31 +7,7 @@
  */
 
 import type { PermissionAction, PermissionDecision, PermissionRule } from "./types.js"
-
-/* ── Wildcard Matching ── */
-
-/**
- * Match a string against a wildcard pattern.
- * Supports * (any characters) and ? (single character).
- */
-function matchWildcard(pattern: string, value: string): boolean {
-  if (pattern === "*") return true
-  if (pattern === value) return true
-
-  // Convert wildcard pattern to regex
-  const regexStr = "^" + pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&") // Escape special regex chars (except * and ?)
-    .replace(/\*/g, ".*") // * -> .*
-    .replace(/\?/g, ".")  // ? -> .
-    + "$"
-
-  try {
-    const regex = new RegExp(regexStr)
-    return regex.test(value)
-  } catch {
-    return pattern === value
-  }
-}
+import { matchWildcard } from "./wildcard.js"
 
 /* ── Rule Evaluation ── */
 

@@ -158,13 +158,18 @@ describe("fuzzyReplaceOnce", () => {
     await rm(dir, { recursive: true })
   })
 
-  it("hashAnchoredReplaceOnce should delete old_string when newString is empty", async () => {
+  it("edit tool should delete old_string when new_string is empty", async () => {
     const dir = tempDir()
     const file = join(dir, "del.txt")
     writeFileSync(file, "before\ndelete this\nafter")
 
-    const res = await hashAnchoredReplaceOnce(file, "delete this\n", "")
-    expect(res).not.toBeNull()
+    const editTool = createEditTool()
+    const result = await editTool.execute(
+      { path: file, old_string: "delete this\n", new_string: "" },
+      { cwd: dir, sessionId: "test", signal: new AbortController().signal } as any,
+    )
+    const parsed = JSON.parse(result.content)
+    expect(parsed.replaced).toBe(1)
     const content = readFileSync(file, "utf-8")
     expect(content).toBe("before\nafter")
     await rm(dir, { recursive: true })

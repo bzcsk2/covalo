@@ -150,3 +150,56 @@ describe("PermissionEngine", () => {
     expect(engine.decide("bash", {}, "exec").decision).toBe("ask")
   })
 })
+
+describe("S0-2: decide() 顺序 — deny → allow → strictMode → default", () => {
+  it("deny 规则优先于 strictMode", () => {
+    const engine = new PermissionEngine()
+    engine.setStrictMode(true)
+    engine.addAllowRule({ toolName: "bash" })
+    engine.addDenyRule({ toolName: "bash", reason: "denied by rule" })
+
+    const result = engine.decide("bash", {}, "exec")
+    expect(result.decision).toBe("deny")
+    expect(result.reason).toContain("denied by rule")
+  })
+
+  it("显式 allow 规则优先于 strictMode", () => {
+    const engine = new PermissionEngine()
+    engine.setStrictMode(true)
+    engine.addAllowRule({ toolName: "read_file" })
+
+    const result = engine.decide("read_file", {}, "read")
+    expect(result.decision).toBe("allow")
+  })
+
+  it("strictMode 下未显式 allow 的非 read 工具被 deny", () => {
+    const engine = new PermissionEngine()
+    engine.setStrictMode(true)
+
+    const result = engine.decide("bash", {}, "exec")
+    expect(result.decision).toBe("deny")
+    expect(result.reason).toContain("Strict mode")
+  })
+
+  it("strictMode 下 read tier 仍走默认 allow", () => {
+    const engine = new PermissionEngine()
+    engine.setStrictMode(true)
+
+    const result = engine.decide("read_file", {}, "read")
+    expect(result.decision).toBe("allow")
+  })
+
+  it("非 strictMode 下默认 write=ask", () => {
+    const engine = new PermissionEngine()
+
+    const result = engine.decide("write_file", {}, "write")
+    expect(result.decision).toBe("ask")
+  })
+
+  it("非 strictMode 下默认 exec=ask", () => {
+    const engine = new PermissionEngine()
+
+    const result = engine.decide("bash", {}, "exec")
+    expect(result.decision).toBe("ask")
+  })
+})

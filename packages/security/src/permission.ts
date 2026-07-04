@@ -23,6 +23,11 @@ function escapeRegExp(value: string): string {
   return value.replace(/[$()*+.?[\\\]^{|}]/g, "\\$&")
 }
 
+// S1-6: ReDoS 防护常量
+const MAX_WILDCARDS = 16
+const MAX_PATTERN_LEN = 512
+const MAX_VALUE_LEN = 4096
+
 function wildcardToRegExp(pattern: string): RegExp {
   const escaped = escapeRegExp(pattern)
     .replace(/\\\*/g, ".*")
@@ -30,9 +35,33 @@ function wildcardToRegExp(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`)
 }
 
+/**
+ * S1-6: Hardened wildcard matching with ReDoS protection.
+ * Limits pattern length, value length, wildcard count, and collapses consecutive `*`.
+ * Preserves legacy semantics: `*` matches `/`.
+ */
+function matchWildcardHardened(pattern: string, value: string): boolean {
+  if (pattern === "*") return true
+  if (pattern === value) return true
+  if (pattern.length > MAX_PATTERN_LEN) return pattern === value
+  if (value.length > MAX_VALUE_LEN) return false
+
+  const starCount = (pattern.match(/\*/g) ?? []).length
+  const qCount = (pattern.match(/\?/g) ?? []).length
+  if (starCount + qCount > MAX_WILDCARDS) return pattern === value
+
+  // Collapse consecutive `*` into a single `*`
+  const collapsed = pattern.replace(/\*+/g, "*")
+  try {
+    return wildcardToRegExp(collapsed).test(value)
+  } catch {
+    return pattern === value
+  }
+}
+
 function matchToolName(rule: string | RegExp, name: string): boolean {
   if (typeof rule !== "string") return rule.test(name)
-  if (rule.includes("*") || rule.includes("?")) return wildcardToRegExp(rule).test(name)
+  if (rule.includes("*") || rule.includes("?")) return matchWildcardHardened(rule, name)
   return rule === name
 }
 
@@ -150,15 +179,7 @@ export class PermissionEngine {
   }
 
   decide(toolName: string, args: Record<string, unknown>, tier: string): PermissionCheck {
-    if (this.strictMode) {
-      for (const rule of this.allowRules) {
-        if (!matchToolName(rule.toolName, toolName)) continue
-        if (rule.args && !matchArgs(rule.args, args)) continue
-        return { decision: "allow", rule }
-      }
-      return { decision: "deny", reason: `Strict mode: tool "${toolName}" is not explicitly allowed (tier: ${tier})` }
-    }
-
+    // S0-2 spec A: deny rules → allow rules → strictMode → default decision
     for (const rule of this.denyRules) {
       if (!matchToolName(rule.toolName, toolName)) continue
       if (rule.args && !matchArgs(rule.args, args)) continue
@@ -169,6 +190,11 @@ export class PermissionEngine {
       if (!matchToolName(rule.toolName, toolName)) continue
       if (rule.args && !matchArgs(rule.args, args)) continue
       return { decision: "allow", rule }
+    }
+
+    // strictMode: deny non-read tools not explicitly allowed
+    if (this.strictMode && tier !== "read") {
+      return { decision: "deny", reason: `Strict mode: tool "${toolName}" is not explicitly allowed (tier: ${tier})` }
     }
 
     const defaultDecision = this.getDefaultDecision(tier)

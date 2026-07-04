@@ -101,6 +101,10 @@ export const ToolsConfigSchema = z.object({
   dangerousToolsEnabled: z.boolean(),
   // Backward-compatible default for existing user/project configs.
   strictMode: z.boolean().default(false),
+  // S1-2: RuntimeGuard review 策略配置
+  runtimeGuard: z.object({
+    reviewPolicy: z.enum(["allow", "ask", "block"]).default("ask"),
+  }).default({ reviewPolicy: "ask" }),
   supervisor: z.object({
     loop: ToolRoleModePolicySchema,
     subagent: ToolRoleModePolicySchema,
