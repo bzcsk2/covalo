@@ -260,4 +260,52 @@ describe("HookManager", () => {
     expect(reason).toContain("beforeToolCall hook failed")
     expect(hooks.lastHookDenyReason).toBeUndefined()
   })
+
+  // ─── T12: loop_event hook timeout & drain safety ──────────────────
+
+  it("T12: fast-completing hook does not leave a 30s ref timer behind", async () => {
+    // 回归：之前实现里 timeout promise 不清理，task 快速完成后 setTimeout 仍持有 ref 30s，
+    // 可能让测试进程或 CLI 退出变慢。修复后 task 完成时应 clearTimeout。
+    const hooks = new HookManager()
+    const spy = vi.fn()
+    hooks.addHooks({ onLoopEvent: spy })
+
+    const spyClearTimeout = vi.spyOn(globalThis, "clearTimeout")
+
+    await hooks.runOnLoopEvent({ role: "test" })
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // task 同步完成后，finally 分支应调用 clearTimeout。
+    // 注意：因为 task 先 resolve，race 立即 settle，timeout 的 setTimeout 已注册但会被 clearTimeout 清理。
+    expect(spyClearTimeout).toHaveBeenCalled()
+
+    spyClearTimeout.mockRestore()
+  })
+
+  it("T12: hanging hook — drain() does not wait forever (resolves after timeout fires)", async () => {
+    // 回归：之前实现把原始 task（永久 pending）放入 pending Set，drain() 会永久等待。
+    // 修复后 pending 里是 guarded promise，timeout 触发后 guarded settle，drain() 可以返回。
+    // 用 spy 拦截 setTimeout，立即触发 resolve，避免真实等待 30s。
+    const hooks = new HookManager()
+    // Hanging hook：永不 resolve
+    hooks.addHooks({
+      onLoopEvent: async () => new Promise(() => { /* never resolves */ }),
+    })
+
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation((cb: (...args: unknown[]) => void) => {
+      // 立即在下一个微任务触发 timeout resolve，模拟超时
+      queueMicrotask(() => cb())
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    })
+
+    try {
+      // runOnLoopEvent 不会等待 task（hanging），但 guarded 会因 timeout 立即 settle
+      await hooks.runOnLoopEvent({ role: "test" })
+      // drain 应能返回（因为 guarded promise 已 settle，pending Set 已清理）
+      await hooks.drain()
+      expect(true).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })

@@ -373,8 +373,9 @@ describe("grep", () => {
     expect(filePaths).toContain(join(tmpDir, "normal.txt"))
   })
 
-  it("non-sensitive dot files are searchable", async () => {
-    // D2: ripgrep 默认不搜索 dot files，改用非 dot 文件名验证 non-sensitive 可搜索性
+  it("non-sensitive regular files are searchable", async () => {
+    // D2: ripgrep/grep 默认不搜 dot files（--hidden 未启用），所以这里用常规文件名
+    // 验证非敏感文件可搜索。dotfile 默认排除是当前产品语义，不是 bug。
     writeFileSync(join(tmpDir, "hidden-ok.txt"), "visible content", "utf-8")
     const { createGrepTool } = await import("../src/grep.js")
     const tool = createGrepTool()

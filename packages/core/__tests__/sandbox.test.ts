@@ -179,24 +179,31 @@ describe("soft-workspace", () => {
     expect(result.timedOut).toBe(false);
   });
 
-  // A2: POSIX-only — Windows 默认 shell 不展开 $HOME，加平台 skip。
+  // A2: 跨平台验证 — 用 node -e 读 process.env，避免依赖 POSIX shell 的 $VAR 展开。
+  // SoftWorkspaceProvider 实现里会显式设置 HOME: safeCwd 并合并 input.env，所以两个测试
+  // 在 Windows / POSIX 上都应该通过。
   it("run sets HOME to cwd", async () => {
-    if (process.platform === "win32") return // $HOME 展开是 POSIX shell 行为
     const p = new SoftWorkspaceProvider();
-    const result = await p.run({ command: "echo $HOME", cwd: tmpDir, readRoots: [tmpDir], writeRoots: [tmpDir] });
+    const result = await p.run({
+      command: 'node -e "process.stdout.write(process.env.HOME || \\"\\")"',
+      cwd: tmpDir,
+      readRoots: [tmpDir],
+      writeRoots: [tmpDir],
+    });
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(tmpDir);
   });
 
   it("run passes env vars", async () => {
-    if (process.platform === "win32") return // $VAR 展开是 POSIX shell 行为
     const p = new SoftWorkspaceProvider();
     const result = await p.run({
-      command: "echo $MY_VAR",
+      command: 'node -e "process.stdout.write(process.env.MY_VAR || \\"\\")"',
       cwd: tmpDir,
       readRoots: [tmpDir],
       writeRoots: [tmpDir],
       env: { MY_VAR: "custom_value" },
     });
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("custom_value");
   });
 });
