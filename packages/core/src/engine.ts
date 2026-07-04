@@ -1302,13 +1302,15 @@ Do not change goal status.`
       // SFR-30: 使用 resolveEffectiveTools 统一计算有效工具列表
       const effectiveRole: "worker" | "supervisor" = role ?? (agentName === "supervisor" ? "supervisor" : "worker")
       const effectiveMode: WorkflowMode = mode ?? "alone"
+      // S0-2: 只在 config 有 tools 字段时传入（避免 DeepreefConfig 无 tools 字段导致运行时崩溃）
+      const hasToolsConfig = !!(this.config as unknown as Record<string, unknown>).tools
       const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
         registeredTools: this.tools,
         role: effectiveRole,
         mode: effectiveMode,
         agentToolNames: ac.toolNames,
         workflowPhase,
-        config: this.config as unknown as CovaloConfig,
+        config: hasToolsConfig ? (this.config as unknown as CovaloConfig) : undefined,
       })
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {
