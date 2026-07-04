@@ -323,4 +323,29 @@ describe("HARDEN-02: find -delete security", () => {
     expect(r.ok).toBe(false)
     expect(r.error).toContain("sensitive")
   })
+
+  // ── 高危目标 deny ──
+  it("find / -delete is denied (root target)", () => {
+    expect(matchDeniedShellPattern("find / -type f -delete", "bash")).not.toBeNull()
+  })
+
+  it("find ~ -delete is denied (home target)", () => {
+    expect(matchDeniedShellPattern("find ~ -name '*.tmp' -delete", "bash")).not.toBeNull()
+  })
+
+  it("find $HOME -delete is denied", () => {
+    expect(matchDeniedShellPattern("find $HOME -type f -delete", "bash")).not.toBeNull()
+  })
+
+  it("find $PWD -delete is denied", () => {
+    expect(matchDeniedShellPattern("find $PWD -name '*.log' -delete", "bash")).not.toBeNull()
+  })
+
+  it("find / -exec rm is denied", () => {
+    expect(matchDeniedShellPattern("find / -type f -exec rm {} +", "bash")).not.toBeNull()
+  })
+
+  it("find src -exec rm is allowed (non-dangerous target)", () => {
+    expect(matchDeniedShellPattern("find src -type f -exec rm {} +", "bash")).toBeNull()
+  })
 })

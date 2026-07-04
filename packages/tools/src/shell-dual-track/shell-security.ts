@@ -8,11 +8,11 @@
  * 2. 自动化的上下文很难准确判断命令的真实意图。
  * 3. 用户可以通过显式确认来绕过（ask 模式）。
  *
- * HARDEN-02: `find -delete` 没有独立的 deny 模式，而是通过敏感路径检测来拦截
- * `find <敏感路径> -delete`。这意味着 `find` 在普通目录上的使用不受限制。
- * 这是有意识的设计取舍：不在 POSIX_DENY_PATTERNS 中加全局 `find -delete` 拦截，
- * 因为 `find` 是合法开发工作流中的常用工具（如批量改后缀、清理构建产物），
- * 而敏感路径检测已经覆盖了危险场景。
+ * HARDEN-02: `find -delete` 和 `find -exec rm` 只在高危目标（/、~、$HOME、$PWD）
+ * 上拦截。普通目录的 `find ... -delete` 是允许的，因为：
+ * - `find` 是合法开发工作流（清理构建产物、批量操作）的常用工具。
+ * - 高危目标上的递归删除是毁灭性的，需要拦截。
+ * - 如果 `find` 指向敏感路径（如 .git），`matchSensitivePathInCommand` 会兜底拦截。
  */
 
 import { resolve } from "node:path"
@@ -52,9 +52,9 @@ const USERMOD = /\busermod\b/
 const CHOWN_RECURSIVE = /\bchown\s+-R\b/
 const MOUNT = /\bmount\b/
 const UMOUNT = /\bumount\b/
-// HARDEN-02: find 删除操作（避免 rm 绕行）
-const FIND_DELETE = /\bfind\b[^;\n]*\s-delete\b/
-const FIND_EXEC_RM = /\bfind\b[^;\n]*\s-exec\s+rm\b/
+// HARDEN-02: find -delete / -exec rm 只在高危目标上拦截（/、~、$HOME、$PWD），普通目录放行
+const FIND_DELETE_DANGEROUS = /\bfind\s+(?:\/(?=\s|$)|~(?=\s|$)|\$HOME(?=\s|$)|\$PWD(?=\s|$)).*\s-delete\b/
+const FIND_EXEC_RM_DANGEROUS = /\bfind\s+(?:\/(?=\s|$)|~(?=\s|$)|\$HOME(?=\s|$)|\$PWD(?=\s|$)).*\s-exec\s+rm\b/
 
 const POSIX_DENY_PATTERNS = [
   RM_DANGEROUS_TARGET,
@@ -75,8 +75,8 @@ const POSIX_DENY_PATTERNS = [
   CHOWN_RECURSIVE,
   MOUNT,
   UMOUNT,
-  FIND_DELETE,
-  FIND_EXEC_RM,
+  FIND_DELETE_DANGEROUS,
+  FIND_EXEC_RM_DANGEROUS,
 ]
 
 // S1-4: PowerShell deny 模式补全
