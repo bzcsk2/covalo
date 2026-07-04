@@ -19,7 +19,7 @@ export class StreamingToolExecutor {
   private cwd: string
   private permissionEngine?: PermissionEngine
   private hookManager?: HookManager
-  private requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
+  private requestPermission?: (toolName: string, args: Record<string, unknown>) => { requestId: string; promise: Promise<boolean> }
   private delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
   private switchAgent?: (name: string) => string
   private spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
@@ -43,7 +43,7 @@ export class StreamingToolExecutor {
     cwd?: string,
     permissionEngine?: PermissionEngine,
     hookManager?: HookManager,
-    requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>,
+    requestPermission?: (toolName: string, args: Record<string, unknown>) => { requestId: string; promise: Promise<boolean> },
     delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>,
     switchAgent?: (name: string) => string,
     spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>,
@@ -119,8 +119,21 @@ export class StreamingToolExecutor {
           continue
         }
         if (permResult === "ask") {
-          const permPromise = exec.requestPermission!(tc.function.name, argsResult.args)
-          yield { role: "permission_ask", toolName: tc.function.name, content: JSON.stringify(argsResult.args) }
+          const { requestId, promise: permPromise } = exec.requestPermission!(tc.function.name, argsResult.args)
+          yield {
+            role: "permission_ask",
+            toolName: tc.function.name,
+            content: JSON.stringify(argsResult.args),
+            metadata: {
+              requestId,
+              sessionId: exec.sessionId,
+              permission: tc.function.name,
+              patterns: [],
+              always: [],
+              metadata: argsResult.args,
+              tool: { toolCallId: tc.id, toolName: tc.function.name },
+            },
+          }
           const allowed = await permPromise
           if (!allowed) {
             const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
@@ -191,9 +204,15 @@ export class StreamingToolExecutor {
       for (let index = 0; index < toolCalls.length; index++) {
         const tc = toolCalls[index]
         if (allowedToolNames && !allowedToolNames.has(tc.function.name)) {
-          const result = makeToolError(`Tool not available in this turn: ${tc.function.name}`)
+          // 引导性错误消息：明确列出当前可用工具，避免 LLM 反复幻觉调用同一不可用工具
+          const availableList = [...allowedToolNames].sort().join(", ")
+          const message = `Tool '${tc.function.name}' is not available in this turn. ` +
+            `Available tools: [${availableList}]. ` +
+            `Pick one of the available tools, or if none fits, stop calling tools and respond in text. ` +
+            `Do NOT retry the same unavailable tool.`
+          const result = makeToolError(message)
           settle(tc, index, result)
-          if (logger.isEnabled("error")) logger.warn("tool.execute.not_allowed", { toolName: tc.function.name, toolCallIndex: index })
+          if (logger.isEnabled("error")) logger.warn("tool.execute.not_allowed", { toolName: tc.function.name, toolCallIndex: index, availableCount: allowedToolNames.size })
           yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error", metadata: { error: true, reason: "tool_not_allowed" } }
           continue
         }
@@ -524,8 +543,21 @@ export class StreamingToolExecutor {
       return
     }
     if (permResult === "ask") {
-      const permPromise = this.requestPermission!(tc.function.name, argsResult.args) // create Promise before yielding
-      yield { role: "permission_ask", toolName: tc.function.name, content: JSON.stringify(argsResult.args) }
+      const { requestId, promise: permPromise } = this.requestPermission!(tc.function.name, argsResult.args) // create Promise before yielding
+      yield {
+        role: "permission_ask",
+        toolName: tc.function.name,
+        content: JSON.stringify(argsResult.args),
+        metadata: {
+          requestId,
+          sessionId: this.sessionId,
+          permission: tc.function.name,
+          patterns: [],
+          always: [],
+          metadata: argsResult.args,
+          tool: { toolCallId: tc.id, toolName: tc.function.name },
+        },
+      }
       const allowed = await permPromise
       if (!allowed) {
         const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)

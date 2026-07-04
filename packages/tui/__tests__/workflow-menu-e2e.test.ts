@@ -58,6 +58,9 @@ function makeMockCoordinator() {
   let state: any = null;
   let finished = false;
   let runCount = 0;
+  // SPEC S3-2: 模拟真实 WorkflowCoordinator 的 abortController 行为
+  // interrupt() 后 isInterrupted() = true，resume 后清空为 false
+  let interrupted = false;
   const goalStore = {
     getGoal: () => ({ status: 'active' }),
   };
@@ -78,20 +81,26 @@ function makeMockCoordinator() {
         yield evt;
       }
     },
-    interrupt: () => { interruptedCalls.push(Date.now()); },
+    interrupt: () => { interruptedCalls.push(Date.now()); interrupted = true; },
     resumeInterruptedWorkflow: (instruction: string) => {
       resumedInstructions.push(instruction);
+      // SPEC S3-2: 真实实现会在 resumeBlockedWorkflow 中清掉 abortController
+      interrupted = false;
       state = { currentPhase: 'supervisor_analyse', iteration: 2, workflowId: 'wf-1' };
       finished = false;
     },
     resumeBlockedWorkflow: (instruction: string) => {
       resumedInstructions.push(instruction);
+      // SPEC S3-2: 真实实现会在 resumeBlockedWorkflow 中清掉 abortController
+      interrupted = false;
       state = { currentPhase: 'supervisor_analyse', iteration: 2, workflowId: 'wf-1' };
       finished = false;
     },
-    reset: () => { state = null; finished = false; runCount = 0; },
+    reset: () => { state = null; finished = false; runCount = 0; interrupted = false; },
     getState: () => state,
     isFinished: () => finished,
+    // SPEC S3-2: mock 提供 isInterrupted() 以匹配真实 WorkflowCoordinator API
+    isInterrupted: () => interrupted,
     getGoalStore: () => goalStore,
     startedGoals,
     resumedInstructions,
@@ -160,6 +169,36 @@ describe('SFR-90: workflow e2e integration', () => {
 
     expect(coordinator.startedGoals).toEqual(['test goal']);
     expect(coordinator.resumedInstructions).toEqual(['continue from here']);
+  });
+
+  // SPEC S3-2 resume 回归测试：
+  // 用户 Ctrl+C 中断 workflow 后，再 resume，TUI 的 driveWorkflow() 外层
+  // `while (runAgain && !workflowCoordinator.isInterrupted())` guard
+  // 必须能真正进入循环并调用 runWorkflow()。
+  // 修复前：resumeBlockedWorkflow 不清 abortController，isInterrupted() 仍为 true，
+  //         while 循环不进入，runWorkflow() 不会被调用。
+  // 修复后：resumeBlockedWorkflow 清掉 abortController，isInterrupted() 返回 false。
+  it('scenario 2b-interrupt: resumeWorkflow after interrupt actually invokes runWorkflow again', async () => {
+    // 1. 启动 workflow
+    await bridge.runWorkflow('test goal');
+    const runCountAfterFirst = coordinator.runCount;
+    expect(runCountAfterFirst).toBeGreaterThanOrEqual(1);
+
+    // 2. 模拟 Ctrl+C 中断
+    bridge.cancel();
+    expect(coordinator.isInterrupted()).toBe(true);
+
+    // 3. 用户 resume
+    await bridge.resumeWorkflow('continue after interrupt');
+
+    // 关键断言：resume 后 isInterrupted() 必须为 false
+    expect(coordinator.isInterrupted()).toBe(false);
+
+    // 关键断言：driveWorkflow 的 while 循环必须真正进入，runWorkflow 被再次调用
+    expect(coordinator.runCount).toBeGreaterThan(runCountAfterFirst);
+
+    // resume 指令正确传递
+    expect(coordinator.resumedInstructions).toContain('continue after interrupt');
   });
 
   it('scenario 2c: blocked callback preserves the interrupt reason', async () => {

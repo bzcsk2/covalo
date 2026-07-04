@@ -21,7 +21,8 @@ let COVALO_ASCII: string[] = []
 try {
   COVALO_ASCII = figlet.textSync('covalo', { font: 'ANSI Regular' }).trim().split('\n')
 } catch {}
-const COVALO_COLORS: any[] = ['#4FA3F7', '#5C94F9', '#6985FA', '#7676FC', '#866FFB', '#9868F9', '#B064F6', '#C15FF3', '#CA5FF2'];
+// 从品牌蓝(#7c9eff)到品牌紫(#b27cff)的渐变，与落地页 --gradient 一致
+const COVALO_COLORS: any[] = ['#7c9eff', '#8b8ffe', '#9a7ffd', '#a97ffc', '#b87ffb', '#c77ffa', '#d67ff9', '#e57ff8', '#f27ff7'];
 
 function Title(): React.ReactElement {
   return (
@@ -47,7 +48,7 @@ function CheckValue({ children }: { children: React.ReactNode }): React.ReactEle
 function Panel({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
   return (
     <Box flexDirection="column" flexGrow={1}>
-      <Text bold color="#F59E0B">{title}</Text>
+      <Text bold color={TONE.warn as any}>{title}</Text>
       <Box flexDirection="column">
         {children}
       </Box>

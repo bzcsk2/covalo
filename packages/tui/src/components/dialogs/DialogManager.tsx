@@ -17,17 +17,18 @@
  */
 
 import React from 'react';
-import type { PermissionRequest, QuestionRequest, PermissionReply } from '@covalo/core';
+import type { QuestionRequest, PermissionReply } from '@covalo/core';
+import type { TuiPermissionPrompt, PermissionOriginRole } from '../../bridge.js';
 import { PermissionPrompt } from '../../PermissionPrompt.js';
 import { QuestionPrompt } from '../../QuestionPrompt.js';
 
 export interface DialogManagerProps {
-  /** Pending permission request, or null if none */
-  permissionRequest: PermissionRequest | null;
+  /** SPEC S0-1: pending permission prompt 含 originRole，用于定向 respondPermissionForRequest() */
+  permissionRequest: TuiPermissionPrompt | null;
   /** Pending question request, or null if none */
   questionRequest: QuestionRequest | null;
-  /** Callback when user replies to a permission request */
-  onPermissionReply: (reply: PermissionReply, message?: string) => void;
+  /** SPEC S0-1: callback 显式回传 requestId + originRole */
+  onPermissionReply: (requestId: string, originRole: PermissionOriginRole, reply: PermissionReply, message?: string) => void;
   /** Callback when user answers a question */
   onQuestionReply: (requestId: string, answers: string[][]) => void;
   /** Callback when user rejects a question */
@@ -41,7 +42,7 @@ export interface DialogManagerProps {
  * Permission takes precedence over question (security critical).
  */
 function resolveActiveDialog(
-  permissionRequest: PermissionRequest | null,
+  permissionRequest: TuiPermissionPrompt | null,
   questionRequest: QuestionRequest | null,
 ): 'permission' | 'question' | null {
   if (permissionRequest) return 'permission';
@@ -87,7 +88,7 @@ export function DialogManager({
  * Returns true if any dialog is currently active (for input blocking).
  */
 export function hasActiveDialog(
-  permissionRequest: PermissionRequest | null,
+  permissionRequest: TuiPermissionPrompt | null,
   questionRequest: QuestionRequest | null,
 ): boolean {
   return resolveActiveDialog(permissionRequest, questionRequest) !== null;

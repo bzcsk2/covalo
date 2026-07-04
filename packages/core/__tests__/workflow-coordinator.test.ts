@@ -1397,4 +1397,221 @@ describe("WorkflowCoordinator", () => {
       expect(finalState?.blockedReason).toContain("User rejected")
     })
   })
+
+  describe("SPEC S3-2: isInterrupted()", () => {
+    it("returns false when abortController has not been created (no runWorkflow yet)", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
+      // 尚未调用 runWorkflow()，abortController 为 undefined
+      expect(coordinator.isInterrupted()).toBe(false)
+    })
+
+    it("returns false when abortController is created but not aborted (runWorkflow in progress)", async () => {
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: JSON.stringify({
+              version: 1,
+              workflowId: "wf-1",
+              iteration: 1,
+              basedOnLedgerVersion: 0,
+              decision: "approve",
+              diagnosis: "done",
+              nextActions: [],
+              constraints: [],
+              verification: [],
+              completionAudit: [{ requirement: "test", status: "proven", evidence: ["completed"] }],
+            }) }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+
+      // 用一个占位 generator 模拟 runWorkflow 启动后 abortController 已创建
+      // 但因为 runWorkflow 是 async generator，必须 yield 一次才能保证 abortController 被设置
+      const gen = coordinator.runWorkflow()
+      await gen.next()
+      // 此时 abortController 已被赋值，但未 abort
+      expect(coordinator.isInterrupted()).toBe(false)
+      // 清理：消费剩余事件
+      for await (const _event of gen) { /* drain */ }
+    })
+
+    it("returns true after interrupt() is called during runWorkflow", async () => {
+      let coordinator: WorkflowCoordinator
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "Initial plan" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "Initial plan" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            // 在 worker 执行时中断
+            coordinator.interrupt()
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      // interrupt() 内部调用 abortController.abort()
+      expect(coordinator.isInterrupted()).toBe(true)
+      // workflow 应进入 blocked 状态
+      expect(coordinator.getState()?.currentPhase).toBe("blocked")
+      expect(coordinator.getState()?.blockedReason).toBe("Interrupted by user")
+    })
+
+    it("returns false after reset() clears abortController (post-run)", async () => {
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: JSON.stringify({
+              version: 1,
+              workflowId: "wf-1",
+              iteration: 1,
+              basedOnLedgerVersion: 0,
+              decision: "approve",
+              diagnosis: "done",
+              nextActions: [],
+              constraints: [],
+              verification: [],
+              completionAudit: [{ requirement: "test", status: "proven", evidence: ["completed"] }],
+            }) }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+      // 完成后 abortController 仍在，但未被 abort
+      expect(coordinator.isInterrupted()).toBe(false)
+
+      // reset() 会清空 abortController
+      coordinator.reset()
+      // reset 后 abortController 被设为 undefined
+      expect(coordinator.isInterrupted()).toBe(false)
+    })
+
+    it("interrupt() without prior runWorkflow() is a safe no-op", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
+      // interrupt() 会在没有 abortController 时安全跳过 abort 调用
+      coordinator.interrupt()
+      // abortController 仍是 undefined，所以 isInterrupted() 返回 false
+      expect(coordinator.isInterrupted()).toBe(false)
+    })
+
+    // SPEC S3-2 resume 回归测试：
+    // 用户 Ctrl+C 中断 workflow 后，再 resume，必须保证 isInterrupted() === false，
+    // 否则 TUI 的 `while (runAgain && !isInterrupted())` guard 会拒绝进入循环，
+    // 导致 runWorkflow() 永远不会被调用。
+    it("resumeBlockedWorkflow() clears abortController after interrupt (regression guard)", async () => {
+      let coordinator: WorkflowCoordinator
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "Initial plan" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "Initial plan" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            // 在 worker 执行时中断
+            coordinator.interrupt()
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      // 验证：中断后状态正确
+      expect(coordinator.isInterrupted()).toBe(true)
+      expect(coordinator.getState()?.currentPhase).toBe("blocked")
+      expect(coordinator.getState()?.blockedReason).toBe("Interrupted by user")
+
+      // 用户 resume
+      coordinator.resumeBlockedWorkflow("continue from latest state")
+
+      // 关键断言：resume 后 isInterrupted() 必须为 false，
+      // 否则 TUI 的 while guard 会拒绝进入下一次 runWorkflow()
+      expect(coordinator.isInterrupted()).toBe(false)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_analyse")
+      expect(coordinator.getState()?.blockedReason).toBeUndefined()
+    })
+
+    it("resumeInterruptedWorkflow() clears abortController after interrupt", async () => {
+      let coordinator: WorkflowCoordinator
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () {
+            yield { role: "assistant_final", content: "Initial plan" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "Initial plan" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () {
+            coordinator.interrupt()
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+      coordinator.startWorkflow({ goal: "test" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      expect(coordinator.isInterrupted()).toBe(true)
+
+      coordinator.resumeInterruptedWorkflow("continue")
+      expect(coordinator.isInterrupted()).toBe(false)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_analyse")
+    })
+
+    it("resume from non-interrupt blocked reason also clears abortController", async () => {
+      // 任何 resume 都应该清理 abortController，
+      // 不只是 Interrupted by user 场景
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
+      // 模拟其他 blocked 原因（如 Goal is paused）
+      coordinator.transition("blocked", "Goal is paused")
+
+      // 手动设置 abortController 模拟中断过的状态
+      // 注意：transition 到 blocked 不会创建 abortController，
+      // 但如果之前有 runWorkflow，abortController 可能残留
+      // 这里通过 resume 测试清理逻辑
+
+      expect(coordinator.isResumableBlockedReason("Goal is paused")).toBe(true)
+      coordinator.resumeBlockedWorkflow("resume instruction")
+      expect(coordinator.isInterrupted()).toBe(false)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_analyse")
+    })
+  })
 })

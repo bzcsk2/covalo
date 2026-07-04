@@ -55,8 +55,12 @@ describe("ReasonixEngine tool loop regressions", () => {
 
     expect(executions).toBe(0)
     const denied = events.find(e => e.role === "error" && e.toolName === "bash")
-    expect(denied?.content).toContain("Tool not available in this turn: bash")
+    expect(denied?.content).toContain("'bash' is not available in this turn")
     expect(denied?.metadata?.reason).toBe("tool_not_allowed")
+    // 错误消息必须包含可用工具列表，引导 LLM 选择正确工具
+    expect(denied?.content).toContain("Available tools:")
+    // 错误消息必须包含禁止重试提示，防止 LLM 反复调用同一不可用工具
+    expect(denied?.content).toContain("Do NOT retry the same unavailable tool")
   })
 
   it("should preserve toolCallIndex mapping and write tool content as string", async () => {

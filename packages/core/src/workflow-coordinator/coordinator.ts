@@ -323,6 +323,19 @@ export class WorkflowCoordinator {
     return this.state.currentPhase === "completed" || this.state.currentPhase === "failed"
   }
 
+  /**
+   * SPEC S3-2: 只读中断信号查询。
+   *
+   * TUI 的 Phase G continuation 循环 (`while (runAgain)`) 在 Ctrl+C 后
+   * 会通过此方法感知中断，提前退出循环，避免继续发起新的 workflow run。
+   *
+   * 注意：这是 P2 防御性 guard，不是状态机核心逻辑。
+   * 真正的中断语义仍由 `cancel()` + `transition("blocked", "Interrupted by user")` 实现。
+   */
+  isInterrupted(): boolean {
+    return this.abortController?.signal.aborted ?? false
+  }
+
   async *runWorkflow(): AsyncGenerator<WorkflowEvent> {
     if (!this.state) {
       throw new Error("No workflow in progress")
@@ -973,6 +986,11 @@ ${adjustment.recommendedMaxTokens ? `- Recommended max output budget: ${adjustme
 
     const reason = this.state.blockedReason
     this.pendingEvents = []
+    // SPEC S3-2: resume 本质上是准备一次新的 run，必须清掉上一轮 run 的 abort 状态。
+    // 否则中断后 resume 时，TUI 的 `while (runAgain && !isInterrupted())` guard
+    // 会因旧 abortController.signal.aborted === true 而拒绝进入循环，
+    // 导致 runWorkflow() 永远不会被调用。
+    this.abortController = undefined
     this.state.resumeInstruction = instruction.trim() || undefined
     this.state.blockedReason = undefined
 

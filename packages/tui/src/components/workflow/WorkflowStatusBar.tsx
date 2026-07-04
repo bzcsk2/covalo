@@ -1,5 +1,5 @@
 import { Box, Text } from '@covalo/ink';
-import { FG, TONE } from '../../reasonix/tokens.js';
+import { FG, SURFACE, TONE } from '../../reasonix/tokens.js';
 import { t } from '../../i18n/index.js';
 import type { WorkflowLifecycle } from '../../workflow-mode-router.js';
 
@@ -182,7 +182,7 @@ export function WorkflowStatusBar({
         <Box
           backgroundColor={activeRole === 'supervisor' ? (TONE.brand as any) : undefined}
         >
-          <Text bold color={activeRole === 'supervisor' ? '#000' : FG.sub}>
+          <Text bold color={activeRole === 'supervisor' ? (SURFACE.bg as any) : FG.sub}>
             Supervisor
           </Text>
         </Box>
@@ -193,7 +193,7 @@ export function WorkflowStatusBar({
 
       <Box flexDirection="row" alignItems="center">
         <Box backgroundColor={activeRole === 'worker' ? (TONE.ok as any) : undefined}>
-          <Text bold color={activeRole === 'worker' ? '#000' : FG.sub}>
+          <Text bold color={activeRole === 'worker' ? (SURFACE.bg as any) : FG.sub}>
             Worker
           </Text>
         </Box>
