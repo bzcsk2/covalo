@@ -547,8 +547,15 @@ export class ReasonixEngine implements CoreEngine {
     if (includePlanRequest && ledger.plan.length === 0) {
       messages.push({ role: "user", content: planRequestInstruction() })
     }
-    messages.push({ role: "user", content: ledger.formatForContext() })
-    this.ctx.scratch.replaceSource("task_ledger", messages)
+    const formatted = ledger.formatForContext()
+    if (formatted.trim()) {
+      messages.push({ role: "user", content: formatted })
+    }
+    if (messages.length > 0) {
+      this.ctx.scratch.replaceSource("task_ledger", messages)
+    } else {
+      this.ctx.scratch.removeSource("task_ledger")
+    }
   }
 
   /** DRF-60: 构建 Supervisor 指导闭环配置 */

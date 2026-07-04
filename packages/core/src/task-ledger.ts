@@ -196,10 +196,11 @@ export function formatLedgerForContext(ledger: TaskLedger, locale?: PromptLocale
     parts.push(`${isZh ? "阻塞项" : "BLOCKERS"}:\n${ledger.blockers.map(b => `- ${b}`).join("\n")}`)
   }
 
-  if (ledger.evictedFileCount > 0) {
+  const evictedFileCount = ledger.evictedFileCount ?? 0
+  if (evictedFileCount > 0) {
     parts.push(isZh
-      ? `更早的变更：${ledger.evictedFileCount} 个文件变更未在本 leder 视图显示。`
-      : `EARLIER CHANGES: ${ledger.evictedFileCount} file changes omitted from this ledger view.`)
+      ? `更早的变更：${evictedFileCount} 个文件变更未在本 ledger 视图显示。`
+      : `EARLIER CHANGES: ${evictedFileCount} file changes omitted from this ledger view.`)
   }
 
   return isZh ? `\n\n## 任务上下文\n${parts.join("\n\n")}` : `\n\n${parts.join("\n\n")}`

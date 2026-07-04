@@ -101,9 +101,6 @@ export const ToolsConfigSchema = z.object({
   dangerousToolsEnabled: z.boolean(),
   // Backward-compatible default for existing user/project configs.
   strictMode: z.boolean().default(false),
-  runtimeGuard: z.object({
-    toolOutputGuarding: z.boolean(),
-  }).optional(),
   supervisor: z.object({
     loop: ToolRoleModePolicySchema,
     subagent: ToolRoleModePolicySchema,
