@@ -52,18 +52,6 @@ const MAX_RECENT_TOOLS = 20
 const MAX_RECENT_FAILURES = 10
 const MAX_RECOVERY_SIGNALS = 8
 
-const FREE_PERSIST_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
-  "tool_failed",
-  "verification_failed",
-  "compaction",
-  "final_draft",
-])
-
-const FORCED_EXTRA_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
-  "step_completed",
-  "verification_started",
-])
-
 /** Runtime Resilience v2 始终开启 */
 export function isResilienceV2Enabled(): boolean {
   return true
@@ -108,11 +96,6 @@ export class CheckpointEngine {
   shouldPersistOnTrigger(trigger: CheckpointSaveTrigger): boolean {
     // FIX-H5: manual 永远落盘
     if (trigger === "manual") return true
-
-    // forced policy 覆盖 checkpointPolicy
-    if (this.forcedPolicyActive) {
-      return FREE_PERSIST_TRIGGERS.has(trigger) || FORCED_EXTRA_TRIGGERS.has(trigger)
-    }
 
     if (this.checkpointPolicy === "frequent") return true
 

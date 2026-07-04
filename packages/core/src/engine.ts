@@ -1124,7 +1124,10 @@ Do not change goal status.`
     // ADV-HAR-03: 根据 effectivePolicy.shellPolicy 重新注册 bash 工具
     if (this.effectivePolicy.shellPolicy === "dual-track" || this.effectivePolicy.shellPolicy === "dual-track-conservative") {
       const { createBashTool } = await import("@covalo/tools")
-      this.tools.set("bash", createBashTool({ dualTrack: true }))
+      this.tools.set("bash", createBashTool({
+        dualTrack: true,
+        conservative: this.effectivePolicy.shellPolicy === "dual-track-conservative",
+      }))
     }
 
     // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率

@@ -253,37 +253,28 @@ describe("CheckpointEngine - 写入原子性", () => {
 })
 
 describe("CheckpointEngine forced policy", () => {
-  it("forced policy — when inactive, safe-point policy controls (step_completed persists)", async () => {
-    const tmp = await makeTempDir()
-    const engine = new CheckpointEngine(tmp)
-    expect(engine.isForcedPolicyActive()).toBe(false)
-    // default checkpointPolicy is safe-point, which persists step_completed
-    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
-    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
-    await fs.rm(tmp, { recursive: true, force: true })
-  })
-
-  it("persists on every step_completed once forced policy is active", async () => {
+  it("forcedPolicy does NOT override checkpointPolicy — safe-point persists step_completed", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
     engine.setForcedPolicy(true)
-
-    expect(engine.isForcedPolicyActive()).toBe(true)
+    // checkpointPolicy remains safe-point, so step_completed persists
     expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
-    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    // verification_started not in safe-point, so false even when forced
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 
-  it("falls back to minimal policy when forced policy is cleared and setCheckpointPolicy is used", async () => {
+  it("forcedPolicy + minimal policy — tool_failed persists, step_completed does not", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
     engine.setCheckpointPolicy("minimal")
     engine.setForcedPolicy(true)
-    engine.setForcedPolicy(false)
 
-    expect(engine.isForcedPolicyActive()).toBe(false)
-    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
     expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("final_draft")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 })
