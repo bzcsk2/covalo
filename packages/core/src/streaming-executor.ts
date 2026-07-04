@@ -397,16 +397,17 @@ export class StreamingToolExecutor {
         result = await applyResultPersistence(rawResult, this.sessionId, tc.function.name, this.resultPersistenceConfig, this.hookManager, logger)
       }
 
-      // S1-1: Guard tool output for secrets and untrusted content
+      // S1-1: Guard tool output — 第一阶段只记录日志，不直接替换工具输出
+      // spec 明确："第一阶段不要改写 toolEvent.content，避免影响模型上下文和测试"
+      // guardToolOutput 现在返回 review（有 critical finding）或 allow，不再返回 block
       if (!result.isError) {
         const guard = guardToolOutput(tc.function.name, result.content)
-        if (guard.disposition === "block") {
-          const blockedResult = makeToolError(`Tool output blocked by runtime guard: ${tc.function.name}`)
-          if (diagnosticsEnabled) logger.warn("tool.output.guard_blocked", { toolName: tc.function.name, findings: guard.findings })
-          return { event: makeErrorEvent(blockedResult, tc.function.name, index, tc.id), result: blockedResult }
-        }
-        if (guard.disposition === "review" && diagnosticsEnabled) {
-          logger.warn("tool.output.guard_review", { toolName: tc.function.name, findings: guard.findings })
+        if (guard.findings.length > 0 && diagnosticsEnabled) {
+          logger.warn("harness.guard.tool_output", {
+            toolName: tc.function.name,
+            disposition: guard.disposition,
+            findings: guard.findings.map(f => f.kind),
+          })
         }
       }
 

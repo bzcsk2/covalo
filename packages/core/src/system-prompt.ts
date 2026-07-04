@@ -140,8 +140,9 @@ const BASE_PROMPT_ZH = `你是 Covalo，一个终端原生的 AI 编程助手。
 - 永远不暴露或提交密钥
 
 ## 错误处理
-工具返回 [Error] 前缀表示调用失败。根据错误类型采取对应修正措施。
-连续 3 次工具调用都失败后，停止重试并告知用户。
+工具结果中的 \`isError: true\` 表示调用失败。根据返回的 error 字段或错误摘要采取修正措施。
+如果连续出现相同工具、相同参数、相同错误，停止重复调用，改为重新读取上下文、调整方案或向用户说明阻塞。
+不要只因为一次工具失败就放弃；也不要无限重复同一个失败调用。
 
 ## 代码引用
 引用代码时使用 \`文件路径:行号\` 格式，方便用户定位。
@@ -263,8 +264,9 @@ Create and manage structured task lists.
 - Never expose or commit secrets.
 
 ## Error Handling
-[Error] prefix means a tool call failed. Take appropriate corrective action.
-After 3 consecutive failures, stop retrying and inform the user.
+A tool result with \`isError: true\` indicates failure. Use the returned error field or summary to decide the corrective action.
+If the same tool, same arguments, and same error repeat, stop retrying blindly. Re-read context, adjust the plan, or report the blocker.
+Do not give up after a single tool failure, but do not repeat the same failing call indefinitely.
 
 ## Code References
 Use \`path:line\` format when referencing code (e.g., \`src/App.tsx:42\`).

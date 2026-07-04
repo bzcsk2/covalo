@@ -6,10 +6,16 @@ import { resolve } from "node:path"
 import { isSensitive } from "../sensitive.js"
 import type { ShellBackendId } from "../platform/shell-backend.js"
 
-// Recursive root deletion
-const RM_ROOT = /\brm\s+(?:-\S+\s+)*(?:-\S*[rR]\S*\s+)(?:-\S+\s+)*(?:\S+\s+)*\/(?:\*)?(?:\s|$)/
-// Privileged escalation
-const SUDO = /\bsudo\b/
+// S1-4: rm 递归删除高危目标（根目录、$HOME、~、$PWD），不拦 rm -rf src/ 等业务目录
+const RM_DANGEROUS_TARGET = new RegExp(
+  String.raw`\brm\s+` +
+  String.raw`(?=[^;\n]*?(?:-\S*[rR]\S*|--recursive))` +
+  String.raw`[^;\n]*?` +
+  String.raw`(?:\s|--\s*)(?:\/\*?|~|\$HOME|\$PWD)(?:\s|$)`,
+  "i",
+)
+// S1-4: 提权命令扩展（su/doas/pkexec/runuser/gosu/setpriv）
+const PRIVILEGE_ESCALATION = /\b(?:sudo|su|doas|pkexec|runuser|gosu|setpriv)\b/
 // Disk formatting / partitioning
 const DISK_FORMAT = /\bmkfs(?:\.[a-zA-Z]+)?\b/
 const DISK_PARTITION = /\bfdisk\b/
@@ -35,8 +41,8 @@ const MOUNT = /\bmount\b/
 const UMOUNT = /\bumount\b/
 
 const POSIX_DENY_PATTERNS = [
-  RM_ROOT,
-  SUDO,
+  RM_DANGEROUS_TARGET,
+  PRIVILEGE_ESCALATION,
   DISK_FORMAT,
   DD_IF,
   CHMOD_RECURSIVE_ROOT,
@@ -55,13 +61,18 @@ const POSIX_DENY_PATTERNS = [
   UMOUNT,
 ]
 
+// S1-4: PowerShell deny 模式补全
+// - 扩展 Remove-Item/del/erase + Recurse/Force/POSIX 风格 -rf/-fr + 根路径或 ~
+// - 新增 -LiteralPath C:\ 拦截
+// - 新增 gsudo、Start-Process -Verb Elevated
 const POWERSHELL_DENY_PATTERNS = [
-  /\b(?:Remove-Item|rm)\b[^;\n]*(?:-Recurse\b[^;\n]*)?(?:[A-Za-z]:\\|\/)\s*(?:-\w+\s*)*$/i,
-  /\b(?:Remove-Item|rm)\b[^;\n]*-[FRS]\b/i,
+  /\b(?:Remove-Item|rm|del|erase)\b[^;\n]*(?:-Recurse|-Force|-FRS|-rf|-fr)[^;\n]*?\s(?:[A-Za-z]:\\|\/|~)(?:\s|$)/i,
+  /\b(?:Remove-Item|rm|del|erase)\b[^;\n]*-LiteralPath\s+["']?[A-Za-z]:\\["']?/i,
   /\bFormat-Volume\b/i,
   /\bClear-Disk\b/i,
   /\bInitialize-Disk\b/i,
-  /\bStart-Process\b[^;\n]*-Verb\s+RunAs\b/i,
+  /\bStart-Process\b[^;\n]*-Verb\s+(?:RunAs|Elevated)\b/i,
+  /\bgsudo\b/i,
   /\bInvoke-Expression\b/i,
   /\bInvoke-WebRequest\b[^;\n]*\|[^;\n]*Invoke-Expression\b/i,
   /\bSet-ExecutionPolicy\b/i,

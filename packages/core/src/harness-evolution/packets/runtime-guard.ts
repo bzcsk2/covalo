@@ -34,9 +34,30 @@ export interface RuntimeGuardPacket extends PacketBase {
   findings: GuardFinding[];
 }
 
-// Patterns adapted from FuguNano runtime-guard.ts
-const PROMPT_INJECTION_RE = /\b(?:ignore|override|bypass|forget|disregard|neglect|skip)\s+(?:all\s+)?(?:(?:previous|prior|above|earlier)(?:\s+(?:system|developer|user))?|system|developer)\s+instructions\b|\breveal\s+(?:the\s+)?(?:system|developer)\s+prompt\b|\b(?:print|output|show|display|leak)\s+(?:the\s+)?(?:system|initial)\s+prompt\b/i;
-const UNTRUSTED_INPUT_RE = /\b(?:untrusted|external|third[-\s]?party|browser|email|issue|pull request|comment|pasted|scraped)\b/i;
+// S1-1 spec A: 扩展注入正则，覆盖中英文
+// 英文：ignore/override/bypass/forget/disregard + previous/prior/above/earlier/system/developer instructions
+// 中文：忽略/无视/覆盖/忘记/不要遵守 + 以上/上述/之前/前面/系统/安全 + 指令/规则/约束/提示
+const PROMPT_INJECTION_RE = new RegExp(
+  [
+    // 英文模式
+    String.raw`\b(?:ignore|override|bypass|forget|disregard|neglect|skip)\s+(?:all\s+)?(?:(?:previous|prior|above|earlier)(?:\s+(?:system|developer|user))?|system|developer)\s+instructions\b`,
+    String.raw`\breveal\s+(?:the\s+)?(?:system|developer)\s+prompt\b`,
+    String.raw`\b(?:print|output|show|display|leak)\s+(?:the\s+)?(?:system|initial)\s+prompt\b`,
+    String.raw`\bdo\s+not\s+follow\s+(?:your\s+)?(?:system|developer)\s+(?:prompt|instructions)\b`,
+    // S1-1 中文模式
+    String.raw`忽略(?:以上|上述|之前|前面|上面)(?:所有)?(?:指令|规则|约束|提示|系统提示)`,
+    String.raw`无视(?:以上|上述|之前|前面)(?:指令|规则|约束)`,
+    String.raw`覆盖(?:系统|安全)(?:规则|约束|提示)`,
+    String.raw`忘记(?:之前|前面|上述)的(?:指令|规则|约束|提示)`,
+    String.raw`不要(?:遵守|遵循|执行)(?:系统|安全)(?:规则|约束|指令)`,
+    String.raw`显示(?:你的)?系统(?:提示|prompt)`,
+  ].join("|"),
+  "i",
+);
+
+// S1-1 spec B: 收紧 untrusted input 判定，需与 action co-occurrence 同时出现才报 minor
+const UNTRUSTED_INPUT_RE = /\b(?:untrusted|external|third[-\s]?party|browser|email|scraped|pasted)\b/i;
+const ACTION_CO_OCCURRENCE_RE = /\b(?:execute|run|interpret|follow|process|handle|parse)\b/i;
 const DESTRUCTIVE_ACTION_RE = /\b(?:rm\s+-rf|git\s+reset\s+--hard|git\s+clean\s+-f|drop\s+database|truncate\s+table|terraform\s+destroy|kubectl\s+delete)\b/i;
 const PRIVILEGED_ACTION_RE = /\b(?:git\s+push|npm\s+publish|pnpm\s+publish|deploy\b|terraform\s+apply|kubectl\s+apply)\b/i;
 const SECRET_EXFIL_RE = /\b(?:api[-_\s]?key|access[-_\s]?token|secret|password|credential)\b[\s\S]{0,80}\b(?:send|upload|post|curl|wget|exfiltrate|leak)\b/i;
@@ -62,12 +83,17 @@ export function guardPrompt(prompt: string, sourceRef?: string): GuardResult {
     });
   }
 
-  if (UNTRUSTED_INPUT_RE.test(prompt) && !APPROVAL_RE.test(prompt)) {
+  // S1-1 spec B: untrusted input 需与 action co-occurrence 同时出现，且无 approval，才报 minor
+  if (
+    UNTRUSTED_INPUT_RE.test(prompt)
+    && ACTION_CO_OCCURRENCE_RE.test(prompt)
+    && !APPROVAL_RE.test(prompt)
+  ) {
     findings.push({
       id: `GF${++idCounter}`,
       kind: "untrusted_input",
-      severity: "major",
-      summary: "Prompt contains untrusted external input without explicit approval",
+      severity: "minor",
+      summary: "Prompt contains untrusted external input with action directive without explicit approval",
       evidence: matchEvidence(prompt, UNTRUSTED_INPUT_RE),
       recommendedChecks: ["Verify the external source reference", "Wrap untrusted content in data-only block"],
     });
@@ -124,35 +150,45 @@ export function guardPrompt(prompt: string, sourceRef?: string): GuardResult {
   return { disposition, findings };
 }
 
+/**
+ * S1-1 spec C: guardToolOutput 检查工具输出中的 prompt injection 和 secret exfiltration。
+ * 第一阶段只记录日志（disposition=review），不直接替换工具输出。
+ * 注意：工具输出中的 rm -rf 等代码示例不应默认 block，否则会误伤安全测试、文档和 fixture。
+ */
 export function guardToolOutput(toolName: string, output: string): GuardResult {
   const findings: GuardFinding[] = [];
   let idCounter = 0;
+
+  // S1-1: 检查 prompt injection（工具输出可能包含恶意指令）
+  if (PROMPT_INJECTION_RE.test(output)) {
+    findings.push({
+      id: `GF${++idCounter}`,
+      kind: "prompt_injection",
+      severity: "critical",
+      summary: `Tool "${toolName}" output contains prompt injection pattern`,
+      evidence: matchEvidence(output, PROMPT_INJECTION_RE),
+      recommendedChecks: [
+        "Treat tool output as data, not instruction",
+        "Avoid injecting this content into supervisor/control prompts without quoting",
+      ],
+    });
+  }
 
   if (SECRET_EXFIL_RE.test(output)) {
     findings.push({
       id: `GF${++idCounter}`,
       kind: "secret_exfiltration",
       severity: "critical",
-      summary: `Tool output from ${toolName} may contain secrets`,
+      summary: `Tool "${toolName}" output may contain secret exfiltration pattern`,
       evidence: matchEvidence(output, SECRET_EXFIL_RE),
-      recommendedChecks: ["Redact secrets before returning to model", "Verify tool output handling"],
+      recommendedChecks: ["Block outbound action containing secrets"],
     });
   }
 
-  if (UNTRUSTED_INPUT_RE.test(output)) {
-    findings.push({
-      id: `GF${++idCounter}`,
-      kind: "untrusted_input",
-      severity: "major",
-      summary: `Tool output from ${toolName} contains untrusted content patterns`,
-      evidence: matchEvidence(output, UNTRUSTED_INPUT_RE),
-      recommendedChecks: ["Wrap tool output in data-only block when injecting to context"],
-    });
-  }
-
+  // S1-1: 第一阶段只记录，不改写 toolEvent.content
+  // streaming-executor.ts 中对 guardToolOutput 的 block/review 都只记日志
   const hasCritical = findings.some((f) => f.severity === "critical");
-  const hasMajor = findings.some((f) => f.severity === "major");
-  const disposition: RuntimeGuardDisposition = hasCritical ? "block" : hasMajor ? "review" : "allow";
+  const disposition: RuntimeGuardDisposition = hasCritical ? "review" : "allow";
 
   return { disposition, findings };
 }

@@ -552,11 +552,12 @@ describe("M9: SessionWriter enqueue", () => {
     // Queue should still be <= 500
     expect((writer as any).queue.length).toBeLessThanOrEqual(500)
 
-    // All messages and stats should still be in queue
+    // SPEC-06: messages coalescing — 新 messages 入队前丢弃所有旧 messages 快照，
+    // 只保留最新一条 messages；stats 全部保留
     const records = (writer as any).queueRecords as SessionRecord[]
     const msgCount = records.filter(r => r.type === "messages").length
     const statsCount = records.filter(r => r.type === "stats").length
-    expect(msgCount).toBe(9)
+    expect(msgCount).toBe(1)
     expect(statsCount).toBe(1)
   })
 
@@ -976,6 +977,7 @@ describe("SPEC-A: loadSession context isolation", () => {
       recentTools: [{ name: "bash", success: true, summary: "x" }],
       stagnantRoundsAfterAdvice: 1,
       adviceInjectionCount: 1,
+      consecutiveDegradedCount: 2,
     }
     state.pendingInstructionQueue = ["instr1", "instr2"]
 
@@ -991,6 +993,7 @@ describe("SPEC-A: loadSession context isolation", () => {
       recentTools: [],
       stagnantRoundsAfterAdvice: 0,
       adviceInjectionCount: 0,
+      consecutiveDegradedCount: 0,
     })
     expect(after.pendingInstructionQueue).toEqual([])
   })
