@@ -76,6 +76,8 @@ export class CheckpointEngine {
   readonly checkpointPath: string
   private v2State: RuntimeCheckpointV2 = emptyRuntimeCheckpointV2()
   private forcedPolicyActive = false
+  /** FIX-H5: checkpoint 策略频率，默认 safe-point */
+  private checkpointPolicy: "frequent" | "safe-point" | "minimal" = "safe-point"
   private readonly sessionId: string
 
   constructor(sessionDir: string, sessionId = "default") {
@@ -86,6 +88,11 @@ export class CheckpointEngine {
   /** 暴露内存中的 v2 状态（测试 / 调试用） */
   getV2State(): RuntimeCheckpointV2 {
     return cloneV2(this.v2State)
+  }
+
+  /** FIX-H5: 设置 checkpoint 策略频率 */
+  setCheckpointPolicy(policy: "frequent" | "safe-point" | "minimal"): void {
+    this.checkpointPolicy = policy
   }
 
   /** 启停 forced 段强制落盘策略 */
@@ -99,8 +106,28 @@ export class CheckpointEngine {
 
   /** 给定保存触发器，返回是否应在当前 policy 下真实落盘 */
   shouldPersistOnTrigger(trigger: CheckpointSaveTrigger): boolean {
-    if (FREE_PERSIST_TRIGGERS.has(trigger)) return true
-    return this.forcedPolicyActive && FORCED_EXTRA_TRIGGERS.has(trigger)
+    // FIX-H5: manual 永远落盘
+    if (trigger === "manual") return true
+
+    // forced policy 覆盖 checkpointPolicy
+    if (this.forcedPolicyActive) {
+      return FREE_PERSIST_TRIGGERS.has(trigger) || FORCED_EXTRA_TRIGGERS.has(trigger)
+    }
+
+    if (this.checkpointPolicy === "frequent") return true
+
+    if (this.checkpointPolicy === "minimal") {
+      return trigger === "tool_failed" || trigger === "final_draft"
+    }
+
+    // safe-point
+    return (
+      trigger === "step_completed"
+      || trigger === "tool_failed"
+      || trigger === "verification_failed"
+      || trigger === "compaction"
+      || trigger === "final_draft"
+    )
   }
 
   /** 加载现有 checkpoint 并解析 v2 字段；无 v2 时返回 null */

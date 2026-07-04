@@ -256,6 +256,69 @@ describe("dual-track bash tool — soft timeout escalate", () => {
   }, 15_000)
 })
 
+// FIX-H6: conservative mode
+describe("FIX-H6: conservative mode", () => {
+  let workDir: string
+  beforeEach(() => {
+    __resetBackgroundTaskManagers()
+    workDir = mkdtempSync(join(tmpdir(), "fixh6-"))
+  })
+  afterEach(() => {
+    __resetBackgroundTaskManagers()
+    try { rmSync(workDir, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
+  it("description mentions conservative when enabled", () => {
+    const tool = createBashTool({ dualTrack: true, conservative: true })
+    expect(tool.description).toContain("Conservative mode")
+  })
+
+  it("description does NOT mention conservative by default", () => {
+    const tool = createBashTool({ dualTrack: true })
+    expect(tool.description).not.toContain("Conservative mode")
+  })
+
+  it("blocks destructive command from background in conservative mode", async () => {
+    const tool = createBashTool({ dualTrack: true, conservative: true })
+    const r = await tool.execute(
+      { command: "rm -rf /tmp/dummy", background: true },
+      makeCtx(workDir) as any,
+    )
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error).toContain("Destructive command cannot run in background in conservative mode")
+  })
+
+  it("allows non-destructive command in background in conservative mode", async () => {
+    const tool = createBashTool({ dualTrack: true, conservative: true })
+    const r = await tool.execute(
+      { command: "echo hello-background", background: true },
+      makeCtx(workDir) as any,
+    )
+    const p = JSON.parse(r.content as string)
+    expect(p.mode).toBe("background")
+  })
+
+  it("escalates faster in conservative mode (~5s instead of ~8s)", async () => {
+    const tool = createBashTool({ dualTrack: true, conservative: true })
+    const start = Date.now()
+    const r = await tool.execute(
+      { command: "sleep 10" },
+      makeCtx(workDir) as any,
+    )
+    const elapsed = Date.now() - start
+
+    expect(r.isError).toBe(false)
+    // conservative: soft timeout is 5s, so should escalate between 4-7s
+    expect(elapsed).toBeGreaterThan(3_500)
+    expect(elapsed).toBeLessThan(8_000)
+
+    const p = JSON.parse(r.content as string)
+    expect(p.mode).toBe("escalated")
+    expect(p.reason).toBe("soft_timeout")
+  }, 15_000)
+})
+
 describe("createBashTool dualTrack option", () => {
   it("createBashTool({ dualTrack: true }) returns dual-track tool", () => {
     const tool = createBashTool({ dualTrack: true })
