@@ -1,7 +1,6 @@
 import { cp, mkdir, writeFile, readdir } from "node:fs/promises";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
 import type { EvalCaseManifest } from "../types";
 import { MissingEvalAssetError } from "../types";
 
@@ -73,13 +72,27 @@ export function patchTestPaths(
   const testsDir = join(workspaceDir, "tests");
   if (!existsSync(testsDir)) return;
 
-  try {
-    execSync(
-      `find "${testsDir}" -name '*.py' -exec sed -i 's|/app/|./|g' {} + 2>/dev/null`,
-      { stdio: "pipe", timeout: 10000 },
-    );
-  } catch {
-    // sed may fail if no files match; ignore
+  const walk = (dir: string): string[] => {
+    const entries = readdirSync(dir);
+    let out: string[] = [];
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      const stat = statSync(full);
+      if (stat.isDirectory()) {
+        out = out.concat(walk(full));
+      } else if (full.endsWith(".py")) {
+        out.push(full);
+      }
+    }
+    return out;
+  };
+
+  for (const file of walk(testsDir)) {
+    const original = readFileSync(file, "utf-8");
+    const patched = original.replace(/\/app\//g, "./");
+    if (patched !== original) {
+      writeFileSync(file, patched, "utf-8");
+    }
   }
 }
 

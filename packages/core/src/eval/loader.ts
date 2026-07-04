@@ -55,6 +55,10 @@ const EvalCaseManifestSchema = z.object({
   }).optional(),
   setup: z.array(z.string()).optional(),
   protectedFiles: z.array(z.string()).optional(),
+  outOfBoundsCheckPaths: z.array(z.string()).optional(),
+  requiredBinaries: z.array(z.string()).optional(),
+  requiredPythonModules: z.array(z.string()).optional(),
+  network: z.boolean().optional(),
   taskPrompt: z.string().min(1),
   taskPromptByLocale: z.object({
     "zh-CN": z.string().optional(),
@@ -62,6 +66,19 @@ const EvalCaseManifestSchema = z.object({
   }).optional(),
   expectedVerification: z.array(z.string()).min(1),
   verifier: VerifierSchema,
+  requires: z.object({
+    toolchainProfile: z.string().optional(),
+    tools: z.object({
+      required: z.array(z.string()).optional(),
+      recommended: z.array(z.string()).optional(),
+      optional: z.array(z.string()).optional(),
+    }).optional(),
+    network: z.object({
+      setup: z.boolean().optional(),
+      agent: z.boolean().optional(),
+      verifier: z.boolean().optional(),
+    }).optional(),
+  }).optional(),
   scoring: ScoringSchema.optional(),
 }).passthrough();
 
