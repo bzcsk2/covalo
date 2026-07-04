@@ -23,22 +23,47 @@ interface ToolCheck {
   expected?: string
 }
 
-async function checkTool(name: string, expected?: string): Promise<ToolCheck> {
+/**
+ * Tier 1a: 平台感知的工具探测。
+ *
+ * 之前 `command -v ${name} 2>/dev/null` 是 POSIX shell 内建命令，Windows 下 spawnSync
+ * 默认走 cmd.exe，根本不认识 `command -v`，导致 `covalo eval doctor` 在 Windows 上
+ * 全部报 missing — 即便用户机器上装了 node/bun/git。
+ *
+ * 现在：
+ * - POSIX 用 `command -v`，stderr 重定向到 /dev/null
+ * - Windows 用 `where`（cmd.exe 内建），stderr 重定向到 nul
+ * - Windows 上额外尝试 `${name}.exe` 后缀（where 通常自动处理，显式再试一次以兼容少数情况）
+ */
+function findOnPath(name: string): string | null {
+  const isWin = process.platform === "win32"
+  const cmd = isWin ? `where ${name} 2>nul` : `command -v ${name} 2>/dev/null`
   try {
-    const out = execSync(`command -v ${name} 2>/dev/null`, { encoding: "utf-8", stdio: "pipe" }).toString().trim()
-    if (!out) return { name, found: false, source: "missing" }
-    let version = ""
-    try {
-      const v = execSync(`${name} --version 2>/dev/null`, { encoding: "utf-8", stdio: "pipe" }).toString().trim()
-      version = v.split("\n")[0] ?? ""
-    } catch {}
-    return { name, found: true, version: version || "ok", path: out, source: "host", expected }
+    const out = execSync(cmd, { encoding: "utf-8", stdio: "pipe" }).toString().trim().split(/\r?\n/)[0]
+    return out || null
   } catch {
-    return { name, found: false, source: "missing", expected }
+    return null
   }
 }
 
+async function checkTool(name: string, expected?: string): Promise<ToolCheck> {
+  const isWin = process.platform === "win32"
+  const probeName = isWin ? `${name}.exe` : name
+  const out = findOnPath(probeName) ?? findOnPath(name)
+  if (!out) return { name, found: false, source: "missing", expected }
+  let version = ""
+  try {
+    const v = execSync(`"${out}" --version`, { encoding: "utf-8", stdio: "pipe" }).toString().trim()
+    version = v.split("\n")[0] ?? ""
+  } catch {}
+  return { name, found: true, version: version || "ok", path: out, source: "host", expected }
+}
+
 function checkBwrap(): ToolCheck {
+  // Tier 1a: Windows 下 bwrap 物理上不可用，短路返回 missing，避免走 Unix 路径检查误导。
+  if (process.platform === "win32") {
+    return { name: "bwrap", found: false, source: "missing", expected: "Linux only (or WSL bridge)" }
+  }
   const paths = ["/usr/bin/bwrap", "/usr/local/bin/bwrap", join(homedir(), ".covalo", "bin", "bwrap")]
   for (const p of paths) {
     if (existsSync(p)) {
@@ -180,13 +205,31 @@ export async function evalPrepare(args: string[]): Promise<void> {
   console.log(`Preparing ${envId}...\n`)
 
   if (envId === "sandbox.benchmark") {
-    const missingManaged = getToolManifest.filter((t) => !isToolInstalled(t.name))
-
-    if (missingManaged.length === 0) {
-      console.log("✓ Managed toolchain already installed at ~/.covalo/toolchains/benchmark-node/")
+    // 用 getBenchmarkToolchainStatus() 作为唯一真实状态来源，避免和它语义冲突。
+    // 注意：仅靠 isToolInstalled(t.name) 判定 ready 是不够的 —— 在 Windows/macOS 上
+    // SHA256 暂为空字符串时，工具文件存在但 getBenchmarkToolchainStatus().ready 仍是 false。
+    const preStatus = getBenchmarkToolchainStatus()
+    if (preStatus.ready) {
+      console.log("✓ Benchmark toolchain ready at ~/.covalo/toolchains/benchmark-node/")
       return
     }
 
+    // 找出文件层面缺失的工具（missingTools），这些才需要真正下载。
+    // missingSha256 / versionMismatches 不算下载缺失，不影响"文件是否就位"。
+    if (preStatus.missingTools.length === 0) {
+      // 工具文件都到位但 status 仍非 ready —— 多半是 missingSha256 或 versionMismatches
+      console.log("⚠ Managed toolchain files are present but benchmark-ready status is false:")
+      if (preStatus.missingSha256.length > 0) {
+        console.log(`  missing SHA256 for: ${preStatus.missingSha256.join(", ")}`)
+      }
+      if (preStatus.versionMismatches.length > 0) {
+        console.log(`  version mismatches: ${preStatus.versionMismatches.map(v => `${v.name} expected ${v.expected}, got ${v.actual ?? "unknown"}`).join("; ")}`)
+      }
+      console.log("\nBenchmark scoring is NOT available until these are resolved.")
+      return
+    }
+
+    const missingManaged = getToolManifest.filter((t) => preStatus.missingTools.includes(t.name))
     console.log(`Downloading ${missingManaged.length} missing tools...\n`)
     for (const entry of missingManaged) {
       console.log(`  [${entry.name}] ensuring ${entry.name}@${entry.pinnedVersion}...`)
@@ -199,11 +242,21 @@ export async function evalPrepare(args: string[]): Promise<void> {
       }
     }
 
-    const stillMissing = getToolManifest.filter((t) => !isToolInstalled(t.name))
-    if (stillMissing.length === 0) {
+    // 安装后重新读取状态，统一从 status 派生结论，避免和 getBenchmarkToolchainStatus 冲突。
+    const postStatus = getBenchmarkToolchainStatus()
+    if (postStatus.ready) {
       console.log("\n✓ Benchmark toolchain ready at ~/.covalo/toolchains/benchmark-node/")
     } else {
-      console.log(`\n⚠ ${stillMissing.length} tool(s) still missing: ${stillMissing.map((t) => t.name).join(", ")}`)
+      if (postStatus.missingTools.length > 0) {
+        console.log(`\n⚠ ${postStatus.missingTools.length} tool(s) still missing: ${postStatus.missingTools.join(", ")}`)
+      }
+      if (postStatus.missingSha256.length > 0) {
+        console.log(`⚠ Installed but missing SHA256 (not benchmark-ready): ${postStatus.missingSha256.join(", ")}`)
+      }
+      if (postStatus.versionMismatches.length > 0) {
+        console.log(`⚠ Version mismatches: ${postStatus.versionMismatches.map(v => `${v.name} expected ${v.expected}, got ${v.actual ?? "unknown"}`).join("; ")}`)
+      }
+      console.log("\nBenchmark scoring is NOT available until all of the above are resolved.")
     }
   }
 
