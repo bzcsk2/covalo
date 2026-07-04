@@ -178,8 +178,15 @@ export function createUpdateGoalTool(provider: GoalToolProvider): AgentTool {
               if (coordState?.currentPhase === "blocked" && coordState?.blockedReason === "Goal is paused") {
                 try {
                   coordinator.resumeBlockedWorkflow(instruction ?? "")
-                } catch {
-                  // Goal status already active, resume not strictly required
+                } catch (err) {
+                  return {
+                    content: buildGoalResponse(false, "resume", {
+                      workflowId: threadId,
+                      goal: { objective: goal.objective, status: "active" },
+                      error: `Goal status was set active, but workflow resume failed: ${err instanceof Error ? err.message : String(err)}`,
+                    }),
+                    isError: true,
+                  }
                 }
               }
             }

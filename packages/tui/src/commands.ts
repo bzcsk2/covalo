@@ -230,7 +230,7 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     `  /context     — ${cmdStrings.cmdContext}`,
     `  /theme       — ${cmdStrings.cmdTheme}`,
     `  /thinking    — ${cmdStrings.cmdThinking}`,
-    `  /reset       — Reset the current workflow state`,
+    `  /reset       — ${cmdStrings.cmdReset}`,
     `  /talk [role] — ${cmdStrings.cmdTalk}`,
     `  /harness     — ${cmdStrings.cmdThinking}`,
     `    /harness doctor     — Check harness health`,

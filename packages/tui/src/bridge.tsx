@@ -1261,7 +1261,7 @@ export function createBridge(
               orchestrationStore.apply({
                 kind: 'loop_transition',
                 transition: {
-                  from: workflowPhaseToLoopPhase(orchestrationStore.getSnapshot().loop.phase ?? 'observe'),
+                  from: orchestrationStore.getSnapshot().loop.phase ?? 'observe',
                   to: workflowPhaseToLoopPhase(wfEvent.phase),
                   attempt: wfEvent.iteration,
                   timestamp: Date.now(),

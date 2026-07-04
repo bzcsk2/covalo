@@ -835,8 +835,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       appendMessage({
         role: 'assistant' as const,
         content: workflowMode === 'loop'
-          ? 'Workflow reset. Enter a new goal to start loop mode.'
-          : 'Workflow state reset.',
+          ? t().workflowResetLoop
+          : t().workflowReset,
       })
       return
     }

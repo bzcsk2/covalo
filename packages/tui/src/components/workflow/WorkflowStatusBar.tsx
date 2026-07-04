@@ -48,6 +48,10 @@ function phaseLabel(phase: string): string {
     case 'approve': return t().workflowPhaseApprove;
     case 'blocked': return t().workflowPhaseBlocked;
     case 'ask_user': return t().workflowPhaseAskUser;
+    case 'waiting_user': return t().workflowPhaseAskUser;
+    case 'supervisor_intervene': return t().workflowPhaseRevise;
+    case 'completed': return t().workflowLifecycleCompleted;
+    case 'failed': return t().workflowLifecycleFailed;
     default: return phase;
   }
 }
@@ -98,6 +102,10 @@ const PHASE_DISPLAY: Record<string, { prefix: string; color: string }> = {
   approve: { prefix: '[D]', color: TONE.ok },
   blocked: { prefix: '', color: TONE.error },
   ask_user: { prefix: '', color: TONE.warn },
+  waiting_user: { prefix: '', color: TONE.warn },
+  supervisor_intervene: { prefix: '[D]', color: TONE.warn },
+  completed: { prefix: '', color: TONE.ok },
+  failed: { prefix: '', color: TONE.error },
 };
 
 const LIFECYCLE_DISPLAY: Record<string, { color: string }> = {

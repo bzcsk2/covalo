@@ -236,6 +236,8 @@ export interface Strings {
   workflowAlreadyRunning: string;
   workflowModeChanged: (mode: string) => string;
   workflowLoopStarted: string;
+  workflowResetLoop: string;
+  workflowReset: string;
   workflowContinuationGuard: string;
   workflowStuckGuard: string;
   // P0: agent/worker labels

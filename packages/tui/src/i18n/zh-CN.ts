@@ -236,6 +236,8 @@ export const zhCN: Strings = {
   workflowAlreadyRunning: '工作流已在运行中。请取消或等待当前工作流完成后再启动新目标。',
   workflowModeChanged: (mode) => `工作流模式：${mode}`,
   workflowLoopStarted: '工作流模式：loop\n请输入本次工作流的目标（goal），回车启动编排。',
+  workflowResetLoop: '工作流已重置。输入新目标以启动 loop 模式。',
+  workflowReset: '工作流状态已重置。',
   workflowContinuationGuard: '工作流连续轮次过多（超过 50 轮），已自动停止以防止无限循环。请检查工作流状态。',
   workflowStuckGuard: '工作流检测到无进展循环（相同的阶段和迭代），已自动停止以防止死循环。请检查工作流状态。',
   // P0: agent/worker labels
