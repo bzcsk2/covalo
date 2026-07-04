@@ -59,20 +59,10 @@ defaultAgentRegistry.register({
   systemPromptByLocale: {
     "zh-CN": "你是 Supervisor Agent。分析目标、制定计划、审查证据、委派执行并提供指导。遵循当前工作流模式规则。",
   },
-  // S1-5: 显式声明 supervisor 工具上界，避免 toolNames 为 undefined 的防御空洞
-  toolNames: [
-    "read_file",
-    "list_dir",
-    "grep",
-    "todowrite",
-    "AskUserQuestion",
-    "AgentTool",
-    "get_goal",
-    "update_goal",
-    "send_message",
-    "followup_task",
-    "read_mailbox",
-  ],
+  // toolNames 保持 undefined：由 resolveEffectiveTools 的 phase/mode 策略统一计算
+  // （SUPERVISOR_TOOLS_ALONE / SUPERVISOR_TOOLS_SUBAGENT / supervisorLoopToolsForPhase）
+  // 修复 S1-5 时曾加显式 toolNames，但破坏了 SFR-30 设计契约，已回退。
+  // 工具上界防护由 resolveEffectiveTools 中的 set 集合实现，无需在 agent.ts 重复声明。
 })
 
 /** Backward-compatible static snapshot */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isSensitive, SENSITIVE_FILE_PATTERNS } from "../src/sensitive.js"
+import { isSensitive, SENSITIVE_READ_PATTERNS, SENSITIVE_WRITE_PATTERNS } from "../src/sensitive.js"
 
 describe("isSensitive", () => {
   it("should detect api-key file", () => {
@@ -55,8 +55,14 @@ describe("isSensitive", () => {
   })
 })
 
-describe("SENSITIVE_FILE_PATTERNS", () => {
+describe("SENSITIVE_READ_PATTERNS", () => {
   it("should have at least 15 patterns", () => {
-    expect(SENSITIVE_FILE_PATTERNS.length).toBeGreaterThanOrEqual(15)
+    expect(SENSITIVE_READ_PATTERNS.length).toBeGreaterThanOrEqual(15)
+  })
+})
+
+describe("SENSITIVE_WRITE_PATTERNS", () => {
+  it("should be a superset of read patterns (includes lockfiles etc.)", () => {
+    expect(SENSITIVE_WRITE_PATTERNS.length).toBeGreaterThan(SENSITIVE_READ_PATTERNS.length)
   })
 })
