@@ -10,6 +10,25 @@ import { safeStringify } from "./safe-stringify.js"
 const MAX_OUTPUT_CHARS = 500_000
 const TIMEOUT_MS = 15_000
 
+/**
+ * S1-7: Sanitize include pattern to prevent flag injection and path traversal.
+ * Returns the cleaned pattern, or null if the pattern is rejected.
+ */
+function sanitizeIncludePattern(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (trimmed.length > 256) return null
+  if (trimmed.includes("\0")) return null
+  if (trimmed.includes("..")) return null
+  if (trimmed.startsWith("-")) return null
+  if (/[\/\\]/.test(trimmed)) return null
+
+  // Allow common glob characters, extensions, and brace expansion
+  if (!/^[a-zA-Z0-9_*?.{},[\]!\-]+$/.test(trimmed)) return null
+
+  return trimmed
+}
+
 export function createGrepTool(): AgentTool {
   return {
     name: "grep",
@@ -45,7 +64,13 @@ export function createGrepTool(): AgentTool {
       }
 
       const pattern = args.pattern
-      const include = typeof args.include === "string" ? args.include : undefined
+      // S1-7: sanitize include pattern to prevent flag injection and path traversal
+      const rawInclude = typeof args.include === "string" ? args.include : undefined
+      const include = rawInclude ? sanitizeIncludePattern(rawInclude) : undefined
+
+      if (rawInclude && !include) {
+        return { content: safeStringify({ error: `Invalid include pattern: ${rawInclude}` }), isError: true }
+      }
 
       if (isSensitive(searchPath) || isSensitive(searchPath + "/")) {
         return { content: safeStringify({ error: `Searching sensitive path is denied: ${args.path ?? ctx.cwd}` }), isError: true }
@@ -58,7 +83,7 @@ export function createGrepTool(): AgentTool {
 
       let stdout: string
       try {
-        stdout = await runSearch(pattern, searchPath, include, ctx.signal)
+        stdout = await runSearch(pattern, searchPath, include ?? undefined, ctx.signal)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         return { content: safeStringify({ error: `Search failed: ${msg}` }), isError: true }

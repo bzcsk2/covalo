@@ -59,6 +59,20 @@ defaultAgentRegistry.register({
   systemPromptByLocale: {
     "zh-CN": "你是 Supervisor Agent。分析目标、制定计划、审查证据、委派执行并提供指导。遵循当前工作流模式规则。",
   },
+  // S1-5: 显式声明 supervisor 工具上界，避免 toolNames 为 undefined 的防御空洞
+  toolNames: [
+    "read_file",
+    "list_dir",
+    "grep",
+    "todowrite",
+    "AskUserQuestion",
+    "AgentTool",
+    "get_goal",
+    "update_goal",
+    "send_message",
+    "followup_task",
+    "read_mailbox",
+  ],
 })
 
 /** Backward-compatible static snapshot */

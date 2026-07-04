@@ -14,6 +14,7 @@ import type {
   PermissionServiceInterface,
 } from "./types.js"
 import { createSessionRule } from "./rules.js"
+import { matchWildcard } from "./wildcard.js"
 
 /* ── Errors ── */
 
@@ -195,22 +196,4 @@ export class PermissionService implements PermissionServiceInterface {
   }
 }
 
-/* ── Wildcard Matching (internal) ── */
-
-function matchWildcard(pattern: string, value: string): boolean {
-  if (pattern === "*") return true
-  if (pattern === value) return true
-
-  const regexStr = "^" + pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".")
-    + "$"
-
-  try {
-    const regex = new RegExp(regexStr)
-    return regex.test(value)
-  } catch {
-    return pattern === value
-  }
-}
+/* ── Wildcard Matching (imported from S1-6 shared module) ── */

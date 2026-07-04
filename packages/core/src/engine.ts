@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 import type { DeepreefConfig } from "./config.js"
+import type { CovaloConfig } from "./config/schema.js"
 import { ContextManager } from "./context/manager.js"
 import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
 import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult, ChatClient } from "./interface.js"
@@ -1250,6 +1251,12 @@ Do not change goal status.`
         } catch {}
       }
 
+      // S1-2: review 策略由 runtimeGuard.reviewPolicy 配置驱动
+      const toolsConfig = (this.config as unknown as Record<string, unknown>).tools as
+        | { runtimeGuard?: { reviewPolicy?: "allow" | "ask" | "block" } }
+        | undefined
+      const reviewPolicy = toolsConfig?.runtimeGuard?.reviewPolicy ?? "ask"
+
       if (guard.disposition === "allow") {
         yield { role: "status", content: "Runtime guard allowed", metadata: { runId: packetRunId } };
         this.logger.info("harness.guard.allow", { runId: packetRunId, mode, role, promptLength: userInput.length });
@@ -1259,7 +1266,19 @@ Do not change goal status.`
           guardBlocked = true;
           this.logger.warn("harness.guard.block", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), promptLength: userInput.length });
         } else {
-          this.logger.info("harness.guard.review", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind) });
+          // review disposition: 按 reviewPolicy 决定行为
+          if (reviewPolicy === "block") {
+            guardBlocked = true;
+            this.logger.warn("harness.guard.review_blocked", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), promptLength: userInput.length });
+          } else if (reviewPolicy === "ask") {
+            // ask: 若 approvalPolicy 为 always 则视为需要确认但无 UI 时阻断
+            const approvalPolicy = (toolsConfig as { approvalPolicy?: string } | undefined)?.approvalPolicy ?? "on-request"
+            guardBlocked = approvalPolicy === "always"
+            this.logger.info("harness.guard.review_ask", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), blocked: guardBlocked });
+          } else {
+            // allow: 仅记录日志，不阻断
+            this.logger.info("harness.guard.review_allowed", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind) });
+          }
         }
       }
       if (!guardBlocked) {
@@ -1289,6 +1308,7 @@ Do not change goal status.`
         mode: effectiveMode,
         agentToolNames: ac.toolNames,
         workflowPhase,
+        config: this.config as unknown as CovaloConfig,
       })
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {
