@@ -901,15 +901,22 @@ export class ReasonixEngine implements CoreEngine {
 WorkflowCoordinator 控制执行顺序：
 supervisor_analyse -> worker_do -> worker_report -> supervisor_check
 
+**工具约束（严格遵守）**：
+本阶段仅允许调用以下三个工具：\`get_goal\`、\`update_goal\`、\`list_dir\`。
+以下工具在本阶段**不可用**，调用会被拒绝并浪费轮次：
+- \`read_file\` / \`grep\`：本阶段不能读文件内容。如需了解文件内容，请在计划中标注"由 Worker 检查"。
+- \`bash\` / \`edit\` / \`write\` / \`apply_patch\`：本阶段不能执行或修改。
+- \`AgentTool\` / mailbox / dispatch：本阶段不能委派子任务。
+若某工具不在上面三个允许列表中，**不要调用它**。
+
 你当前的任务：
 - 为 Worker 制定具体计划。
 - 不要自行执行计划。
 - 不要检查实现文件。
 - 不要验证代码。
 - 不要执行 Worker 任务。
-- 不要调用 read_file、grep、bash、edit、write、apply_patch、AgentTool 或调度工具。
-- 如果工具可用，最多使用 get_goal 和 list_dir 做浅层了解。
-- 不要重复调用工具。如果浅层了解不够，在计划中说明假设，让 Worker 去检查细节。
+- 最多使用 get_goal 和 list_dir 做浅层目录了解，**不要重复调用同一工具**。
+- 如果浅层了解不够，在计划中说明假设，让 Worker 去检查细节。
 - 制定计划后停止。协调器会将你的计划传递给 Worker。
 
 返回结构化计划，包含：
@@ -925,15 +932,22 @@ You are the Supervisor in the planning phase.
 The WorkflowCoordinator owns execution order:
 supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
 
+**Tool constraints (strict)**:
+Only these three tools are available in this phase: \`get_goal\`, \`update_goal\`, \`list_dir\`.
+The following tools are NOT available in this phase; calling them will be rejected and waste a turn:
+- \`read_file\` / \`grep\`: do not read file contents in this phase. If you need file contents, mark "Worker to inspect" in the plan.
+- \`bash\` / \`edit\` / \`write\` / \`apply_patch\`: do not execute or modify.
+- \`AgentTool\` / mailbox / dispatch: do not delegate subtasks in this phase.
+If a tool is not in the three-tool allow list above, **do not call it**.
+
 Your current job:
 - Create a concrete plan for the Worker.
 - Do not execute the plan yourself.
 - Do not inspect implementation files.
 - Do not verify code.
 - Do not perform Worker tasks.
-- Do not call read_file, grep, bash, edit, write, apply_patch, AgentTool, mailbox, or dispatch tools.
-- If tools are available, use at most get_goal and list_dir for shallow orientation.
-- Do not call tools repeatedly. If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
+- Use at most get_goal and list_dir for shallow directory orientation; do NOT call the same tool repeatedly.
+- If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
 - After producing the plan, stop. The coordinator will pass your plan to the Worker.
 
 Return a structured plan with:

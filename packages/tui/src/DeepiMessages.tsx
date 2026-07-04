@@ -207,8 +207,14 @@ function formatToolResultSummary(tool: ToolStatus): string {
   if (!output) return tool.status === 'error' ? 'Error' : 'Done';
   const lines = output.split('\n').map(line => line.trim()).filter(Boolean);
   if (lines.length === 0) return tool.status === 'error' ? 'Error' : 'Done';
-  const maxLines = tool.status === 'error' ? 3 : 2;
-  return lines.slice(0, maxLines).map(line => compactText(line, 120)).join('\n');
+  const maxLines = tool.status === 'error' ? 3 : 4;
+  // 多行结果在总长度合理时合并为一行（用两个空格分隔），适配终端横向布局
+  // 例如 List 输出多个目录项时，可显示为 "dir1/  dir2/  file.txt"
+  const sliced = lines.slice(0, maxLines).map(line => compactText(line, 60));
+  const joined = sliced.join('  ');
+  if (joined.length <= 100) return joined;
+  // 超长时回退到首行 + 省略号
+  return compactText(sliced[0], 100) + (sliced.length > 1 ? '  …' : '');
 }
 
 const UserMessage = memo(function UserMessage({ message }: { message: ChatMessage }) {
@@ -225,17 +231,21 @@ const UserMessage = memo(function UserMessage({ message }: { message: ChatMessag
 const AssistantTextMessage = memo(function AssistantTextMessage({
   text,
   role,
+  showRoleTag = true,
 }: {
   text: string;
   role?: AgentRole;
+  /** 连续同角色消息时设为 false 以省略重复的 RoleTag（dedup） */
+  showRoleTag?: boolean;
 }) {
   if (!text) return null;
   const style = roleStyle(role);
   return (
     <Box flexDirection="column" width="100%" paddingX={1} paddingY={1}>
-      <Text color={style.color as any} bold>{`${style.glyph} ${style.label}`}</Text>
+      {showRoleTag && <Text color={style.color as any} bold>{`${style.glyph} ${style.label}`}</Text>}
       <Box flexDirection="row">
-        <Box minWidth={2} />
+        {/* 省略 RoleTag 时缩进对齐标签宽度，避免正文左移 */}
+        <Box minWidth={showRoleTag ? 2 : 6} />
         <Box flexDirection="column" flexGrow={1}>
           {markdownText(text)}
         </Box>
@@ -250,12 +260,15 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
   startTs,
   expanded,
   role,
+  showRoleTag = true,
 }: {
   text: string;
   isStreaming: boolean;
   startTs: number;
   expanded: boolean;
   role?: AgentRole;
+  /** 连续同角色消息时设为 false 以省略重复的 RoleTag（dedup） */
+  showRoleTag?: boolean;
 }) {
   if (!text) return null;
 
@@ -264,9 +277,9 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
     const preview = text.replace(/\s+/g, ' ').trim().slice(0, 80);
     return (
       <Box flexDirection="column" width="100%" paddingX={1}>
-        <RoleTag role={role} />
-        <Box flexDirection="row">
-          <Text color={TONE.warn} bold>{`  ${'\u2234'} ${t().thinking}`}</Text>
+        {showRoleTag && <RoleTag role={role} />}
+        <Box flexDirection="row" paddingLeft={showRoleTag ? 0 : 4}>
+          <Text color={TONE.warn as any} bold dimColor>{`  ${'\u2234'} ${t().thinking}`}</Text>
           {preview ? <Text dimColor>{` ${preview}${text.length > preview.length ? '…' : ''}`}</Text> : null}
           <Text dimColor>{` ${t().ctrlO}`}</Text>
         </Box>
@@ -277,14 +290,14 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
   // Unified expanded/streaming layout with consistent padding
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
-      <RoleTag role={role} />
-      <Box flexDirection="row">
-        <Text color={TONE.warn} bold>{`  ${'\u2234'} ${t().thinking}`}</Text>
+      {showRoleTag && <RoleTag role={role} />}
+      <Box flexDirection="row" paddingLeft={showRoleTag ? 0 : 4}>
+        <Text color={TONE.warn as any} bold dimColor>{`  ${'\u2234'} ${t().thinking}`}</Text>
         {isStreaming ? <Spinner kind="braille" color={TONE.brand} /> : <Text dimColor>{t().ctrlO}</Text>}
       </Box>
       <Box paddingLeft={2}>
         <Markdown text={text} />
-        {isStreaming ? <Text color={TONE.ok}>{'\u258A'}</Text> : null}
+        {isStreaming ? <Text color={TONE.ok as any}>{'\u258A'}</Text> : null}
       </Box>
     </Box>
   );
@@ -294,10 +307,13 @@ const AssistantToolUseMessage = memo(function AssistantToolUseMessage({
   tool,
   expanded,
   role,
+  showRoleTag = true,
 }: {
   tool: ToolStatus;
   expanded: boolean;
   role?: AgentRole;
+  /** 连续同角色消息时设为 false 以省略重复的 RoleTag（dedup） */
+  showRoleTag?: boolean;
 }) {
   const name = displayToolName(tool.name);
   const summary = formatToolUseSummary(tool);
@@ -305,19 +321,31 @@ const AssistantToolUseMessage = memo(function AssistantToolUseMessage({
   const color = tool.status === 'error' ? TONE.err : tool.status === 'running' ? TONE.brand : TONE.ok;
   const glyph = tool.status === 'running' ? '\u25CF' : tool.status === 'error' ? '\u2717' : '\u2713';
 
+  const showResult = (tool.status === 'running' || expanded || tool.status === 'error') && result;
+  const resultLines = showResult ? result!.split('\n') : [];
+  // 结果内联到签名行末尾（formatToolResultSummary 已将多行合并为单行）
+  const inlineResult = resultLines.length >= 1 ? resultLines[0] : null;
+
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
-      <RoleTag role={role} />
+      {showRoleTag && <RoleTag role={role} />}
       <Box flexDirection="row" flexWrap="wrap">
-        <Text color={color}>{`  ${glyph} `}</Text>
-        <Text bold color={color}>{name}</Text>
-        {summary && <Text>({summary})</Text>}
+        {/* 连续同角色时缩进对齐 RoleTag 宽度，避免签名行左移 */}
+        {!showRoleTag && <Text dimColor>{'    '}</Text>}
+        <Text color={color as any} dimColor>{`${glyph} `}</Text>
+        <Text bold color={color as any} dimColor>{name}</Text>
+        {summary && <Text dimColor>{`(${summary})`}</Text>}
         <Text dimColor>{tool.elapsedMs !== undefined ? ` ${(tool.elapsedMs / 1000).toFixed(1)}s` : ''}</Text>
+        {inlineResult && (
+          <Text dimColor color={(tool.status === 'error' ? TONE.err : FG.meta) as any}>
+            {` → ${inlineResult}`}
+          </Text>
+        )}
       </Box>
-      {(tool.status === 'running' || expanded || tool.status === 'error') && result && (
+      {showResult && !inlineResult && resultLines.length > 1 && (
         <Box flexDirection="column" paddingLeft={4}>
-          {result.split('\n').map((line, index) => (
-            <Text key={`${tool.key}:result:${index}`} color={tool.status === 'error' ? TONE.err : FG.sub}>
+          {resultLines.slice(1).map((line, index) => (
+            <Text key={`${tool.key}:result:${index}`} color={(tool.status === 'error' ? TONE.err : FG.meta) as any} dimColor>
               {line}
             </Text>
           ))}
@@ -327,7 +355,7 @@ const AssistantToolUseMessage = memo(function AssistantToolUseMessage({
   );
 });
 
-function ToolResultMessage({ message, expanded, role }: { message: ChatMessage; expanded: boolean; role?: AgentRole }) {
+function ToolResultMessage({ message, expanded, role, showRoleTag = true }: { message: ChatMessage; expanded: boolean; role?: AgentRole; showRoleTag?: boolean }) {
   return (
     <AssistantToolUseMessage
       tool={{
@@ -341,6 +369,7 @@ function ToolResultMessage({ message, expanded, role }: { message: ChatMessage; 
       }}
       expanded={expanded}
       role={role}
+      showRoleTag={showRoleTag}
     />
   );
 }
@@ -348,9 +377,12 @@ function ToolResultMessage({ message, expanded, role }: { message: ChatMessage; 
 const MessageBlock = memo(function MessageBlock({
   item,
   expanded,
+  showRoleTag = true,
 }: {
   item: TimelineItem;
   expanded: boolean;
+  /** 连续同角色消息时设为 false 以省略重复的 RoleTag（dedup） */
+  showRoleTag?: boolean;
 }) {
   switch (item.kind) {
     case 'message':
@@ -358,7 +390,7 @@ const MessageBlock = memo(function MessageBlock({
       if (item.message.role === 'assistant') {
         return (
           <>
-            <AssistantTextMessage text={item.message.content ?? ''} role={item.role} />
+            <AssistantTextMessage text={item.message.content ?? ''} role={item.role} showRoleTag={showRoleTag} />
             {item.message.reasoning_content && (
               <AssistantThinkingMessage
                 text={item.message.reasoning_content}
@@ -366,12 +398,13 @@ const MessageBlock = memo(function MessageBlock({
                 startTs={Date.now()}
                 expanded={expanded}
                 role={item.role}
+                showRoleTag={showRoleTag}
               />
             )}
           </>
         );
       }
-      if (item.message.role === 'tool') return <ToolResultMessage message={item.message} expanded={expanded} role={item.role} />;
+      if (item.message.role === 'tool') return <ToolResultMessage message={item.message} expanded={expanded} role={item.role} showRoleTag={showRoleTag} />;
       return null;
 
     case 'assistant_text':
@@ -379,8 +412,8 @@ const MessageBlock = memo(function MessageBlock({
         const style = roleStyle(item.role);
         return (
           <Box flexDirection="column" width="100%" paddingX={1} paddingY={1}>
-            <Text color={style.color as any} bold>{`${style.glyph} ${style.label}`}</Text>
-            <Box flexDirection="row">
+            {showRoleTag && <Text color={style.color as any} bold>{`${style.glyph} ${style.label}`}</Text>}
+            <Box flexDirection="row" paddingLeft={showRoleTag ? 0 : 4}>
               <Box minWidth={2} />
               <Box flexDirection="column" flexGrow={1}>
                 {markdownText(item.text)}
@@ -390,7 +423,7 @@ const MessageBlock = memo(function MessageBlock({
           </Box>
         );
       }
-      return <AssistantTextMessage text={item.text} role={item.role} />;
+      return <AssistantTextMessage text={item.text} role={item.role} showRoleTag={showRoleTag} />;
 
     case 'reasoning':
       return (
@@ -400,11 +433,12 @@ const MessageBlock = memo(function MessageBlock({
           startTs={item.startTs}
           expanded={expanded}
           role={item.role}
+          showRoleTag={showRoleTag}
         />
       );
 
     case 'tool':
-      return <AssistantToolUseMessage tool={item.tool} expanded={expanded} role={item.role} />;
+      return <AssistantToolUseMessage tool={item.tool} expanded={expanded} role={item.role} showRoleTag={showRoleTag} />;
   }
 });
 
@@ -433,10 +467,27 @@ export function DeepiMessages({
     [timeline],
   );
 
-  const renderedItems = useMemo(() =>
-    visibleTimeline.map(item => <MessageBlock key={item.id} item={item} expanded={expanded} />),
-    [visibleTimeline, expanded]
-  );
+  const renderedItems = useMemo(() => {
+    // 连续同角色消息 dedup RoleTag：维护上一条已渲染 RoleTag 的角色，
+    // 遇到 user 消息重置（下一条 assistant 重新显示 RoleTag），
+    // 遇到与上一条同 role 的 assistant 消息则省略 RoleTag。
+    let lastShownRole: AgentRole | undefined | null = null;
+    return visibleTimeline.map(item => {
+      let showRoleTag = true;
+      if (item.kind === 'message' && item.message.role === 'user') {
+        lastShownRole = null;
+      } else {
+        const currentRole = item.role;
+        if (currentRole && lastShownRole === currentRole) {
+          showRoleTag = false;
+        } else {
+          showRoleTag = true;
+          lastShownRole = currentRole ?? null;
+        }
+      }
+      return <MessageBlock key={item.id} item={item} expanded={expanded} showRoleTag={showRoleTag} />;
+    });
+  }, [visibleTimeline, expanded]);
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>

@@ -7,7 +7,7 @@
  * @remarks 修改此接口或 dark 对象中的色值即可全局更改 TUI 配色。
  *
  * @field fg     - 前景色层级：strong（最亮，标题）→ body（正文）→ sub（次要文字）→ meta（元数据）→ faint（最淡，辅助标记）
- * @field tone   - 功能色调：brand（品牌绿，流式卡片头部）→ accent（品牌蓝，强调）→ ok（成功绿）→ warn（警告黄）→ err（错误红）→ info（信息蓝）
+ * @field tone   - 功能色调：brand（品牌蓝，流式卡片头部）→ accent（品牌紫，强调）→ ok（成功绿）→ warn（警告橙）→ err（错误红）→ info（信息蓝）
  * @field surface - 表面色层级：bg（最底层，大背景）→ bgInput（输入框底色）→ bgCode（代码块底色）→ bgElev（弹起卡片，卡片容器）
  */
 export interface ThemeTokens {
@@ -17,30 +17,37 @@ export interface ThemeTokens {
 }
 
 /**
- * 深色主题颜色定义 — new_tui 风格。
+ * 深色主题颜色定义 — 与项目落地页（docs/index.html）配色统一。
  * 所有组件通过 FG / TONE / SURFACE 代理引用此处色值，修改此对象即可全局换肤。
  *
- * 配色思路：暗色画布（bg: #050505）、蓝紫强调色（brand/accent: #3b82f6/#a855f7）、琥珀警告色（warn: #f59e0b）。
- * - fg.strong    (#e0e0e0) 标题/高亮文字
- * - fg.body      (#85a9ff) 正文（终端蓝调）
- * - fg.sub       (#9ca3af) 次要文字（gray-400）
- * - fg.meta      (#6b7280) 元数据标签（gray-500）
- * - fg.faint     (#4b5563) 最淡文字（gray-600）
- * - tone.brand   (#3b82f6) 品牌蓝：StreamingCard 头部、主角色
- * - tone.accent  (#a855f7) 品牌紫：强调色、活动状态
- * - tone.ok      (#00ff41) 成功绿：完成状态
- * - tone.warn    (#f59e0b) 警告琥珀：待定状态
- * - tone.err     (#ef4444) 错误红：失败状态
- * - tone.info    (#3b82f6) 信息蓝
- * - surface.bg      (#050505) 终端大背景
- * - surface.bgInput (#0c0c0c) 输入框/卡片背景
- * - surface.bgCode  (#0c0c0c) 代码块背景
- * - surface.bgElev  (#0a0a0a) 面板/弹窗背景
+ * 配色思路：深蓝黑画布（bg: #0a0e1a）、蓝紫渐变强调色（brand/accent: #7c9eff/#b27cff）、
+ * 琥珀警告色（warn: #ff9b50），与 docs/index.html 的 CSS 变量保持一致。
+ *
+ * 前景色层级（参考 GitHub Dark Dimmed）：
+ * - fg.strong    (#e6edf3) 标题/高亮文字（最亮）
+ * - fg.body      (#c9d1d9) 正文（中性灰白，不再偏蓝）
+ * - fg.sub       (#8b949e) 次要文字（gray-400）
+ * - fg.meta      (#6e7681) 元数据标签（gray-500）
+ * - fg.faint     (#484f58) 最淡文字（gray-600，用于分隔线、辅助标记）
+ *
+ * 功能色调（参考落地页 --accent 变量）：
+ * - tone.brand   (#7c9eff) 品牌蓝：StreamingCard 头部、主角色、提示符
+ * - tone.accent  (#b27cff) 品牌紫：强调色、活动状态、Supervisor 角色
+ * - tone.ok      (#56d364) 成功绿：完成状态、Worker 角色
+ * - tone.warn    (#ff9b50) 警告琥珀：待定状态、思考内容
+ * - tone.err     (#ff6b6b) 错误红：失败状态（柔和，不刺眼）
+ * - tone.info    (#7c9eff) 信息蓝（同 brand）
+ *
+ * 表面色层级（参考落地页 --bg / --surface 变量）：
+ * - surface.bg      (#0a0e1a) 终端大背景（深蓝黑）
+ * - surface.bgInput (#111726) 输入框/卡片背景（略亮于 bg）
+ * - surface.bgCode  (#0d1220) 代码块背景（略暗于 bgInput）
+ * - surface.bgElev  (#161d2e) 面板/弹窗背景（最亮，层级感清晰）
  */
 const dark: ThemeTokens = {
-  fg: { strong: '#e0e0e0', body: '#85a9ff', sub: '#9ca3af', meta: '#6b7280', faint: '#4b5563' },
-  tone: { brand: '#3b82f6', accent: '#a855f7', ok: '#00ff41', warn: '#f59e0b', err: '#ef4444', info: '#3b82f6' },
-  surface: { bg: '#050505', bgInput: '#0c0c0c', bgCode: '#0c0c0c', bgElev: '#0a0a0a' },
+  fg: { strong: '#e6edf3', body: '#c9d1d9', sub: '#8b949e', meta: '#6e7681', faint: '#484f58' },
+  tone: { brand: '#7c9eff', accent: '#b27cff', ok: '#56d364', warn: '#ff9b50', err: '#ff6b6b', info: '#7c9eff' },
+  surface: { bg: '#0a0e1a', bgInput: '#111726', bgCode: '#0d1220', bgElev: '#161d2e' },
 };
 
 // 仅在运行时需要切换主题时使用（例如用户设置偏好），当前始终使用 dark。
@@ -73,30 +80,30 @@ function proxyTokens(select: (t: ThemeTokens) => any): any {
 
 /**
  * 全局前景色代理。等同于 `activeTheme.fg`，但切换主题后自动更新。
- * - FG.strong → 标题/高亮（#ffffff）
- * - FG.body   → 正文（#E1D3DC）
- * - FG.sub    → 次要文字（#8D7B88）
- * - FG.meta   → 元数据（#8D7B88）
- * - FG.faint  → 最淡文字（#5D5159）
+ * - FG.strong → 标题/高亮（#e6edf3）
+ * - FG.body   → 正文（#c9d1d9）
+ * - FG.sub    → 次要文字（#8b949e）
+ * - FG.meta   → 元数据（#6e7681）
+ * - FG.faint  → 最淡文字（#484f58）
  */
 export const FG: any = proxyTokens(t => t.fg);
 
 /**
  * 全局功能色调代理。等同于 `activeTheme.tone`，切换主题后自动更新。
- * - TONE.brand  → 品牌绿（#00FF66），流式卡片头部
- * - TONE.accent → 品牌蓝（#4A90E2），强调和信息标记
- * - TONE.ok     → 成功（#00FF66）
- * - TONE.warn   → 警告（#FFBD2E）
- * - TONE.err    → 错误（#FF5F56）
- * - TONE.info   → 信息（#4A90E2）
+ * - TONE.brand  → 品牌蓝（#7c9eff），流式卡片头部、提示符
+ * - TONE.accent → 品牌紫（#b27cff），强调、Supervisor 角色
+ * - TONE.ok     → 成功绿（#56d364），Worker 角色、完成状态
+ * - TONE.warn   → 警告琥珀（#ff9b50），思考内容、待定状态
+ * - TONE.err    → 错误红（#ff6b6b），失败状态
+ * - TONE.info   → 信息蓝（#7c9eff，同 brand）
  */
 export const TONE: any = proxyTokens(t => t.tone);
 
 /**
  * 全局表面色代理。等同于 `activeTheme.surface`，切换主题后自动更新。
- * - SURFACE.bg      → 大背景（#000000）
- * - SURFACE.bgInput → 输入框底色（#1D3B5C）
- * - SURFACE.bgCode  → 代码块底色（#0C0C0C）
- * - SURFACE.bgElev  → 卡片底色（#13283F）
+ * - SURFACE.bg      → 大背景（#0a0e1a，深蓝黑）
+ * - SURFACE.bgInput → 输入框/卡片背景（#111726）
+ * - SURFACE.bgCode  → 代码块背景（#0d1220）
+ * - SURFACE.bgElev  → 面板/弹窗背景（#161d2e）
  */
 export const SURFACE: any = proxyTokens(t => t.surface);

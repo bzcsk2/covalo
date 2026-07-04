@@ -55,7 +55,7 @@ describe("ReasonixEngine tool loop regressions", () => {
 
     expect(executions).toBe(0)
     const denied = events.find(e => e.role === "error" && e.toolName === "bash")
-    expect(denied?.content).toContain("Tool not available in this turn: bash")
+    expect(denied?.content).toContain("'bash' is not available in this turn")
     expect(denied?.metadata?.reason).toBe("tool_not_allowed")
   })
 

@@ -191,9 +191,15 @@ export class StreamingToolExecutor {
       for (let index = 0; index < toolCalls.length; index++) {
         const tc = toolCalls[index]
         if (allowedToolNames && !allowedToolNames.has(tc.function.name)) {
-          const result = makeToolError(`Tool not available in this turn: ${tc.function.name}`)
+          // 引导性错误消息：明确列出当前可用工具，避免 LLM 反复幻觉调用同一不可用工具
+          const availableList = [...allowedToolNames].sort().join(", ")
+          const message = `Tool '${tc.function.name}' is not available in this turn. ` +
+            `Available tools: [${availableList}]. ` +
+            `Pick one of the available tools, or if none fits, stop calling tools and respond in text. ` +
+            `Do NOT retry the same unavailable tool.`
+          const result = makeToolError(message)
           settle(tc, index, result)
-          if (logger.isEnabled("error")) logger.warn("tool.execute.not_allowed", { toolName: tc.function.name, toolCallIndex: index })
+          if (logger.isEnabled("error")) logger.warn("tool.execute.not_allowed", { toolName: tc.function.name, toolCallIndex: index, availableCount: allowedToolNames.size })
           yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error", metadata: { error: true, reason: "tool_not_allowed" } }
           continue
         }

@@ -5,6 +5,7 @@ import { DeepiPromptInput, type DeepiPromptInputHandle } from './DeepiPromptInpu
 import { StatusBar } from './StatusBar.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
+import { TONE } from './reasonix/tokens.js';
 import {
   useBridgeFeedback,
   usePermissionQuestion,
@@ -144,12 +145,12 @@ export function BridgeScrollAlerts({
     <>
       {warnings.map((warning, index) => (
         <Box key={index} paddingX={1}>
-          <Text color="warning">⚠ {warning}</Text>
+          <Text color={TONE.warn as any}>⚠ {warning}</Text>
         </Box>
       ))}
       {error && (
         <Box paddingX={1} marginTop={1}>
-          <Text color="error">✗ {error}</Text>
+          <Text color={TONE.err as any}>✗ {error}</Text>
         </Box>
       )}
       {permissionPrompt && (
