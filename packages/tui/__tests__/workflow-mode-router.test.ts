@@ -75,19 +75,29 @@ describe('routeWorkflowInput', () => {
       expect(r).toEqual({ type: 'workflow_instruction', content: 'do something' });
     });
 
-    it('routes text as workflow_instruction when lifecycle is waiting_user', () => {
+    it('rejects text when lifecycle is waiting_user (prompt already shown)', () => {
       const r = routeWorkflowInput(loopOpts({ status: 'waiting_user', workflowId: 'wf-1' }));
-      expect(r).toEqual({ type: 'workflow_instruction', content: 'do something' });
+      expect(r).toEqual({ type: 'reject', reason: 'Workflow is waiting for your answer in the prompt.' });
     });
 
-    it('routes text as resume_workflow when the user interrupted it', () => {
+    it('routes text as resume_workflow when blocked due to user interruption', () => {
       const r = routeWorkflowInput(loopOpts({ status: 'blocked', workflowId: 'wf-1', reason: 'Interrupted by user' }));
+      expect(r).toEqual({ type: 'resume_workflow', instruction: 'do something' });
+    });
+
+    it('routes text as resume_workflow when blocked because goal is paused', () => {
+      const r = routeWorkflowInput(loopOpts({ status: 'blocked', workflowId: 'wf-1', reason: 'Goal is paused' }));
+      expect(r).toEqual({ type: 'resume_workflow', instruction: 'do something' });
+    });
+
+    it('routes text as resume_workflow when blocked because user rejected question', () => {
+      const r = routeWorkflowInput(loopOpts({ status: 'blocked', workflowId: 'wf-1', reason: 'User rejected question' }));
       expect(r).toEqual({ type: 'resume_workflow', instruction: 'do something' });
     });
 
     it('rejects text when lifecycle is blocked for another reason', () => {
       const r = routeWorkflowInput(loopOpts({ status: 'blocked', workflowId: 'wf-1' }));
-      expect(r.type).toBe('reject');
+      expect(r).toEqual({ type: 'reject', reason: expect.stringContaining('/reset') });
     });
 
     it('overrides with command direct regardless of lifecycle', () => {

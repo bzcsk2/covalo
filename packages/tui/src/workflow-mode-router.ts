@@ -45,6 +45,12 @@ export interface RouteWorkflowInputOpts {
  * - loop running: 非命令输入作为 workflow_instruction
  * - 斜杠命令永远按命令处理
  */
+function isResumableBlockedReason(reason?: string): boolean {
+  return reason === 'Interrupted by user'
+    || reason === 'Goal is paused'
+    || reason === 'User rejected question'
+}
+
 export function routeWorkflowInput(opts: RouteWorkflowInputOpts): WorkflowRouteAction {
   const { mode, lifecycle, activeRole, input, inputKind } = opts
 
@@ -71,13 +77,14 @@ export function routeWorkflowInput(opts: RouteWorkflowInputOpts): WorkflowRouteA
         case 'failed':
           return { type: 'start_workflow', goal: input }
         case 'running':
-        case 'waiting_user':
           return { type: 'workflow_instruction', content: input }
+        case 'waiting_user':
+          return { type: 'reject', reason: 'Workflow is waiting for your answer in the prompt.' }
         case 'blocked':
-          if (lifecycle.reason === 'Interrupted by user') {
+          if (isResumableBlockedReason(lifecycle.reason)) {
             return { type: 'resume_workflow', instruction: input }
           }
-          return { type: 'reject', reason: 'Workflow is blocked. Reset or switch mode to continue.' }
+          return { type: 'reject', reason: 'Workflow is blocked and cannot resume automatically. Use /reset to start a new loop.' }
       }
     }
   }

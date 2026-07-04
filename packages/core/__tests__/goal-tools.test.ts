@@ -37,11 +37,15 @@ describe("Goal tools", () => {
   })
 
   describe("get_goal", () => {
-    it("returns 'No goal' when no goal exists", async () => {
+    it("returns JSON with goal:null when no goal exists", async () => {
       const tool = createGetGoalTool(provider)
       const result = await tool.execute({}, {} as any)
       expect(result.isError).toBe(false)
-      expect(result.content).toBe("No goal set for this thread.")
+      const parsed = JSON.parse(result.content)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("status")
+      expect(parsed.goal).toBeNull()
+      expect(parsed.message).toContain("No goal")
     })
 
     it("returns goal when one exists", async () => {
@@ -50,43 +54,103 @@ describe("Goal tools", () => {
       const result = await tool.execute({}, {} as any)
       expect(result.isError).toBe(false)
       const parsed = JSON.parse(result.content)
-      expect(parsed.objective).toBe("Test goal")
-      expect(parsed.goalId).toBe(created.goalId)
-      expect(parsed.status).toBe("active")
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("status")
+      expect(parsed.goal.objective).toBe("Test goal")
+      expect(parsed.goal.goalId).toBe(created.goalId)
+      expect(parsed.goal.status).toBe("active")
     })
   })
 
   describe("update_goal", () => {
-    it("returns error for invalid status", async () => {
+    it("returns error for no action or status", async () => {
       const tool = createUpdateGoalTool(provider)
       const result = await tool.execute({ status: "active" }, {} as any)
       expect(result.isError).toBe(true)
-      expect(result.content).toContain('status must be "complete" or "blocked"')
+      const parsed = JSON.parse(result.content)
+      expect(parsed.ok).toBe(false)
+      expect(parsed.action).toBe("unknown")
+      expect(parsed.error).toContain("Must provide action")
     })
 
-    it("marks goal as complete", async () => {
+    it("marks goal as complete via status param", async () => {
       store.createGoal(threadId, "Test")
       const tool = createUpdateGoalTool(provider)
       const result = await tool.execute({ status: "complete" }, {} as any)
       expect(result.isError).toBe(false)
       const parsed = JSON.parse(result.content)
-      expect(parsed.status).toBe("complete")
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("complete")
+      expect(parsed.goal.status).toBe("complete")
     })
 
-    it("marks goal as blocked", async () => {
+    it("marks goal as blocked via status param", async () => {
       store.createGoal(threadId, "Test")
       const tool = createUpdateGoalTool(provider)
       const result = await tool.execute({ status: "blocked" }, {} as any)
       expect(result.isError).toBe(false)
       const parsed = JSON.parse(result.content)
-      expect(parsed.status).toBe("blocked")
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("block")
+      expect(parsed.goal.status).toBe("blocked")
     })
 
     it("returns error when no goal exists", async () => {
       const tool = createUpdateGoalTool(provider)
       const result = await tool.execute({ status: "complete" }, {} as any)
       expect(result.isError).toBe(true)
-      expect(result.content).toContain("No goal found")
+      const parsed = JSON.parse(result.content)
+      expect(parsed.ok).toBe(false)
+      expect(parsed.action).toBe("complete")
+      expect(parsed.error).toContain("No active goal")
+    })
+
+    it("supports action param: set, update, pause, resume, clear", async () => {
+      const tool = createUpdateGoalTool(provider)
+
+      // set
+      let res = await tool.execute({ action: "set", objective: "New goal" }, {} as any)
+      let parsed = JSON.parse(res.content)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("set")
+      expect(parsed.goal.objective).toBe("New goal")
+
+      // update
+      res = await tool.execute({ action: "update", objective: "Updated goal" }, {} as any)
+      parsed = JSON.parse(res.content)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("update")
+      expect(parsed.goal.objective).toBe("Updated goal")
+
+      // pause
+      res = await tool.execute({ action: "pause" }, {} as any)
+      parsed = JSON.parse(res.content)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("pause")
+      expect(parsed.goal.status).toBe("paused")
+
+      // resume
+      res = await tool.execute({ action: "resume" }, {} as any)
+      parsed = JSON.parse(res.content)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("resume")
+      expect(parsed.goal.status).toBe("active")
+
+      // clear
+      res = await tool.execute({ action: "clear" }, {} as any)
+      parsed = JSON.parse(res.content)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.action).toBe("clear")
+      expect(parsed.message).toContain("Goal cleared")
+    })
+
+    it("returns error for set without objective", async () => {
+      const tool = createUpdateGoalTool(provider)
+      const res = await tool.execute({ action: "set" }, {} as any)
+      const parsed = JSON.parse(res.content)
+      expect(parsed.ok).toBe(false)
+      expect(parsed.action).toBe("set")
+      expect(parsed.error).toContain("objective required")
     })
   })
 

@@ -9,11 +9,15 @@ export type WorkflowPhase =
   | 'worker_do'
   | 'worker_report'
   | 'supervisor_check'
+  | 'supervisor_intervene'
   | 'continue'
   | 'revise'
   | 'approve'
   | 'blocked'
-  | 'ask_user';
+  | 'ask_user'
+  | 'waiting_user'
+  | 'completed'
+  | 'failed';
 
 export interface WorkflowState {
   phase: WorkflowPhase;
