@@ -294,3 +294,33 @@ describe("validateShellCommand", () => {
     expect(r.error).toContain("required")
   })
 })
+
+// ── HARDEN-02: find -delete 敏感性 ──
+describe("HARDEN-02: find -delete security", () => {
+  it("find on sensitive path (.git/objects) is rejected", () => {
+    const r = validateShellCommand("find .git/objects -type f -delete", "bash")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("sensitive")
+  })
+
+  it("find on non-sensitive path (src) is allowed", () => {
+    const r = validateShellCommand("find src -name '*.ts' -delete", "bash")
+    expect(r.ok).toBe(true)
+  })
+
+  it("find on non-sensitive path (/tmp) is allowed", () => {
+    const r = validateShellCommand("find /tmp -type f -delete", "bash")
+    expect(r.ok).toBe(true)
+  })
+
+  it("find without -delete on any path is allowed", () => {
+    const r = validateShellCommand("find . -name '*.log' -mtime +7", "bash")
+    expect(r.ok).toBe(true)
+  })
+
+  it("find on sensitive path (.ssh/id_rsa) with -delete is rejected", () => {
+    const r = validateShellCommand("find .ssh/id_rsa -delete", "bash")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("sensitive")
+  })
+})

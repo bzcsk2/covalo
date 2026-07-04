@@ -1,5 +1,18 @@
 /**
  * Shell 命令安全检查 — 复用 shell-exec 的危险模式与敏感路径规则。
+ *
+ * 安全策略选择：宁可误杀，不可放过（false positive > false negative）。
+ * 任何引用敏感路径的命令（如 `find .git -delete`、`rm node_modules -rf`）
+ * 都会被拒绝，即使该命令可能是合法的。这是因为：
+ * 1. 敏感路径上的破坏性操作可能导致不可逆的数据丢失。
+ * 2. 自动化的上下文很难准确判断命令的真实意图。
+ * 3. 用户可以通过显式确认来绕过（ask 模式）。
+ *
+ * HARDEN-02: `find -delete` 没有独立的 deny 模式，而是通过敏感路径检测来拦截
+ * `find <敏感路径> -delete`。这意味着 `find` 在普通目录上的使用不受限制。
+ * 这是有意识的设计取舍：不在 POSIX_DENY_PATTERNS 中加全局 `find -delete` 拦截，
+ * 因为 `find` 是合法开发工作流中的常用工具（如批量改后缀、清理构建产物），
+ * 而敏感路径检测已经覆盖了危险场景。
  */
 
 import { resolve } from "node:path"

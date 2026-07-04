@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest"
-import { mkdir, writeFile, rm } from "node:fs/promises"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { mkdir, writeFile, rm, utimes } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
+import { existsSync, mkdtempSync } from "node:fs"
 import { getToolSideEffect, TOOL_SIDE_EFFECTS } from "../src/tool-arguments/truncation-recovery.js"
 import { extractRunCommand } from "../src/governance/branch-budget-tool-path.js"
 
@@ -183,5 +184,188 @@ describe("VERIFY-05: protectedTail diagnostic", () => {
     expect(result.warning).toBeDefined()
     expect(typeof result.warning).toBe("string")
     expect(result.warning).toContain("protectedTail")
+  })
+})
+
+// ── FIX-01: drain timeout behavior ──
+describe("FIX-01: drain timeout", () => {
+  it("drain respects timeout and does not hang forever", async () => {
+    const { AsyncSessionWriter } = await import("../src/session.js")
+    const { noopRuntimeLogger } = await import("../src/runtime-logger.js")
+
+    const tmpDir = join(tmpdir(), `covalo-fix01-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    const filePath = join(tmpDir, "test.jsonl")
+
+    const writer = new AsyncSessionWriter(filePath, noopRuntimeLogger)
+    for (let i = 0; i < 100; i++) {
+      writer.enqueue({ ts: i, type: "event", payload: { n: "x".repeat(1000) } })
+    }
+
+    const start = Date.now()
+    await writer.drain(1)
+    const elapsed = Date.now() - start
+    expect(elapsed).toBeLessThan(5000)
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it("drain with default timeout completes normally when queue is empty", async () => {
+    const { AsyncSessionWriter } = await import("../src/session.js")
+    const { noopRuntimeLogger } = await import("../src/runtime-logger.js")
+
+    const tmpDir = join(tmpdir(), `covalo-fix01b-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    const filePath = join(tmpDir, "test.jsonl")
+    const writer = new AsyncSessionWriter(filePath, noopRuntimeLogger)
+
+    await expect(writer.drain()).resolves.toBeUndefined()
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+})
+
+// ── FIX-03: cleanup checkpoint tests ──
+describe("FIX-03: cleanup removes orphan checkpoints", () => {
+  let tmpDir: string
+  let sessionDir: string
+  let origSessionDir: string
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `covalo-fix03-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    sessionDir = join(tmpDir, ".covalo", "sessions")
+    await mkdir(sessionDir, { recursive: true })
+    const { SessionLoader } = await import("../src/session.js")
+    origSessionDir = SessionLoader.sessionDir
+    SessionLoader.sessionDir = sessionDir
+  })
+
+  afterEach(async () => {
+    const { SessionLoader } = await import("../src/session.js")
+    SessionLoader.sessionDir = origSessionDir
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it("deletes checkpoint when corresponding jsonl is evicted", async () => {
+    const { SessionLoader } = await import("../src/session.js")
+    const now = Date.now() / 1000
+    for (let i = 1; i <= 3; i++) {
+      await writeFile(join(sessionDir, `s${i}.jsonl`), `{"ts":${i},"type":"messages","payload":[]}\n`)
+      await writeFile(join(sessionDir, `s${i}.checkpoint.json`), `{"version":1}\n`)
+      await utimes(join(sessionDir, `s${i}.jsonl`), now + i, now + i)
+    }
+
+    const deleted = await SessionLoader.cleanup(2)
+    expect(deleted).toBe(1)
+    expect(existsSync(join(sessionDir, "s1.jsonl"))).toBe(false)
+    expect(existsSync(join(sessionDir, "s1.checkpoint.json"))).toBe(false)
+    expect(existsSync(join(sessionDir, "s2.jsonl"))).toBe(true)
+    expect(existsSync(join(sessionDir, "s3.jsonl"))).toBe(true)
+  })
+
+  it("cleans orphan checkpoint even when under maxSessions", async () => {
+    const { SessionLoader } = await import("../src/session.js")
+    await writeFile(join(sessionDir, "valid.jsonl"), `{"ts":1,"type":"messages","payload":[]}\n`)
+    await writeFile(join(sessionDir, "valid.checkpoint.json"), `{"version":1}\n`)
+    await writeFile(join(sessionDir, "orphan.checkpoint.json"), `{"version":1}\n`)
+
+    const deleted = await SessionLoader.cleanup(10)
+    expect(deleted).toBe(0)
+    expect(existsSync(join(sessionDir, "orphan.checkpoint.json"))).toBe(false)
+    expect(existsSync(join(sessionDir, "valid.jsonl"))).toBe(true)
+    expect(existsSync(join(sessionDir, "valid.checkpoint.json"))).toBe(true)
+  })
+
+  it("ignores invalid session IDs in orphan checkpoint cleanup", async () => {
+    const { SessionLoader } = await import("../src/session.js")
+    await writeFile(join(sessionDir, "valid.jsonl"), `{"ts":1,"type":"messages","payload":[]}\n`)
+    await writeFile(join(sessionDir, "../malicious.checkpoint.json"), `{"version":1}\n`)
+    await writeFile(join(sessionDir, ".checkpoint.json"), `{"version":1}\n`)
+
+    const deleted = await SessionLoader.cleanup(10)
+    expect(deleted).toBe(0)
+  })
+
+  it("returns 0 when directory does not exist", async () => {
+    const { SessionLoader } = await import("../src/session.js")
+    SessionLoader.sessionDir = join(tmpdir(), `nonexistent-${Date.now()}`)
+    const deleted = await SessionLoader.cleanup()
+    expect(deleted).toBe(0)
+  })
+})
+
+// ── FIX-05: writeAtomicWithRetry ──
+describe("FIX-05: checkpoint write retry", () => {
+  it("writeAtomicWithRetry throws after exhausting attempts and cleans tmp", async () => {
+    const { CheckpointEngine } = await import("../src/checkpoint/checkpoint-engine.js")
+
+    const tmpDir = mkdtempSync(join(tmpdir(), "covalo-fix05-"))
+    const engine = new CheckpointEngine(tmpDir, "test")
+    const tmpPath = join(tmpDir, "test.tmp")
+    const data = JSON.stringify({ test: true })
+
+    const checkpointDir = join(tmpDir, "blocked")
+    await mkdir(checkpointDir, { recursive: true })
+    Object.defineProperty(engine, "checkpointPath", { value: checkpointDir, writable: true })
+
+    const writeAtomic = (engine as any).writeAtomicWithRetry.bind(engine)
+    await expect(writeAtomic(tmpPath, data)).rejects.toThrow()
+    expect(existsSync(tmpPath)).toBe(false)
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+})
+
+// ── FIX-02: hook exception deny reason consumed by resolveDenyMessage ──
+describe("FIX-02: hook exception deny reason flow", () => {
+  it("resolveDenyMessage consumes lastHookDenyReason from HookManager", async () => {
+    const { HookManager } = await import("@covalo/security")
+    const { resolveDenyMessage } = await import("../src/executor-helpers.js")
+
+    const hook = new HookManager()
+    hook.addHooks({
+      beforeToolCall: async () => { throw new Error("custom hook failure") },
+    })
+
+    const result = await hook.runBeforeToolCall({
+      toolName: "write_file",
+      args: { path: "/tmp/test" },
+      tier: "write",
+      permissionDecision: "ask",
+    })
+
+    expect(result).toBe("deny")
+    expect(hook.lastHookDenyReason).toContain("custom hook failure")
+
+    const tc = { function: { name: "write_file", arguments: '{}' }, id: "tc1", type: "function" }
+    const message = resolveDenyMessage(tc, new Map(), undefined, { path: "/tmp/test" }, hook)
+    expect(message).toContain("custom hook failure")
+    expect(hook.lastHookDenyReason).toBeUndefined()
+  })
+
+  it("evaluatePermission sets deny reason when hook throws", async () => {
+    const { HookManager } = await import("@covalo/security")
+    const { evaluatePermission } = await import("../src/executor-helpers.js")
+
+    const hook = new HookManager()
+    hook.addHooks({
+      beforeToolCall: async () => { throw new Error("evaluator hook error") },
+    })
+
+    const tools = new Map()
+    tools.set("write_file", {
+      name: "write_file",
+      description: "write a file",
+      parameters: {},
+      concurrency: 1,
+      approval: "write",
+      execute: async () => ({ isError: false, content: [] }),
+    })
+
+    const result = await evaluatePermission(
+      { function: { name: "write_file", arguments: "{}" }, id: "tc1", type: "function" },
+      tools,
+      undefined,
+      hook,
+      undefined,
+    )
+
+    expect(result).toBe("deny")
+    expect(hook.lastHookDenyReason).toContain("evaluator hook error")
   })
 })

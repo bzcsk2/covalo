@@ -156,6 +156,19 @@ export class SessionLoader {
       return 0
     }
     const jsonl = files.filter(f => f.endsWith(".jsonl"))
+    const jsonlNames = new Set(jsonl.map(f => f.replace(/\.jsonl$/, "")))
+
+    // 清理孤儿 .checkpoint.json（无对应 .jsonl），不受 maxSessions 限制
+    for (const f of files) {
+      const m = f.match(/^(.+)\.checkpoint\.json$/)
+      if (!m) continue
+      // 跳过无效 session ID（含路径穿越或空 basename）
+      if (!m[1] || m[1].includes("/") || m[1].includes("\\") || m[1] === "." || m[1] === "..") continue
+      if (!jsonlNames.has(m[1])) {
+        await unlink(resolve(this.sessionDir, f)).catch(() => {})
+      }
+    }
+
     if (jsonl.length <= maxSessions) return 0
     const withStats = await Promise.all(jsonl.map(async (f) => {
       const p = resolve(this.sessionDir, f)
