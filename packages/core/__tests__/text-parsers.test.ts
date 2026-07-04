@@ -67,17 +67,16 @@ describe("T10: TOOL_JSON_LOOKAHEAD_CHARS=500 覆盖大 envelope", () => {
     expect(parsed.calls[0]!.function.name).toBe("compute")
   })
 
-  it("lookahead 不足（>500 字符）时仍能被 extractBalancedJson 兜底识别", () => {
+  it("lookahead 超过 500 字符时保持当前跳过行为", () => {
     // 极端情况：key hint 出现在 600 字符之后 — 超过 500 窗口。
-    // 这种情况 lookahead 会 miss，但整个 JSON 仍合法。
-    // 当前实现会因 lookahead miss 跳过，这是预期的召回率限制（不是 bug）— 此测试记录该行为。
+    // lookahead miss，当前实现跳过该候选位置，这是已知的召回率限制（不是 bug）。
+    // 此测试记录该行为，避免后续改动误以为这是 regression。
     const padding = " ".repeat(600)
     const json = `{${padding}"name": "far_tool", "arguments": "{}"}`
     const text = `before ${json} after`
 
     const parsed = parseEmbeddedToolCallsFromText(text)
     // 超过 500 窗口，lookahead miss — 当前实现跳过该候选位置
-    // 这是已知的召回率限制，记录为期望行为
     expect(parsed.calls.length).toBe(0)
   })
 })
