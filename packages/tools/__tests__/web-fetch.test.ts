@@ -49,7 +49,10 @@ describe("WebFetch validation", () => {
 
 vi.mock("node:dns", () => ({
   promises: {
+    // web-fetch.ts 用的是 dns.lookup(hostname, { all: true }) 做 SSRF 检查
+    // 之前 mock 里只有 resolve，lookup 未被 mock 导致 SSRF 抛错，所有测试失败
     resolve: vi.fn().mockResolvedValue(["93.184.216.34"]),
+    lookup: vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]),
   },
 }))
 

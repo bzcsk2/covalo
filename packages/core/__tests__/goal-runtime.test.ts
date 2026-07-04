@@ -1,8 +1,17 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach } from "vitest"
 import { buildContinuationPrompt, buildBudgetLimitPrompt, buildUsageLimitPrompt } from "../src/goal/steering.js"
 import type { ThreadGoal } from "../src/goal/types.js"
+import { setPromptLocale } from "../src/prompt-locale.js"
 
 describe("GoalRuntime steering", () => {
+  // steering.ts 用 getPromptLocale() 判断 locale，未传 locale 参数时默认 zh-CN，
+  // 走中文分支。这些测试的断言期望英文字符串（"requirement-by-requirement audit"
+  // / "Budget Limit Reached" / "Usage Limit Reached"），所以测试前必须显式切到 en。
+  // 用 beforeEach 而非 beforeAll 是为了未来若新增"locale 切换"测试可隔离副作用。
+  beforeEach(() => {
+    setPromptLocale("en")
+  })
+
   const mockGoal: ThreadGoal = {
     threadId: "t1",
     goalId: "g1",

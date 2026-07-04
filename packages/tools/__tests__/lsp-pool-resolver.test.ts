@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LspClientPool } from "../src/lsp/client-pool.js"
-import { resolveServer } from "../src/lsp/server-resolver.js"
+import { resolveServer, clearWhichCache } from "../src/lsp/server-resolver.js"
 import { createLspTool } from "../src/lsp.js"
 import { readLspConfig, getLanguageConfig, DEFAULT_LSP_CONFIG } from "../src/lsp/config.js"
 
@@ -224,6 +224,12 @@ describe("createLspTool with pool", () => {
 })
 
 describe("Server Resolver", () => {
+  // 全套测试中其他文件可能调用 which() 并缓存了 stale 结果（如 PATH 被临时修改后恢复），
+  // 每次 Server Resolver 测试前清空缓存，确保用当前 PATH 重新查找。
+  beforeEach(() => {
+    clearWhichCache()
+  })
+
   it("should return not available for empty command without env", async () => {
     const result = await resolveServer(undefined, undefined, "perl", "/tmp")
     expect(result.available).toBe(false)

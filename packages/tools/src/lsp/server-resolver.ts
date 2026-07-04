@@ -49,9 +49,14 @@ function getEnvCommand(language: string): string | undefined {
 
 const WINDOWS_SHIMS = ["", ".cmd", ".exe", ".ps1"]
 
+// Windows 没有 Unix 的执行位概念，access(path, X_OK) 不可靠——
+// 对 .exe/.cmd 等可执行文件也可能返回 EACCES。Windows 改用 F_OK 仅检查存在性；
+// POSIX 保持 X_OK 以真正校验可执行权限。
+const ACCESS_MODE = process.platform === "win32" ? constants.F_OK : constants.X_OK
+
 function tryAccessSync(filePath: string): boolean {
   try {
-    accessSync(filePath, constants.X_OK)
+    accessSync(filePath, ACCESS_MODE)
     return true
   } catch {
     return false
@@ -60,7 +65,7 @@ function tryAccessSync(filePath: string): boolean {
 
 async function tryAccess(filePath: string): Promise<boolean> {
   try {
-    await access(filePath, constants.X_OK)
+    await access(filePath, ACCESS_MODE)
     return true
   } catch {
     return false
@@ -68,6 +73,14 @@ async function tryAccess(filePath: string): Promise<boolean> {
 }
 
 const whichCache = new Map<string, string | null>()
+
+/**
+ * 清空 which 缓存。测试环境下其他测试可能修改 process.env.PATH 后调用 which()，
+ * 导致缓存污染（如 PATH 被改后又恢复，缓存仍返回 null）。测试 beforeEach 调用此函数。
+ */
+export function clearWhichCache(): void {
+  whichCache.clear()
+}
 
 async function which(command: string): Promise<string | null> {
   const cached = whichCache.get(command)

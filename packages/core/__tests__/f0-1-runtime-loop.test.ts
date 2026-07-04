@@ -290,10 +290,14 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
   })
 
   it("3. branchBudget: 'enforce' 才硬拦截工具", async () => {
-    // 准备：fileEditMax=1，已记录 1 次编辑，enforce 模式应硬拦截
+    // 准备：fileEditMax=1，已记录 baz.ts 编辑 1 次；模型发起 write_file 到 baz.ts，会被 block
+    // 注意：BranchBudgetTracker.checkToolBlock 是按文件 key 判定的
+    // （(this.fileEdits.get(fileKey) ?? 0) >= this.limits.fileEditMax）
+    // 之前 record 的是 preexisting.ts，但 tool_call 目标是 baz.ts，
+    // baz.ts 的 edit 计数为 0，不触发 block。修复：record 与 tool_call 同一个文件。
     const tracker = new BranchBudgetTracker({ fileEditMax: 1 })
     tracker.bindWorkspaceRoot(tmpDir)
-    tracker.recordFileEdit(join(tmpDir, "preexisting.ts"))  // 已达上限
+    tracker.recordFileEdit(join(tmpDir, "baz.ts"))  // baz.ts 已达上限
 
     const checkpoint = new CheckpointEngine(tmpDir, "rt-3")
     const modeEngine = new ModeDecisionEngine()
@@ -333,11 +337,16 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
   })
 
   it("4. 一个 tool batch 部分 blocked 时，所有 tool_call 都有对应 tool_result", async () => {
-    // 准备：fileEditMax=1，已记录 1 次编辑；模型同时发起 2 个 write_file 调用
-    // 其中至少一个会被 BranchBudget 硬拦截，另一个未被 block 的也必须有 tool_result
+    // 准备：fileEditMax=1，已记录 a.ts 和 b.ts 各 1 次编辑，两个文件都已达上限；
+    // 模型同时发起 2 个 write_file 调用，两个都会被 BranchBudget 硬拦截，
+    // 但都必须有对应的 tool_result（不产生 orphan tool_call）。
+    // 之前 record 的是 preexisting.ts，但 tool_call 目标是 a.ts/b.ts，
+    // 两个文件 edit 计数为 0，都不触发 block，导致测试断言失败。
+    // 修复：record 与 tool_call 同一组文件。
     const tracker = new BranchBudgetTracker({ fileEditMax: 1 })
     tracker.bindWorkspaceRoot(tmpDir)
-    tracker.recordFileEdit(join(tmpDir, "preexisting.ts"))  // 已达上限
+    tracker.recordFileEdit(join(tmpDir, "a.ts"))  // a.ts 已达上限
+    tracker.recordFileEdit(join(tmpDir, "b.ts"))  // b.ts 已达上限
 
     const checkpoint = new CheckpointEngine(tmpDir, "rt-4")
     const modeEngine = new ModeDecisionEngine()
