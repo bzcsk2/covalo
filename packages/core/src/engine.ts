@@ -89,6 +89,21 @@ function resolvePhaseMaxTurns(
 }
 
 /**
+ * S0-2: 运行时结构守卫，判断 config 是否真的是 CovaloConfig 形状。
+ * DeepreefConfig 上可能挂一个部分 tools 对象（如 e2e 测试只传 { approvalPolicy }），
+ * 这种对象不是 CovaloConfig，isToolAllowed 会访问 config.tools[role][mode] 而崩溃。
+ * 这里检查 isToolAllowed 必然访问的 worker/supervisor 键是否存在，避免裸 cast。
+ */
+function isCovaloConfigLike(config: unknown): config is CovaloConfig {
+  if (typeof config !== "object" || config === null) return false
+  const tools = (config as { tools?: unknown }).tools
+  if (typeof tools !== "object" || tools === null) return false
+  const t = tools as { worker?: unknown; supervisor?: unknown }
+  return typeof t.worker === "object" && t.worker !== null &&
+    typeof t.supervisor === "object" && t.supervisor !== null
+}
+
+/**
  * ReasonixEngine 是 Deepreef 的核心引擎，负责：
  * - 管理对话上下文（ContextManager）
  * - 与 DeepSeek API 进行流式通信
@@ -1302,15 +1317,18 @@ Do not change goal status.`
       // SFR-30: 使用 resolveEffectiveTools 统一计算有效工具列表
       const effectiveRole: "worker" | "supervisor" = role ?? (agentName === "supervisor" ? "supervisor" : "worker")
       const effectiveMode: WorkflowMode = mode ?? "alone"
-      // S0-2: 只在 config 有 tools 字段时传入（避免 DeepreefConfig 无 tools 字段导致运行时崩溃）
-      const hasToolsConfig = !!(this.config as unknown as Record<string, unknown>).tools
+      // S0-2: 只在 config 是 CovaloConfig 形状时传入。
+      // DeepreefConfig.tools 可能是部分对象（如 e2e 测试只传 { approvalPolicy }），
+      // 不带 worker/supervisor 键时 isToolAllowed 会访问 config.tools[role][mode] 崩溃。
+      // 这里做结构守卫，避免把任意带 tools 字段的对象误当 CovaloConfig。
+      const maybeCovaloConfig = isCovaloConfigLike(this.config) ? (this.config as unknown as CovaloConfig) : undefined
       const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
         registeredTools: this.tools,
         role: effectiveRole,
         mode: effectiveMode,
         agentToolNames: ac.toolNames,
         workflowPhase,
-        config: hasToolsConfig ? (this.config as unknown as CovaloConfig) : undefined,
+        config: maybeCovaloConfig,
       })
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {
