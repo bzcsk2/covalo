@@ -8,6 +8,7 @@ import { BranchBudgetTracker } from "../src/governance/branch-budget.js"
 import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
+  type CheckpointSaveTrigger,
   type RuntimeCheckpointV2,
 } from "../src/checkpoint/runtime-checkpoint.js"
 import type { SessionCheckpointEnvelope } from "../src/checkpoint/checkpoint-envelope.js"
@@ -378,17 +379,16 @@ describe("FIX-H5: setCheckpointPolicy / shouldPersistOnTrigger", () => {
     expect(engine.shouldPersistOnTrigger("verification_failed")).toBe(true)
     expect(engine.shouldPersistOnTrigger("compaction")).toBe(true)
     expect(engine.shouldPersistOnTrigger("final_draft")).toBe(true)
-    // safe-point 不保存 step_started 和 heartbeat
-    expect(engine.shouldPersistOnTrigger("step_started")).toBe(false)
-    expect(engine.shouldPersistOnTrigger("heartbeat")).toBe(false)
+    // safe-point does NOT persist verification_started
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
   })
 
-  it("frequent 保存所有 trigger", () => {
+  it("frequent 保存所有有效的 trigger", () => {
     const engine = new CheckpointEngine("/tmp/nonexistent", "policy-freq")
     engine.setCheckpointPolicy("frequent")
-    const triggers: Array<Parameters<typeof engine.shouldPersistOnTrigger>[0]> = [
-      "step_started", "step_completed", "tool_failed",
-      "verification_failed", "compaction", "final_draft", "heartbeat",
+    const triggers: Array<CheckpointSaveTrigger> = [
+      "step_completed", "tool_failed", "verification_started",
+      "verification_failed", "compaction", "final_draft",
     ]
     for (const t of triggers) {
       expect(engine.shouldPersistOnTrigger(t)).toBe(true)
@@ -401,10 +401,8 @@ describe("FIX-H5: setCheckpointPolicy / shouldPersistOnTrigger", () => {
     expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
     expect(engine.shouldPersistOnTrigger("final_draft")).toBe(true)
     expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
-    expect(engine.shouldPersistOnTrigger("step_started")).toBe(false)
     expect(engine.shouldPersistOnTrigger("verification_failed")).toBe(false)
     expect(engine.shouldPersistOnTrigger("compaction")).toBe(false)
-    expect(engine.shouldPersistOnTrigger("heartbeat")).toBe(false)
   })
 
   it("manual 触发器永远落盘，不受 policy 影响", () => {

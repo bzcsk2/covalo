@@ -8,7 +8,7 @@ import { ModeDecisionEngine } from "../src/governance/mode-decision.js"
 import { CheckpointEngine } from "../src/checkpoint/checkpoint-engine.js"
 import { setPromptLocale } from "../src/prompt-locale.js"
 
-import type { ChatClient } from "../src/interface.js"
+import type { ChatClient, AgentTool, ToolContext } from "../src/interface.js"
 import type { DeepSeekStreamEvent, DeepSeekClientOptions } from "../src/client.js"
 import type { ChatMessage, ToolCall, ToolSpec } from "../src/types.js"
 import type { LoopEvent, SessionStats, ToolResult } from "../src/interface.js"
@@ -29,8 +29,8 @@ function makePolicy(strictness: "strict" | "normal" | "loose"): EffectiveHarness
   if (strictness === "strict") {
     return {
       strictness: "strict", source: "default",
-      toolset: "compact", maxParallelTools: 1, maxTurns: 50,
-      readBeforeWrite: "block", textToolSalvage: "off",
+      toolset: "minimal", maxParallelTools: 2, maxTurns: 30,
+      readBeforeWrite: "block", textToolSalvage: "always",
       branchBudget: "enforce", checkpoint: "frequent",
       verification: "block", earlyStop: "aggressive",
       toolRouting: "two-stage", executionMode: "forced",
@@ -40,8 +40,8 @@ function makePolicy(strictness: "strict" | "normal" | "loose"): EffectiveHarness
   if (strictness === "loose") {
     return {
       strictness: "loose", source: "default",
-      toolset: "full", maxParallelTools: 4, maxTurns: 100,
-      readBeforeWrite: "off", textToolSalvage: "always",
+      toolset: "full", maxParallelTools: 5, maxTurns: 80,
+      readBeforeWrite: "off", textToolSalvage: "off",
       branchBudget: "observe", checkpoint: "minimal",
       verification: "warn", earlyStop: "critical-only",
       toolRouting: "direct", executionMode: "free",
@@ -51,12 +51,12 @@ function makePolicy(strictness: "strict" | "normal" | "loose"): EffectiveHarness
   // normal
   return {
     strictness: "normal", source: "default",
-    toolset: "standard", maxParallelTools: 2, maxTurns: 75,
+    toolset: "coding", maxParallelTools: 3, maxTurns: 50,
     readBeforeWrite: "warn", textToolSalvage: "on-native-failure",
     branchBudget: "recover", checkpoint: "safe-point",
     verification: "require-or-waive", earlyStop: "standard",
     toolRouting: "auto", executionMode: "adaptive",
-    shellPolicy: "dual-track", supervisorPolicy: "on-failure",
+    shellPolicy: "dual-track", supervisorPolicy: "critical-only",
   }
 }
 
@@ -513,123 +513,176 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
 
   // ── Harness strictness runtime enforcement (FIX-H1~H6) ─────────────────
 
-  it("H1: toolset 'compact' limits allowed tools via routing", async () => {
-    // compact policy should route through two-stage: select_category + tool_call
-    // Verify by checking that runLoop with compact policy yields select_category events
+  it("H1: toolset routing — strict 'minimal' only registers read/write tools", async () => {
+    // Create toolSpecs covering all 6 categories
+    const toolSpecs: ToolSpec[] = [
+      { type: "function" as const, function: { name: "read_file", description: "r", parameters: {} } },
+      { type: "function" as const, function: { name: "write_file", description: "w", parameters: {} } },
+      { type: "function" as const, function: { name: "grep", description: "s", parameters: {} } },
+      { type: "function" as const, function: { name: "bash", description: "run", parameters: {} } },
+      { type: "function" as const, function: { name: "todowrite", description: "p", parameters: {} } },
+      { type: "function" as const, function: { name: "LSP", description: "ci", parameters: {} } },
+    ]
+
+    // Use a mock executor that captures allowedToolNames
+    let capturedAllowedSet: ReadonlySet<string> | undefined
+    const capturingExecutor: StreamingToolExecutor = {
+      async *run(
+        toolCalls: ToolCall[],
+        signal: AbortSignal,
+        appendToolResult: (tc: ToolCall, result: ToolResult) => void,
+        _traceContext?: Record<string, unknown>,
+        allowedToolNames?: ReadonlySet<string>,
+      ): AsyncGenerator<LoopEvent> {
+        capturedAllowedSet = allowedToolNames
+        for (const tc of toolCalls) {
+          appendToolResult(tc, { content: "mock", isError: false })
+          yield { role: "tool", content: "mock", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    }
+
     const tracker = new BranchBudgetTracker()
     const checkpoint = new CheckpointEngine(tmpDir, "rt-h1")
     const modeEngine = new ModeDecisionEngine()
-    const tools = new Map<string, (args: Record<string, unknown>) => ToolResult>([
-      ["read_file", async (a: any) => ({ content: `read ${a.path}`, isError: false })],
-    ])
-    const toolExecutor = makeMockExecutor(tools)
     const ctx = new ContextManager(20, 32_768)
     const config = { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" }
 
     const client = makeClient([
-      // 第一轮：模型调 read_file
-      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "read_file", arguments: JSON.stringify({ path: "/tmp/x" }) },
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "read_file", arguments: "{}" },
        { type: "done", finishReason: "tool_calls" }],
       [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
     ])
 
     await drainLoop(runLoop({
-      ctx, client, toolExecutor, toolSpecs: [], config,
+      ctx, client, toolExecutor: capturingExecutor, toolSpecs, config,
       signal: new AbortController().signal,
       stats: makeStats(),
       isInterrupted: () => false,
       appendToolResult: () => {},
       maxTurns: 2,
-      effectivePolicy: makePolicy("strict"), // compact toolset
+      effectivePolicy: makePolicy("strict"), // toolset: "minimal"
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
       workspaceRoot: tmpDir,
     }))
 
-    // strict/compact should be able to execute allowed tools
-    expect(tracker.inspect().fileEdits).toBeDefined()
+    // strict (minimal) should only allow read + write tools
+    expect(capturedAllowedSet).toBeDefined()
+    expect(capturedAllowedSet!.has("read_file")).toBe(true)
+    expect(capturedAllowedSet!.has("write_file")).toBe(true)
+    // search / run / plan / code_intel should NOT be in allowed set
+    expect(capturedAllowedSet!.has("grep")).toBe(false)
+    expect(capturedAllowedSet!.has("bash")).toBe(false)
+    expect(capturedAllowedSet!.has("todowrite")).toBe(false)
+    expect(capturedAllowedSet!.has("LSP")).toBe(false)
   })
 
-  it("H2: textToolSalvage respects policy — off disables salvage", async () => {
-    // Verify that loop completes with strict policy (textToolSalvage: "off")
-    // without triggering text salvage on text-only model response
+  it("H2: textToolSalvage 'off' (loose) does not execute salvage on text with embedded tool calls", async () => {
+    // Create a mock that registers a salvage-counter tool
+    let salvageToolExecuted = false
+    const tools = new Map<string, (args: Record<string, unknown>) => ToolResult>([
+      ["read_file", async () => {
+        salvageToolExecuted = true
+        return { content: "read", isError: false }
+      }],
+    ])
+    const toolExecutor = makeMockExecutor(tools)
     const tracker = new BranchBudgetTracker()
     tracker.bindWorkspaceRoot(tmpDir)
     const checkpoint = new CheckpointEngine(tmpDir, "rt-h2")
     const modeEngine = new ModeDecisionEngine()
-    const toolExecutor = makeEmptyExecutor()
     const ctx = new ContextManager(20, 32_768)
     const config = { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" }
 
+    // Model output contains text that looks like a tool call — salvage-able pattern
     const client = makeClient([
-      [{ type: "text_delta", delta: "text reply" }, { type: "done", finishReason: "stop" }],
+      [{ type: "text_delta", delta: 'I need to read_file({"path": "/tmp/x"})' },
+       { type: "done", finishReason: "stop" }],
     ])
 
-    const events = await drainLoop(runLoop({
-      ctx, client, toolExecutor, toolSpecs: [], config,
+    await drainLoop(runLoop({
+      ctx, client, toolExecutor, toolSpecs: [
+        { type: "function", function: { name: "read_file", description: "r", parameters: {} } },
+      ],
+      config,
       signal: new AbortController().signal,
       stats: makeStats(),
       isInterrupted: () => false,
       appendToolResult: () => {},
       maxTurns: 1,
-      effectivePolicy: makePolicy("strict"),
+      effectivePolicy: makePolicy("loose"), // textToolSalvage: "off"
       branchBudgetTracker: tracker,
       checkpointEngine: checkpoint,
       modeDecisionEngine: modeEngine,
       workspaceRoot: tmpDir,
     }))
 
-    expect(events.some(e => e.role === "done")).toBe(true)
+    // With loose policy (textToolSalvage: "off"), salvage should NOT execute the tool
+    expect(salvageToolExecuted).toBe(false)
   })
 
-  it("H4: maxParallelTools is respected by executor", async () => {
-    // Verify that strict policy (maxParallelTools: 1) limits concurrency
-    // by running tools that would otherwise be parallel
-    const tracker = new BranchBudgetTracker()
-    const checkpoint = new CheckpointEngine(tmpDir, "rt-h4")
-    const modeEngine = new ModeDecisionEngine()
-    // Use a real executor-like mock that tracks parallel execution
-    let concurrencySeen = 0
-    let maxConcurrency = 0
-    const tools = new Map<string, (args: Record<string, unknown>) => ToolResult>([
-      ["write_file", async (a: any) => {
-        concurrencySeen++
-        maxConcurrency = Math.max(maxConcurrency, concurrencySeen)
-        await new Promise(r => setTimeout(r, 50))
-        concurrencySeen--
-        return { content: `wrote ${a.path}`, isError: false }
-      }],
-    ])
-    const toolExecutor = makeMockExecutor(tools)
-    const ctx = new ContextManager(20, 32_768)
-    const config = { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" }
+  it("H4: StreamingToolExecutor respects maxParallelTools concurrency limit", async () => {
+    // Import the real StreamingToolExecutor for a concurrency test
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
 
-    // Model calls write_file twice in one batch
-    const client = makeClient([
-      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: JSON.stringify({ path: "/tmp/a" }) },
-       { type: "tool_call_end", toolCallIndex: 1, id: "tc2", name: "write_file", arguments: JSON.stringify({ path: "/tmp/b" }) },
-       { type: "done", finishReason: "tool_calls" }],
-      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
-    ])
+    let activeCount = 0
+    let maxActive = 0
+    let runCount = 0
 
-    await drainLoop(runLoop({
-      ctx, client, toolExecutor, toolSpecs: [], config,
-      signal: new AbortController().signal,
-      stats: makeStats(),
-      isInterrupted: () => false,
-      appendToolResult: () => {},
-      maxTurns: 2,
-      effectivePolicy: makePolicy("strict"), // maxParallelTools: 1
-      branchBudgetTracker: tracker,
-      checkpointEngine: checkpoint,
-      modeDecisionEngine: modeEngine,
-      workspaceRoot: tmpDir,
+    // Create 5 shared tools via a Map
+    const tools = new Map<string, AgentTool>()
+    for (let i = 0; i < 5; i++) {
+      const idx = i
+      tools.set(`tool_${i}`, {
+        name: `tool_${i}`,
+        description: `shared tool ${i}`,
+        parameters: { type: "object", properties: {} },
+        execute: async (_args: Record<string, unknown>, _ctx: ToolContext) => {
+          activeCount++
+          maxActive = Math.max(maxActive, activeCount)
+          runCount++
+          await new Promise(r => setTimeout(r, 30))
+          activeCount--
+          return { content: `done ${idx}`, isError: false }
+        },
+      } as AgentTool)
+    }
+
+    const executor = new StreamingToolExecutor(tools, "test-session-h4", "/tmp")
+
+    // Create 5 tool calls in one batch, all shared
+    const toolCalls: ToolCall[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `tc-${i}`,
+      type: "function" as const,
+      function: { name: `tool_${i}`, arguments: "{}" },
     }))
 
-    // With strict policy (maxParallelTools=1), max concurrency should be 1
-    // NOTE: mock executor ignores maxParallelTools, so this is a weak test
-    // Real StreamingToolExecutor enforces the limit. This tests the wiring exists.
-    expect(maxConcurrency).toBeGreaterThanOrEqual(1)
-  })
+    const results: ToolResult[] = []
+    const events: LoopEvent[] = []
+    for await (const evt of executor.run(
+      toolCalls,
+      new AbortController().signal,
+      (tc, r) => { results.push(r) },
+      undefined,
+      undefined,
+      2, // maxParallelTools = 2
+    )) {
+      events.push(evt)
+    }
+
+    // With maxParallelTools=2, max concurrent active should never exceed 2
+    expect(maxActive).toBeLessThanOrEqual(2)
+    // All 5 tools should have executed
+    expect(runCount).toBe(5)
+    // Results should include all 5
+    expect(results).toHaveLength(5)
+    // Events should include tool_start for each of the 5 tools
+    const toolStarts = events.filter(e => (e as any).role === "tool_start")
+    expect(toolStarts).toHaveLength(5)
+    // toolCallIndex values 0-4 should all be present in tool_start events (not necessarily in order)
+    const indices = toolStarts.map(e => (e as any).toolCallIndex).sort((a: number, b: number) => a - b)
+    expect(indices).toEqual([0, 1, 2, 3, 4])
+  }, 15_000)
 })

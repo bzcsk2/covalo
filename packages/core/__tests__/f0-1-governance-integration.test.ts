@@ -207,40 +207,44 @@ describe("F0-1: governance/checkpoint 三件套集成", () => {
     expect(decision.blocked).toBe(false)
   })
 
-  it("free policy 下 step_completed 不落盘，forced policy 下才落盘", async () => {
+  it("checkpointPolicy 决定落盘频率 — minimal 下 step_completed 不落盘", async () => {
     const tracker = new BranchBudgetTracker()
     const checkpoint = new CheckpointEngine(tmpDir, "policy-test")
     tracker.bindWorkspaceRoot(tmpDir)
 
-    // free policy（默认）
+    // minimal checkpointPolicy: only tool_failed + final_draft
+    checkpoint.setCheckpointPolicy("minimal")
     expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
     expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(false)
 
-    // 但 tool_failed / final_draft 在 free 下也落盘
+    // tool_failed / final_draft 在 minimal 下也落盘
     expect(checkpoint.shouldPersistOnTrigger("tool_failed")).toBe(true)
     expect(checkpoint.shouldPersistOnTrigger("final_draft")).toBe(true)
-    expect(checkpoint.shouldPersistOnTrigger("verification_failed")).toBe(true)
-    expect(checkpoint.shouldPersistOnTrigger("compaction")).toBe(true)
+    // verification_failed / compaction are NOT in minimal
+    expect(checkpoint.shouldPersistOnTrigger("verification_failed")).toBe(false)
+    expect(checkpoint.shouldPersistOnTrigger("compaction")).toBe(false)
 
-    // 启用 forced policy
+    // forced policy 不再覆盖 checkpointPolicy
     checkpoint.setForcedPolicy(true)
-    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(true)
-    expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(true)
+    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
+    expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(false)
 
-    // 关闭 forced policy
     checkpoint.setForcedPolicy(false)
     expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
   })
 
-  it("exit_forced 时关闭 forced policy，恢复 free 落盘策略", async () => {
+  it("exit_forced 关闭 forced policy，不影响 checkpoint policy", async () => {
     const tracker = new BranchBudgetTracker()
     const modeEngine = new ModeDecisionEngine()
     const checkpoint = new CheckpointEngine(tmpDir, "exit-forced-test")
     tracker.bindWorkspaceRoot(tmpDir)
 
-    // 进入 forced
+    // 设为 minimal，确保 step_completed 不落盘
+    checkpoint.setCheckpointPolicy("minimal")
     checkpoint.setForcedPolicy(true)
     expect(checkpoint.isForcedPolicyActive()).toBe(true)
+    // forced 不影响 minimal policy
+    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
 
     // 模拟稳定状态：所有 pending 清零，stableRounds 达到阈值
     const state = createEmptyRuntimeExecutionState({
@@ -270,6 +274,7 @@ describe("F0-1: governance/checkpoint 三件套集成", () => {
       checkpoint.setForcedPolicy(false)
     }
     expect(checkpoint.isForcedPolicyActive()).toBe(false)
+    // checkpointPolicy unchanged
     expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
   })
 
@@ -401,8 +406,8 @@ describe("F0-1: 审计反馈 B1-B6 验证", () => {
     if (strictness === "strict") {
       return {
         strictness: "strict", source: "default",
-        toolset: "compact", maxParallelTools: 1, maxTurns: 50,
-        readBeforeWrite: "block", textToolSalvage: "off",
+        toolset: "minimal", maxParallelTools: 2, maxTurns: 30,
+        readBeforeWrite: "block", textToolSalvage: "always",
         branchBudget: "enforce", checkpoint: "frequent",
         verification: "block", earlyStop: "aggressive",
         toolRouting: "two-stage", executionMode: "forced",
@@ -412,8 +417,8 @@ describe("F0-1: 审计反馈 B1-B6 验证", () => {
     if (strictness === "loose") {
       return {
         strictness: "loose", source: "default",
-        toolset: "full", maxParallelTools: 4, maxTurns: 100,
-        readBeforeWrite: "off", textToolSalvage: "always",
+        toolset: "full", maxParallelTools: 5, maxTurns: 80,
+        readBeforeWrite: "off", textToolSalvage: "off",
         branchBudget: "observe", checkpoint: "minimal",
         verification: "warn", earlyStop: "critical-only",
         toolRouting: "direct", executionMode: "free",
@@ -422,12 +427,12 @@ describe("F0-1: 审计反馈 B1-B6 验证", () => {
     }
     return {
       strictness: "normal", source: "default",
-      toolset: "standard", maxParallelTools: 2, maxTurns: 75,
+      toolset: "coding", maxParallelTools: 3, maxTurns: 50,
       readBeforeWrite: "warn", textToolSalvage: "on-native-failure",
       branchBudget: "recover", checkpoint: "safe-point",
       verification: "require-or-waive", earlyStop: "standard",
       toolRouting: "auto", executionMode: "adaptive",
-      shellPolicy: "dual-track", supervisorPolicy: "on-failure",
+      shellPolicy: "dual-track", supervisorPolicy: "critical-only",
     }
   }
 
