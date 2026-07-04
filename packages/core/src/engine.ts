@@ -915,7 +915,8 @@ supervisor_analyse -> worker_do -> worker_report -> supervisor_check
 - 不要检查实现文件。
 - 不要验证代码。
 - 不要执行 Worker 任务。
-- 最多使用 get_goal 和 list_dir 做浅层目录了解，**不要重复调用同一工具**。
+- 使用 get_goal 和 list_dir 做浅层目录了解，**不要重复调用同一工具**。
+- 仅在需要更新结构化目标状态时才调用 update_goal；否则不要调用它。
 - 如果浅层了解不够，在计划中说明假设，让 Worker 去检查细节。
 - 制定计划后停止。协调器会将你的计划传递给 Worker。
 
@@ -946,7 +947,8 @@ Your current job:
 - Do not inspect implementation files.
 - Do not verify code.
 - Do not perform Worker tasks.
-- Use at most get_goal and list_dir for shallow directory orientation; do NOT call the same tool repeatedly.
+- Use get_goal and list_dir for shallow directory orientation; do NOT call the same tool repeatedly.
+- Only call update_goal when you need to update structured goal state; otherwise do not call it.
 - If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
 - After producing the plan, stop. The coordinator will pass your plan to the Worker.
 

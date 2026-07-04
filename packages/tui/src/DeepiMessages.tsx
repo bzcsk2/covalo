@@ -202,19 +202,37 @@ function formatToolUseSummary(tool: ToolStatus): string {
   return keys.length > 0 ? compactText(keys.join(', ')) : '';
 }
 
-function formatToolResultSummary(tool: ToolStatus): string {
+/**
+ * 单行短摘要：用于折叠态下内联到签名行末尾。
+ * 多行输出在总长度合理时合并为一行（用两个空格分隔）；
+ * 超长时回退到首行 + 省略号。仅用于"一眼可辨"的预览，不承载完整信息。
+ */
+export function formatToolResultInlineSummary(tool: ToolStatus): string {
   const output = formatToolOutput(tool).trim();
-  if (!output) return tool.status === 'error' ? 'Error' : 'Done';
+  if (!output) return tool.status === 'error' ? 'Error' : tool.status === 'running' ? '' : 'Done';
   const lines = output.split('\n').map(line => line.trim()).filter(Boolean);
   if (lines.length === 0) return tool.status === 'error' ? 'Error' : 'Done';
-  const maxLines = tool.status === 'error' ? 3 : 4;
-  // 多行结果在总长度合理时合并为一行（用两个空格分隔），适配终端横向布局
-  // 例如 List 输出多个目录项时，可显示为 "dir1/  dir2/  file.txt"
-  const sliced = lines.slice(0, maxLines).map(line => compactText(line, 60));
+  // 多行结果在总长度合理时合并为一行（用两个空格分隔）
+  const sliced = lines.slice(0, 4).map(line => compactText(line, 60));
   const joined = sliced.join('  ');
   if (joined.length <= 100) return joined;
-  // 超长时回退到首行 + 省略号
   return compactText(sliced[0], 100) + (sliced.length > 1 ? '  …' : '');
+}
+
+/**
+ * 多行详细结果：用于 expanded 或 error 状态下的诊断展示。
+ * 保留原始行结构（不合并、不省略），仅按需截断到合理行数。
+ */
+export function formatToolResultDetailLines(tool: ToolStatus): string[] {
+  const output = formatToolOutput(tool).trim();
+  if (!output) return tool.status === 'error' ? ['Error'] : [];
+  const lines = output.split('\n').map(line => line.trim()).filter(Boolean);
+  if (lines.length === 0) return tool.status === 'error' ? ['Error'] : [];
+  // 错误状态保留更多上下文（最多 8 行），正常状态保留 6 行
+  const maxLines = tool.status === 'error' ? 8 : 6;
+  const sliced = lines.slice(0, maxLines);
+  // 每行做 compactText 处理（控制宽度），但不合并
+  return sliced.map(line => compactText(line, 200));
 }
 
 const UserMessage = memo(function UserMessage({ message }: { message: ChatMessage }) {
@@ -317,14 +335,18 @@ const AssistantToolUseMessage = memo(function AssistantToolUseMessage({
 }) {
   const name = displayToolName(tool.name);
   const summary = formatToolUseSummary(tool);
-  const result = formatToolResultSummary(tool);
   const color = tool.status === 'error' ? TONE.err : tool.status === 'running' ? TONE.brand : TONE.ok;
   const glyph = tool.status === 'running' ? '\u25CF' : tool.status === 'error' ? '\u2717' : '\u2713';
 
-  const showResult = (tool.status === 'running' || expanded || tool.status === 'error') && result;
-  const resultLines = showResult ? result!.split('\n') : [];
-  // 结果内联到签名行末尾（formatToolResultSummary 已将多行合并为单行）
-  const inlineResult = resultLines.length >= 1 ? resultLines[0] : null;
+  // 折叠态：单行短摘要内联到签名行末尾（不承载完整信息，仅一眼可辨）
+  const inlineSummary = formatToolResultInlineSummary(tool);
+  // 展开/错误态：多行详细结果，保留原始行结构用于诊断
+  const detailLines = formatToolResultDetailLines(tool);
+
+  // 展开或错误状态时显示完整 detail（不显示 inline，避免信息重复）
+  const showDetail = (expanded || tool.status === 'error') && detailLines.length > 0;
+  // 折叠态且非 error 时显示 inline summary（running 状态下若有 output 也显示）
+  const showInline = !showDetail && inlineSummary.length > 0;
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
@@ -336,15 +358,18 @@ const AssistantToolUseMessage = memo(function AssistantToolUseMessage({
         <Text bold color={color as any} dimColor>{name}</Text>
         {summary && <Text dimColor>{`(${summary})`}</Text>}
         <Text dimColor>{tool.elapsedMs !== undefined ? ` ${(tool.elapsedMs / 1000).toFixed(1)}s` : ''}</Text>
-        {inlineResult && (
+        {showInline && (
           <Text dimColor color={(tool.status === 'error' ? TONE.err : FG.meta) as any}>
-            {` → ${inlineResult}`}
+            {` → ${inlineSummary}`}
           </Text>
         )}
+        {showDetail && detailLines.length > 1 && (
+          <Text dimColor color={FG.meta as any}>{` (+${detailLines.length - 1} 行)`}</Text>
+        )}
       </Box>
-      {showResult && !inlineResult && resultLines.length > 1 && (
+      {showDetail && (
         <Box flexDirection="column" paddingLeft={4}>
-          {resultLines.slice(1).map((line, index) => (
+          {detailLines.map((line, index) => (
             <Text key={`${tool.key}:result:${index}`} color={(tool.status === 'error' ? TONE.err : FG.meta) as any} dimColor>
               {line}
             </Text>
