@@ -29,6 +29,7 @@ export interface SessionReadResult {
 
 export interface SessionWriterStatus {
   queueSize: number
+  queueBytes: number  // SPEC-06: 队列总字节，用于观测内存压力
   droppedCount: number
   flushing: boolean
   lastError?: string
@@ -183,6 +184,8 @@ export class AsyncSessionWriter {
   private path: string
   private queue: string[] = []
   private queueRecords: SessionRecord[] = []
+  private queueSizes: number[] = []  // SPEC-06: 每条记录的字节大小，与 queue/queueRecords 同步
+  private queueBytes = 0              // SPEC-06: 队列总字节，用于触发淘汰
   private flushing = false
   private initPromise?: Promise<void>
   private droppedCount = 0
@@ -191,6 +194,8 @@ export class AsyncSessionWriter {
   private logger: RuntimeLogger
 
   private static MAX_QUEUE_SIZE = 500
+  // SPEC-06: 字节上限 10MiB，避免 500 条大 messages 快照占用过多内存
+  private static MAX_QUEUE_BYTES = 10 * 1024 * 1024
 
   constructor(path: string, logger: RuntimeLogger = noopRuntimeLogger) {
     this.path = path
@@ -211,8 +216,18 @@ export class AsyncSessionWriter {
   enqueue(record: SessionRecord): void {
     try {
       const serialized = JSON.stringify(record) + "\n"
+      const size = Buffer.byteLength(serialized, "utf8")
+
+      // SPEC-06: messages 类型入队前，先 coalesce 掉旧的未 flush messages 快照
+      // 最新 messages 快照保留，旧的可以丢，因为 readDetailed 只读最后一条
+      if (record.type === "messages") {
+        this.evictOlderQueuedMessages()
+      }
+
       this.queue.push(serialized)
       this.queueRecords.push(record)
+      this.queueSizes.push(size)
+      this.queueBytes += size
       this.evictIfNeeded()
       this.flushSoon().catch(() => {})
     } catch (err) {
@@ -225,19 +240,75 @@ export class AsyncSessionWriter {
     }
   }
 
+  /**
+   * SPEC-06: 丢弃队列中所有已存在的旧 messages 快照。
+   * 即将入队的新 messages 是最新快照，旧的可以丢，因为 readDetailed 只读最后一条。
+   * 从后向前删，避免索引漂移。
+   */
+  private evictOlderQueuedMessages(): void {
+    for (let i = this.queueRecords.length - 1; i >= 0; i--) {
+      if (this.queueRecords[i].type === "messages") {
+        this.queueBytes -= this.queueSizes[i]
+        this.queue.splice(i, 1)
+        this.queueRecords.splice(i, 1)
+        this.queueSizes.splice(i, 1)
+        this.droppedCount++
+      }
+    }
+  }
+
   private evictIfNeeded(): void {
     const before = this.queue.length
-    while (this.queue.length > AsyncSessionWriter.MAX_QUEUE_SIZE) {
+    // SPEC-06: 同时考虑条数和字节，超出任一上限都触发淘汰
+    while (
+      this.queue.length > AsyncSessionWriter.MAX_QUEUE_SIZE ||
+      this.queueBytes > AsyncSessionWriter.MAX_QUEUE_BYTES
+    ) {
+      // 优先丢 event（事件可以丢，不影响状态恢复）
       const idx = this.queueRecords.findIndex(r => r.type === "event")
       if (idx >= 0) {
+        this.queueBytes -= this.queueSizes[idx]
         this.queue.splice(idx, 1)
         this.queueRecords.splice(idx, 1)
+        this.queueSizes.splice(idx, 1)
         this.droppedCount++
         continue
       }
+      // 再丢 stats（统计可以丢）
+      const statsIdx = this.queueRecords.findIndex(r => r.type === "stats")
+      if (statsIdx >= 0) {
+        this.queueBytes -= this.queueSizes[statsIdx]
+        this.queue.splice(statsIdx, 1)
+        this.queueRecords.splice(statsIdx, 1)
+        this.queueSizes.splice(statsIdx, 1)
+        this.droppedCount++
+        continue
+      }
+      // 最后丢最旧的 messages，但尽量保留最新一条 messages
+      // 找最老的 messages（保留最新一条）
+      let oldestMsgIdx = -1
+      let msgCount = 0
+      for (let i = 0; i < this.queueRecords.length; i++) {
+        if (this.queueRecords[i].type === "messages") {
+          msgCount++
+          if (oldestMsgIdx < 0) oldestMsgIdx = i
+        }
+      }
+      if (oldestMsgIdx >= 0 && msgCount > 1) {
+        this.queueBytes -= this.queueSizes[oldestMsgIdx]
+        this.queue.splice(oldestMsgIdx, 1)
+        this.queueRecords.splice(oldestMsgIdx, 1)
+        this.queueSizes.splice(oldestMsgIdx, 1)
+        this.droppedCount++
+        continue
+      }
+      // 兜底：丢最旧的一条（不再保留 messages）
       if (this.queue.length > 1) {
+        const size = this.queueSizes[0]
+        this.queueBytes -= size
         this.queue.shift()
         this.queueRecords.shift()
+        this.queueSizes.shift()
         this.droppedCount++
       } else {
         break
@@ -247,6 +318,7 @@ export class AsyncSessionWriter {
       this.logger.debug("session.writer.overflow", {
         droppedCount: this.droppedCount,
         queueSize: this.queue.length,
+        queueBytes: this.queueBytes,
         evicted: before - this.queue.length,
       })
     }
@@ -259,6 +331,7 @@ export class AsyncSessionWriter {
   getStatus(): SessionWriterStatus {
     return {
       queueSize: this.queue.length,
+      queueBytes: this.queueBytes,
       droppedCount: this.droppedCount,
       flushing: this.flushing,
       lastError: this.lastError,
@@ -298,8 +371,12 @@ export class AsyncSessionWriter {
         await this.initPromise.catch(() => {})
       }
       while (this.queue.length > 0) {
-        const chunk = this.queue.splice(0, 50).join("")
+        const batch = this.queue.splice(0, 50)
+        const sizes = this.queueSizes.splice(0, 50)
         this.queueRecords.splice(0, 50)
+        const chunkBytes = sizes.reduce((a, b) => a + b, 0)
+        this.queueBytes -= chunkBytes
+        const chunk = batch.join("")
         try {
           await appendFile(this.path, chunk, "utf-8")
         } catch (err) {
