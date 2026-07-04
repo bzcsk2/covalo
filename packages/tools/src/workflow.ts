@@ -4,7 +4,13 @@ import { safeStringify } from "./safe-stringify.js"
 export function createWorkflowTool(): AgentTool {
   return {
     name: "Workflow",
-    description: "Execute multi-step workflow scripts. A workflow is a JSON array of steps, each with a tool name, arguments, and optional conditions. Runs steps sequentially with output from each step fed to the next.",
+    // T15: 嵌套工具调用受安全管线约束 — ask-tier / deny-tier / exec 类工具
+    // （write_file、edit、bash、shell、exec 等）在 Workflow 内部会被拒绝。
+    // 需要确认或执行的工具请作为顶层工具调用发起。
+    description:
+      "Execute multi-step workflow scripts. A workflow is a JSON array of steps, each with a tool name, arguments, and optional conditions. Runs steps sequentially with output from each step fed to the next. " +
+      "Nested write/exec tools that require confirmation (write_file, edit, bash, shell, exec) are NOT executed inside Workflow and return an error; run them as top-level tool calls instead. " +
+      "Read-only tools (read_file, grep, glob, list_dir) can be nested freely.",
     parameters: {
       type: "object",
       properties: {

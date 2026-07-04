@@ -315,12 +315,13 @@ describe("verifier edge cases", () => {
   });
 
   afterAll(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+    // A1: Windows 上 rmSync 可能因文件锁定失败（EBUSY），加 try-catch 避免影响测试结果。
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     delete process.env.COVALO_ALLOW_DIRECT_VERIFIER;
   });
 
   afterAll(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   });
 
   it("should pass file-assert with mustExist false when file absent", async () => {
@@ -404,13 +405,17 @@ describe("verifier edge cases", () => {
   });
 
   it("should produce error on command timeout", async () => {
+    // A1: 跨平台 sleep — Windows 无 sleep 命令，改用 node 内联 setTimeout。
+    const sleepCmd = process.platform === "win32"
+      ? 'node -e "setTimeout(()=>{},10000)"'
+      : "sleep 10"
     const manifest: EvalCaseManifest = {
       id: "cmd-timeout",
       category: "coding-basics", suite: "smoke",
       title: "", description: "",
       fixtureSource: "none", taskPrompt: "",
       expectedVerification: [],
-      verifier: { type: "command", command: "sleep 10", timeoutMs: 100 },
+      verifier: { type: "command", command: sleepCmd, timeoutMs: 100 },
     };
     const r = await runVerifier(manifest, tmpDir);
     expect(r.verdict).toBe("error");

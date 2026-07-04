@@ -116,9 +116,13 @@ export async function createCaseWorkspace(
   }
 
   const { execSync } = await import("node:child_process");
-  execSync("git init 2>/dev/null", { cwd: workspaceDir, stdio: "pipe" });
-  execSync("git config user.email eval@covalo && git config user.name covalo-eval", { cwd: workspaceDir, stdio: "pipe" });
-  execSync("git add -A && git commit -m baseline --allow-empty 2>/dev/null", { cwd: workspaceDir, stdio: "pipe" });
+  // A1: 跨平台兼容 — 去掉 POSIX-only 的 2>/dev/null（用 stdio:"pipe" 抑制输出），
+  // 拆分 && 链为独立调用（Windows cmd.exe 的 && 行为与 POSIX 不同）。
+  execSync("git init", { cwd: workspaceDir, stdio: "pipe" });
+  execSync("git config user.email eval@covalo", { cwd: workspaceDir, stdio: "pipe" });
+  execSync("git config user.name covalo-eval", { cwd: workspaceDir, stdio: "pipe" });
+  execSync("git add -A", { cwd: workspaceDir, stdio: "pipe" });
+  execSync("git commit -m baseline --allow-empty", { cwd: workspaceDir, stdio: "pipe" });
 
   return {
     workspaceDir,

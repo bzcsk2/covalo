@@ -118,9 +118,12 @@ describe("provider-registry", () => {
     if (provider.id === "bwrap") {
       expect(capabilities.official).toBe(true);
     } else {
+      // A2: bwrap 不可用时回退到 soft-workspace — 走 detectBestProvider 的
+      // sandbox.benchmark 分支，直接返回 soft-workspace.canRun() 的 caps，
+      // reason 不含 "falling back"（那是 fallback 路径才有的标记）。
       expect(provider.id).toBe("soft-workspace");
       expect(capabilities.official).toBe(false);
-      expect(capabilities.reason).toContain("falling back");
+      expect(capabilities.reason).toContain("diagnostic only");
     }
   });
 
@@ -176,21 +179,31 @@ describe("soft-workspace", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  // A2: 跨平台验证 — 用 node -e 读 process.env，避免依赖 POSIX shell 的 $VAR 展开。
+  // SoftWorkspaceProvider 实现里会显式设置 HOME: safeCwd 并合并 input.env，所以两个测试
+  // 在 Windows / POSIX 上都应该通过。
   it("run sets HOME to cwd", async () => {
     const p = new SoftWorkspaceProvider();
-    const result = await p.run({ command: "echo $HOME", cwd: tmpDir, readRoots: [tmpDir], writeRoots: [tmpDir] });
+    const result = await p.run({
+      command: 'node -e "process.stdout.write(process.env.HOME || \\"\\")"',
+      cwd: tmpDir,
+      readRoots: [tmpDir],
+      writeRoots: [tmpDir],
+    });
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(tmpDir);
   });
 
   it("run passes env vars", async () => {
     const p = new SoftWorkspaceProvider();
     const result = await p.run({
-      command: "echo $MY_VAR",
+      command: 'node -e "process.stdout.write(process.env.MY_VAR || \\"\\")"',
       cwd: tmpDir,
       readRoots: [tmpDir],
       writeRoots: [tmpDir],
       env: { MY_VAR: "custom_value" },
     });
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("custom_value");
   });
 });
