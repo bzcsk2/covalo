@@ -156,25 +156,41 @@ export class SessionLoader {
       return 0
     }
     const jsonl = files.filter(f => f.endsWith(".jsonl"))
+    const jsonlNames = new Set(jsonl.map(f => f.replace(/\.jsonl$/, "")))
+
+    // 清理孤儿 .checkpoint.json（无对应 .jsonl），不受 maxSessions 限制
+    for (const f of files) {
+      const m = f.match(/^(.+)\.checkpoint\.json$/)
+      if (!m) continue
+      // 跳过无效 session ID（含路径穿越或空 basename）
+      if (!m[1] || m[1].includes("/") || m[1].includes("\\") || m[1] === "." || m[1] === "..") continue
+      if (!jsonlNames.has(m[1])) {
+        await unlink(resolve(this.sessionDir, f)).catch(() => {})
+      }
+    }
+
     if (jsonl.length <= maxSessions) return 0
     const withStats = await Promise.all(jsonl.map(async (f) => {
-      const path = resolve(this.sessionDir, f)
-      try { return { f, path, mtime: (await stat(path)).mtimeMs } }
-      catch { return { f, path, mtime: 0 } }
+      const p = resolve(this.sessionDir, f)
+      try { return { f, p, mtime: (await stat(p)).mtimeMs } }
+      catch { return { f, p, mtime: 0 } }
     }))
     withStats.sort((a, b) => b.mtime - a.mtime)
     const toDelete = withStats.slice(maxSessions)
     let deleted = 0
-    for (const { path } of toDelete) {
+    for (const { f, p } of toDelete) {
       try {
-        await unlink(path)
+        await unlink(p)
         deleted++
       } catch (err) {
-        // FG-60-R: 低噪音日志，不覆盖原始错误语义
         if (process.env.COVALO_DEBUG?.includes("session")) {
-          console.debug(`[session] cleanup unlink failed: ${path}`, err)
+          console.debug(`[session] cleanup unlink failed: ${p}`, err)
         }
       }
+      // 删对应 checkpoint 文件（若无则静默跳过）
+      const basename = f.replace(/\.jsonl$/, "")
+      const checkpointPath = resolve(this.sessionDir, `${basename}.checkpoint.json`)
+      try { await unlink(checkpointPath) } catch {}
     }
     return deleted
   }
@@ -340,23 +356,34 @@ export class AsyncSessionWriter {
   }
 
   /** Best-effort drain: wait until the queue is empty and no flush in progress.
-   *  Idempotent; does not throw. */
-  async drain(): Promise<void> {
+   *  Idempotent; does not throw.
+   *  @param timeoutMs max time to wait in ms (default 10_000). After timeout, logs warning and returns. */
+  async drain(timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    const timedOut = () => Date.now() >= deadline
+    const sleep = () => new Promise(r => setTimeout(r, 5))
     try {
-      // Wait for any active flush to finish
-      while (this.flushing) {
-        await new Promise(r => setTimeout(r, 5))
+      while (this.flushing && !timedOut()) {
+        await sleep()
       }
-      // Trigger one more flush if there's anything left
-      if (this.queue.length > 0) {
+      if (this.queue.length > 0 && !timedOut()) {
         await this.flushSoon()
       }
-      // Wait until queue is fully drained
-      while (this.flushing || this.queue.length > 0) {
-        await new Promise(r => setTimeout(r, 5))
+      while ((this.flushing || this.queue.length > 0) && !timedOut()) {
+        await sleep()
+      }
+      if (this.queue.length > 0 || this.flushing) {
+        if (this.logger.isEnabled("warn")) {
+          this.logger.warn("session.writer.drain_timeout", {
+            queueSize: this.queue.length,
+            queueBytes: this.queueBytes,
+            flushing: this.flushing,
+            lastError: this.lastError,
+            timeoutMs,
+          })
+        }
       }
     } catch (e) {
-      // ADV-BUG-05: Log session drain errors
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("session.writer.drain_error", { error: e instanceof Error ? e.message : String(e) })
       }

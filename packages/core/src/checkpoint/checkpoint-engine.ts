@@ -194,10 +194,33 @@ export class CheckpointEngine {
       runtimeV2: cloneV2(this.v2State),
     }
 
-    await fs.writeFile(tmpPath, JSON.stringify(merged, null, 2), "utf-8")
-    await fs.rename(tmpPath, this.checkpointPath)
+    await this.writeAtomicWithRetry(tmpPath, JSON.stringify(merged, null, 2))
 
     return cloneV2(this.v2State)
+  }
+
+  /**
+   * 原子写入: 写临时文件后 rename，失败后重试（指数退避，最多 3 次）。
+   * 每次失败后清理 tmp 文件，最终仍失败则抛出错误（不吞异常）。
+   * 用 writeFile + rename 保证读方看不到不完整写入。
+   */
+  private async writeAtomicWithRetry(tmpPath: string, data: string): Promise<void> {
+    const maxAttempts = 3
+    let lastError: unknown
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        await fs.writeFile(tmpPath, data, "utf-8")
+        await fs.rename(tmpPath, this.checkpointPath)
+        return
+      } catch (err) {
+        lastError = err
+        await fs.rm(tmpPath, { force: true }).catch(() => {})
+        if (attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 20 * 2 ** attempt))
+        }
+      }
+    }
+    throw lastError
   }
 
   private applyInput(input: CheckpointSaveInput): void {

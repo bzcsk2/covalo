@@ -1,5 +1,18 @@
 /**
  * Shell 命令安全检查 — 复用 shell-exec 的危险模式与敏感路径规则。
+ *
+ * 安全策略选择：宁可误杀，不可放过（false positive > false negative）。
+ * 任何引用敏感路径的命令（如 `find .git -delete`、`rm node_modules -rf`）
+ * 都会被拒绝，即使该命令可能是合法的。这是因为：
+ * 1. 敏感路径上的破坏性操作可能导致不可逆的数据丢失。
+ * 2. 自动化的上下文很难准确判断命令的真实意图。
+ * 3. 用户可以通过显式确认来绕过（ask 模式）。
+ *
+ * HARDEN-02: `find -delete` 和 `find -exec rm` 只在高危目标（/、~、$HOME、$PWD）
+ * 上拦截。普通目录的 `find ... -delete` 是允许的，因为：
+ * - `find` 是合法开发工作流（清理构建产物、批量操作）的常用工具。
+ * - 高危目标上的递归删除是毁灭性的，需要拦截。
+ * - 如果 `find` 指向敏感路径（如 .git），`matchSensitivePathInCommand` 会兜底拦截。
  */
 
 import { resolve } from "node:path"
@@ -39,6 +52,9 @@ const USERMOD = /\busermod\b/
 const CHOWN_RECURSIVE = /\bchown\s+-R\b/
 const MOUNT = /\bmount\b/
 const UMOUNT = /\bumount\b/
+// HARDEN-02: find -delete / -exec rm 只在高危目标上拦截（/、~、$HOME、$PWD），普通目录放行
+const FIND_DELETE_DANGEROUS = /\bfind\s+(?:\/(?=\s|$)|~(?=\s|$)|\$HOME(?=\s|$)|\$PWD(?=\s|$)).*\s-delete\b/
+const FIND_EXEC_RM_DANGEROUS = /\bfind\s+(?:\/(?=\s|$)|~(?=\s|$)|\$HOME(?=\s|$)|\$PWD(?=\s|$)).*\s-exec\s+rm\b/
 
 const POSIX_DENY_PATTERNS = [
   RM_DANGEROUS_TARGET,
@@ -59,6 +75,8 @@ const POSIX_DENY_PATTERNS = [
   CHOWN_RECURSIVE,
   MOUNT,
   UMOUNT,
+  FIND_DELETE_DANGEROUS,
+  FIND_EXEC_RM_DANGEROUS,
 ]
 
 // S1-4: PowerShell deny 模式补全

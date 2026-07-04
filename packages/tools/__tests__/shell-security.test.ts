@@ -188,6 +188,27 @@ describe("S1-4: shell deny pattern extensions", () => {
   it("denies PowerShell Set-ExecutionPolicy", () => {
     expect(matchDeniedShellPattern("Set-ExecutionPolicy Unrestricted", "powershell")).not.toBeNull()
   })
+
+  // ── HARDEN-02: find 危险模式 ──
+  it("denies find -delete", () => {
+    expect(matchDeniedShellPattern("find / -delete", "bash")).not.toBeNull()
+  })
+
+  it("denies find -exec rm", () => {
+    expect(matchDeniedShellPattern("find / -name '*.tmp' -exec rm {} \\;", "bash")).not.toBeNull()
+  })
+
+  it("denies find with -exec rm -rf", () => {
+    expect(matchDeniedShellPattern("find ~ -name '*~' -exec rm -rf {} +", "bash")).not.toBeNull()
+  })
+
+  it("allows safe find -print", () => {
+    expect(matchDeniedShellPattern("find . -name '*.ts' -print", "bash")).toBeNull()
+  })
+
+  it("allows safe find -type", () => {
+    expect(matchDeniedShellPattern("find src -type f", "bash")).toBeNull()
+  })
 })
 
 describe("matchSensitivePathInCommand", () => {
@@ -271,5 +292,60 @@ describe("validateShellCommand", () => {
     const r = validateShellCommand("", "bash")
     expect(r.ok).toBe(false)
     expect(r.error).toContain("required")
+  })
+})
+
+// ── HARDEN-02: find -delete 敏感性 ──
+describe("HARDEN-02: find -delete security", () => {
+  it("find on sensitive path (.git/objects) is rejected", () => {
+    const r = validateShellCommand("find .git/objects -type f -delete", "bash")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("sensitive")
+  })
+
+  it("find on non-sensitive path (src) is allowed", () => {
+    const r = validateShellCommand("find src -name '*.ts' -delete", "bash")
+    expect(r.ok).toBe(true)
+  })
+
+  it("find on non-sensitive path (/tmp) is allowed", () => {
+    const r = validateShellCommand("find /tmp -type f -delete", "bash")
+    expect(r.ok).toBe(true)
+  })
+
+  it("find without -delete on any path is allowed", () => {
+    const r = validateShellCommand("find . -name '*.log' -mtime +7", "bash")
+    expect(r.ok).toBe(true)
+  })
+
+  it("find on sensitive path (.ssh/id_rsa) with -delete is rejected", () => {
+    const r = validateShellCommand("find .ssh/id_rsa -delete", "bash")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("sensitive")
+  })
+
+  // ── 高危目标 deny ──
+  it("find / -delete is denied (root target)", () => {
+    expect(matchDeniedShellPattern("find / -type f -delete", "bash")).not.toBeNull()
+  })
+
+  it("find ~ -delete is denied (home target)", () => {
+    expect(matchDeniedShellPattern("find ~ -name '*.tmp' -delete", "bash")).not.toBeNull()
+  })
+
+  it("find $HOME -delete is denied", () => {
+    expect(matchDeniedShellPattern("find $HOME -type f -delete", "bash")).not.toBeNull()
+  })
+
+  it("find $PWD -delete is denied", () => {
+    expect(matchDeniedShellPattern("find $PWD -name '*.log' -delete", "bash")).not.toBeNull()
+  })
+
+  it("find / -exec rm is denied", () => {
+    expect(matchDeniedShellPattern("find / -type f -exec rm {} +", "bash")).not.toBeNull()
+  })
+
+  it("find src -exec rm is allowed (non-dangerous target)", () => {
+    expect(matchDeniedShellPattern("find src -type f -exec rm {} +", "bash")).toBeNull()
   })
 })

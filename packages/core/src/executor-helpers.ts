@@ -76,8 +76,11 @@ export async function evaluatePermission(
       toolName: tc.function.name, args, tier: handler.approval,
       permissionDecision: "ask",
     })
-  } catch {
+  } catch (e) {
     hookDecision = "deny"
+    if (hookManager) {
+      hookManager.lastHookDenyReason = `Hook execution failed: ${e instanceof Error ? e.message : String(e)}`
+    }
   }
 
   if (hookDecision === "allow") return "allow"

@@ -68,6 +68,12 @@ export const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffect> = {
   AskUserQuestion: "none",
   Lsp: "none",
 
+  // Goal / mailbox tools
+  get_goal: "none",
+  update_goal: "workspace",
+  read_mailbox: "none",
+  send_message: "external",
+
   // Legacy aliases
   run_command: "process",
   shell: "process",
