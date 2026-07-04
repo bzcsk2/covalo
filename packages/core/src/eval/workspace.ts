@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import type { EvalCaseManifest, SetupResult, SetupCommandResult } from "./types";
 import type { SandboxProvider, SandboxCommand } from "../sandbox/types";
 import { runMaterializers, initDefaultMaterializers } from "./materialize/shared";
+import { resolveWithinRoot, UnsafeEvalPathError } from "./path-guards";
 
 export interface WorkspaceInfo {
   workspaceDir: string;
@@ -53,16 +54,30 @@ export async function createCaseWorkspace(
 
   await mkdir(workspaceDir, { recursive: true });
 
-  const fixturePath = join(getFixtureDir(), manifest.fixtureSource);
-  if (existsSync(fixturePath)) {
-    await cp(fixturePath, workspaceDir, {
-      recursive: true,
-      force: true,
-    });
-  }
-
   const isMaterialized = manifest.fixtureSource.startsWith("__");
-  if (isMaterialized) {
+
+  if (!isMaterialized) {
+    try {
+      const fixturePath = resolveWithinRoot(
+        getFixtureDir(),
+        manifest.fixtureSource,
+        `fixtureSource for ${manifest.id}`,
+      );
+      if (existsSync(fixturePath)) {
+        await cp(fixturePath, workspaceDir, {
+          recursive: true,
+          force: true,
+        });
+      }
+    } catch (err) {
+      if (err instanceof UnsafeEvalPathError) {
+        throw new UnsafeEvalPathError(
+          `Unsafe fixtureSource for ${manifest.id}: ${manifest.fixtureSource}: ${err.message}`
+        );
+      }
+      throw err;
+    }
+  } else {
     await initDefaultMaterializers();
     await runMaterializers(manifest, workspaceDir);
   }
