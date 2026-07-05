@@ -175,6 +175,9 @@ describe("TT2: E2E tool chains through engine", () => {
       genText("recovered"),
     ])
     const engine = makeEngine()
+    // FIX-H1: 自定义工具（非 read/write/bash/edit 等真实工具）在 normal/coding toolset 下会被
+    // applyDeterministicCategoryFilter 当作 "full" 类过滤掉，必须切到 loose 让 toolset="full" 放行。
+    engine.setHarnessStrictness("loose")
     engine.registerTool({
       name: "failing_tool", description: "fails",
       parameters: { type: "object", properties: {} },
@@ -182,7 +185,9 @@ describe("TT2: E2E tool chains through engine", () => {
       async execute() { return { content: JSON.stringify({ error: "something went wrong" }), isError: true } },
     })
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("trigger error")) events.push(e)
+    // FIX-H1: 传不含 toolNames 的 agentConfig 跳过 resolveEffectiveTools 的第一层白名单过滤，
+    // 同时 setHarnessStrictness("loose") 让 toolset="full" 放行第二层 category 过滤。
+    for await (const e of engine.submit("trigger error", { name: "build" })) events.push(e)
     const errorEvent = events.find((e) => e.role === "error" && e.toolName === "failing_tool")
     expect(errorEvent).toBeDefined()
     expect(errorEvent!.severity).toBe("error")
@@ -195,6 +200,8 @@ describe("TT2: E2E tool chains through engine", () => {
       genTool("slow_tool", {}),
     ])
     const engine = makeEngine()
+    // FIX-H1: 自定义工具 slow_tool 需 loose toolset 放行
+    engine.setHarnessStrictness("loose")
     let executed = false
     engine.registerTool({
       name: "slow_tool", description: "slow",
@@ -207,7 +214,8 @@ describe("TT2: E2E tool chains through engine", () => {
       },
     })
     const events: LoopEvent[] = []
-    const iter = engine.submit("interrupt test")
+    // FIX-H1: 传不含 toolNames 的 agentConfig 跳过第一层白名单过滤
+    const iter = engine.submit("interrupt test", { name: "build" })
     setTimeout(() => engine.interrupt(), 50)
     for await (const e of iter) events.push(e)
     expect(executed).toBe(true)

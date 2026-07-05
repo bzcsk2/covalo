@@ -25,6 +25,7 @@ import {
   type VerificationGateState,
 } from "./governance/verification-gate.js"
 import { parseToolCallArgs } from "./executor-helpers.js"
+import type { AgentRole } from "./agent-profile/types.js"
 import type { SupervisorGuidanceConfig } from "./supervisor/guided-loop.js"
 import {
   buildSupervisorTriggerContext,
@@ -108,6 +109,8 @@ export interface LoopOptions {
   modeDecisionEngine?: ModeDecisionEngine
   /** F0-1: 工作区根（BranchBudgetTracker 路径规范化用） */
   workspaceRoot?: string
+  /** FIX-H1: 当前 loop 的角色（supervisor 的工具集由 resolveEffectiveTools phase/mode 策略决定，不参与 toolset 二次过滤） */
+  role?: AgentRole
 }
 
 const DEFAULT_MAX_TURNS = 100
@@ -131,6 +134,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     workspaceRoot,
     /** F0-1: 有效策略（executionMode / branchBudget / checkpoint 三字段被运行时消费） */
     effectivePolicy,
+    /** FIX-H1: 当前 loop 的角色 */
+    role,
   } = opts
   const diagnosticsEnabled = logger.isEnabled("error")
 
@@ -611,6 +616,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         // - undefined / false：router 看到 selectedCategory 存在 → 进入 Stage 2（category_tools）
         // - true：router 重新注入 select_category（用于重置后让模型重新选择）
         // 这里我们已经有 selectedCategory，希望进入 Stage 2，所以保持 undefined。
+        // FIX-H1: 传入 effectivePolicy.toolset 使工具集规模（minimal/coding/full）真实生效。
+        // Supervisor 的工具集已由 resolveEffectiveTools 的 phase/mode 策略决定，
+        // 不应再受 toolset 二次过滤（否则 AskUserQuestion/todowrite/AgentTool/get_goal 等
+        // 治理工具会被 applyDeterministicCategoryFilter 误删），所以 supervisor 跳过 toolset。
+        toolset: role === "supervisor" ? undefined : effectivePolicy?.toolset,
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools
@@ -624,6 +634,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         })
       }
     }
+
+    // FIX-H1: 将 routedTools 同步到本轮 allowed set，确保不执行的工具不可见也不可调用
+    const effectiveAllowedToolNames = routedTools
+      ? new Set(routedTools.map(spec => spec.function.name))
+      : allowedToolNames
 
     // L1-fix: 把 ctx.buildMessages() 从 stream try-catch 中拆出。
     // 原先 buildMessages 抛出的确定性错误（prefix/scratch 超窗、aggressive
@@ -851,7 +866,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
 
             try {
-              for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, allowedToolNames)) {
+              for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
                 yield toolEvent
                 // P5.5: tool_progress is transient — don't persist to session
                 if (toolEvent.role !== 'tool_progress') {
@@ -989,7 +1004,12 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
 
             // DRF-31: stop 且无原生 tool_calls 时，抢救正文中的嵌入工具调用
-            if (reason === "stop" && toolCalls.length === 0 && fullContent.trim()) {
+            // FIX-H2: 只有 textToolSalvage 设置为 "always" 或 "on-native-failure" 时才允许抢救
+            const salvageMode = effectivePolicy?.textToolSalvage ?? "on-native-failure"
+            const allowTextToolSalvage = salvageMode === "always" || salvageMode === "on-native-failure"
+            // TODO: "on-native-failure" currently means "fallback when no native tool_calls were produced".
+            // Provider-level native parse error telemetry is not yet available.
+            if (allowTextToolSalvage && reason === "stop" && toolCalls.length === 0 && fullContent.trim()) {
               const salvaged = salvageTextToolCallsInResponse({
                 content: fullContent,
                 finishReason: reason,
@@ -1008,7 +1028,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
                 totalToolCalls += salvagedCalls.length
 
                 try {
-                  for await (const toolEvent of toolExecutor.run(salvagedCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, allowedToolNames)) {
+                  for await (const toolEvent of toolExecutor.run(salvagedCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
                     yield toolEvent
                     if (toolEvent.role !== "tool_progress") {
                       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })

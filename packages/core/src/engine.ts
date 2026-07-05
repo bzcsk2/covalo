@@ -503,6 +503,10 @@ export class ReasonixEngine implements CoreEngine {
     this.toolExecutor.setSessionId(sessionId)
     this.logger = this.logger.child({ sessionId })
     this.rebindSessionWriter(sessionId)
+    // FIX-H3: 切换 session 时清理上一 session 的 strictness / effectivePolicy，
+    // 避免新 session 继承旧 session 的策略状态（会导致工具集/落盘频率错位）。
+    this.sessionStrictness = undefined
+    this.effectivePolicy = null
     // F0-1: 切换 session 时重建 CheckpointEngine，重置 governance 状态
     const sessionDir = resolve(process.cwd(), ".covalo", "sessions")
     this.checkpointEngine = new CheckpointEngine(sessionDir, sessionId)
@@ -1173,8 +1177,16 @@ Do not change goal status.`
     // ADV-HAR-03: 根据 effectivePolicy.shellPolicy 重新注册 bash 工具
     if (this.effectivePolicy.shellPolicy === "dual-track" || this.effectivePolicy.shellPolicy === "dual-track-conservative") {
       const { createBashTool } = await import("@covalo/tools")
-      this.tools.set("bash", createBashTool({ dualTrack: true }))
+      // FIX-H6: dual-track-conservative 模式下传入 conservative 标志，缩短前台超时、
+      // 禁止后台 destructive 命令、缩短 auto 升级时间。
+      this.tools.set("bash", createBashTool({
+        dualTrack: true,
+        conservative: this.effectivePolicy.shellPolicy === "dual-track-conservative",
+      }))
     }
+
+    // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率
+    this.checkpointEngine.setCheckpointPolicy(this.effectivePolicy.checkpoint)
 
     // ADV-HAR-05: 根据 effectivePolicy.readBeforeWrite 配置 ReadTracker
     if (this.effectivePolicy.readBeforeWrite === "block") {
@@ -1462,6 +1474,8 @@ Do not change goal status.`
         checkpointEngine: this.checkpointEngine,
         modeDecisionEngine: this.modeDecisionEngine,
         workspaceRoot: process.cwd(),
+        // FIX-H1: 传入 role 让 loop 跳过 supervisor 的 toolset 二次过滤
+        role: effectiveRole,
         allowedToolNames: effectiveMode === "loop"
           ? new Set(toolSpecs.map(spec => spec.function.name))
           : undefined,

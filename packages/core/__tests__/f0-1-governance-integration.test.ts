@@ -207,32 +207,49 @@ describe("F0-1: governance/checkpoint 三件套集成", () => {
     expect(decision.blocked).toBe(false)
   })
 
-  it("free policy 下 step_completed 不落盘，forced policy 下才落盘", async () => {
+  it("FIX-H5: checkpoint policy 控制落盘频率（frequent/safe-point/minimal）", async () => {
     const tracker = new BranchBudgetTracker()
     const checkpoint = new CheckpointEngine(tmpDir, "policy-test")
     tracker.bindWorkspaceRoot(tmpDir)
 
-    // free policy（默认）
-    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
+    // 默认 safe-point：step_completed 落盘，verification_started 不落盘
+    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(true)
     expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(false)
 
-    // 但 tool_failed / final_draft 在 free 下也落盘
+    // tool_failed / final_draft / verification_failed / compaction 在 safe-point 下也落盘
     expect(checkpoint.shouldPersistOnTrigger("tool_failed")).toBe(true)
     expect(checkpoint.shouldPersistOnTrigger("final_draft")).toBe(true)
     expect(checkpoint.shouldPersistOnTrigger("verification_failed")).toBe(true)
     expect(checkpoint.shouldPersistOnTrigger("compaction")).toBe(true)
 
-    // 启用 forced policy
-    checkpoint.setForcedPolicy(true)
+    // manual 永远落盘
+    expect(checkpoint.shouldPersistOnTrigger("manual")).toBe(true)
+
+    // minimal：只 tool_failed / final_draft 落盘
+    checkpoint.setCheckpointPolicy("minimal")
+    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
+    expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(false)
+    expect(checkpoint.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    expect(checkpoint.shouldPersistOnTrigger("final_draft")).toBe(true)
+    expect(checkpoint.shouldPersistOnTrigger("verification_failed")).toBe(false)
+    expect(checkpoint.shouldPersistOnTrigger("compaction")).toBe(false)
+
+    // frequent：所有 trigger 都落盘
+    checkpoint.setCheckpointPolicy("frequent")
     expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(true)
     expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(true)
+    expect(checkpoint.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    expect(checkpoint.shouldPersistOnTrigger("final_draft")).toBe(true)
 
-    // 关闭 forced policy
-    checkpoint.setForcedPolicy(false)
-    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
+    // forcedPolicyActive 不再影响 shouldPersistOnTrigger（H5 设计）
+    checkpoint.setCheckpointPolicy("safe-point")
+    checkpoint.setForcedPolicy(true)
+    expect(checkpoint.isForcedPolicyActive()).toBe(true)
+    // verification_started 仍然不落盘（safe-point 不含此 trigger，即使 forced）
+    expect(checkpoint.shouldPersistOnTrigger("verification_started")).toBe(false)
   })
 
-  it("exit_forced 时关闭 forced policy，恢复 free 落盘策略", async () => {
+  it("exit_forced 时关闭 forced policy，恢复 safe-point 落盘策略", async () => {
     const tracker = new BranchBudgetTracker()
     const modeEngine = new ModeDecisionEngine()
     const checkpoint = new CheckpointEngine(tmpDir, "exit-forced-test")
@@ -270,7 +287,11 @@ describe("F0-1: governance/checkpoint 三件套集成", () => {
       checkpoint.setForcedPolicy(false)
     }
     expect(checkpoint.isForcedPolicyActive()).toBe(false)
-    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(false)
+    // FIX-H5: shouldPersistOnTrigger 现在由 checkpointPolicy 决定（默认 safe-point），
+    // forcedPolicyActive 不再控制 persist frequency。
+    // safe-point 下 step_completed 仍然落盘（这是 safe-point 的语义）。
+    expect(checkpoint.shouldPersistOnTrigger("step_completed")).toBe(true)
+    expect(checkpoint.shouldPersistOnTrigger("tool_failed")).toBe(true)
   })
 
   it("recovery signal 写入 checkpoint 并可被 pendingRecoverySignals 读出", async () => {

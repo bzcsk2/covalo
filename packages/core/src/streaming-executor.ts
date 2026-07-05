@@ -71,6 +71,8 @@ export class StreamingToolExecutor {
     appendToolResult: (tc: ToolCall, result: ToolResult) => void,
     traceContext?: Record<string, unknown>,
     allowedToolNames?: ReadonlySet<string>,
+    /** FIX-H4: 共享工具同时执行上限，undefined 表示不限 */
+    maxParallelTools?: number,
   ): AsyncGenerator<LoopEvent> {
     const logger = traceContext && this.logger.isEnabled("error")
       ? this.logger.child(traceContext)
@@ -83,6 +85,7 @@ export class StreamingToolExecutor {
     const flushSharedBatch = async function* (
       exec: StreamingToolExecutor,
       batch: Array<{ tc: ToolCall; index: number }>,
+      concurrencyLimit?: number,
     ): AsyncGenerator<LoopEvent> {
       if (batch.length === 0) return
       const diagnosticsEnabled = logger.isEnabled("error")
@@ -151,18 +154,44 @@ export class StreamingToolExecutor {
       // synchronously finish before the consumer can abort.
       // CL-50: Collect progress from shared tools via per-tool progress queues
       const progressQueues = new Map<number, ReturnType<typeof createProgressQueue>>()
-      const pending = allowedBatch.map(({ tc, index }) => {
+
+      // FIX-H4: 使用 concurrencyLimit 限制共享工具同时执行数
+      async function executeTool(tc: ToolCall, index: number): Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }> {
         const q = createProgressQueue()
         progressQueues.set(index, q)
         return exec.executeToolResult(tc, index, signal, logger, q.push).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>
-      })
+      }
+
+      // P1: completionPromise 必须在 yield 之前创建，否则 abort signal 在 yield
+      // 期间被设置会拦截尚未启动的工具（P0-4 回归）。
+      let completionPromise: Promise<PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>[]>
+      if (concurrencyLimit !== undefined && concurrencyLimit > 0 && concurrencyLimit < allowedBatch.length) {
+        const results: Array<PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>> = new Array(allowedBatch.length)
+        let next = 0
+        async function worker() {
+          while (next < allowedBatch.length) {
+            const i = next++
+            const { tc, index } = allowedBatch[i]
+            try {
+              results[i] = { status: "fulfilled" as const, value: await executeTool(tc, index) }
+            } catch (reason) {
+              results[i] = { status: "rejected" as const, reason }
+            }
+          }
+        }
+        const workers = Array.from({ length: Math.min(concurrencyLimit, allowedBatch.length) }, () => worker())
+        completionPromise = Promise.all(workers).then(() => results)
+      } else {
+        const pending = allowedBatch.map(({ tc, index }) => executeTool(tc, index))
+        completionPromise = Promise.allSettled(pending)
+      }
 
       for (const { tc, index } of allowedBatch) {
         yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
         yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
       }
 
-      const completed = await Promise.allSettled(pending)
+      const completed = await completionPromise
       // Reorder by declaration index before yielding
       const settled_results: Array<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }> = []
       for (let i = 0; i < completed.length; i++) {
@@ -223,14 +252,14 @@ export class StreamingToolExecutor {
           continue
         }
 
-        yield* flushSharedBatch(this, sharedBatch)
+        yield* flushSharedBatch(this, sharedBatch, maxParallelTools)
         sharedBatch = []
 
         yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
         yield* this.executeToolCall(tc, index, signal, settle, logger)
       }
 
-      yield* flushSharedBatch(this, sharedBatch)
+      yield* flushSharedBatch(this, sharedBatch, maxParallelTools)
     } catch (err) {
       // CL-50: On generator abort, settle any remaining unsettled tool calls.
       logger?.warn("tool.batch.interrupted_or_failed", {

@@ -253,34 +253,40 @@ describe("CheckpointEngine - 写入原子性", () => {
 })
 
 describe("CheckpointEngine forced policy", () => {
-  it("defaults to free policy and treats step_completed as eligible-to-skip", async () => {
+  it("defaults to safe-point policy and persists on step_completed", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
     expect(engine.isForcedPolicyActive()).toBe(false)
-    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
+    // FIX-H5: 默认 checkpointPolicy="safe-point"，step_completed 落盘（不再是 free policy）
+    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
     expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    // verification_started 不在 safe-point 集合中
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 
-  it("persists on every step_completed once forced policy is active", async () => {
+  it("forced policy does not override checkpointPolicy frequency", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
     engine.setForcedPolicy(true)
 
     expect(engine.isForcedPolicyActive()).toBe(true)
+    // FIX-H5: forcedPolicyActive 不再影响 shouldPersistOnTrigger，频率由 checkpointPolicy 决定
     expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
-    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(true)
+    // verification_started 在 safe-point 下不落盘，即使 forced
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 
-  it("falls back to free policy when forced policy is cleared", async () => {
+  it("falls back to safe-point policy when forced policy is cleared", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
     engine.setForcedPolicy(true)
     engine.setForcedPolicy(false)
 
     expect(engine.isForcedPolicyActive()).toBe(false)
-    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
+    // FIX-H5: 清除 forced 后回到 safe-point 默认（step_completed 仍落盘）
+    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 })

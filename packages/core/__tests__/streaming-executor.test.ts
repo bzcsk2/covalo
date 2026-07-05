@@ -621,4 +621,119 @@ describe("CL-20: Shared tool progress", () => {
     const done = events.filter(e => e.role === "tool_progress" && e.content === "done")
     expect(done).toHaveLength(1)
   })
+
+  it("FIX-H4: maxParallelTools=1 时 3 个 shared 工具串行执行，并发上限为 1", async () => {
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
+    let activeCount = 0
+    let maxConcurrency = 0
+    const makeTrackingHandler = (name: string): AgentTool => ({
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      concurrency: "shared",
+      approval: "read",
+      async execute() {
+        activeCount++
+        if (activeCount > maxConcurrency) maxConcurrency = activeCount
+        await new Promise(r => setTimeout(r, 30))
+        activeCount--
+        return { content: name, isError: false }
+      },
+    })
+    const tools = new Map<string, AgentTool>([
+      ["a", makeTrackingHandler("a")],
+      ["b", makeTrackingHandler("b")],
+      ["c", makeTrackingHandler("c")],
+    ])
+    const executor = new StreamingToolExecutor(tools, "test-h4", process.cwd())
+    const toolCalls = [
+      { id: "1", type: "function" as const, function: { name: "a", arguments: "{}" } },
+      { id: "2", type: "function" as const, function: { name: "b", arguments: "{}" } },
+      { id: "3", type: "function" as const, function: { name: "c", arguments: "{}" } },
+    ]
+    const results: Array<{ tc: unknown; result: ToolResult }> = []
+    const events: LoopEvent[] = []
+    for await (const e of executor.run(toolCalls, new AbortController().signal, (tc, r) => results.push({ tc, result: r }), undefined, undefined, 1)) {
+      events.push(e as LoopEvent)
+    }
+    expect(results).toHaveLength(3)
+    expect(maxConcurrency).toBe(1)
+  })
+
+  it("FIX-H4: maxParallelTools=2 时 3 个 shared 工具并发上限为 2", async () => {
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
+    let activeCount = 0
+    let maxConcurrency = 0
+    const makeTrackingHandler = (name: string): AgentTool => ({
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      concurrency: "shared",
+      approval: "read",
+      async execute() {
+        activeCount++
+        if (activeCount > maxConcurrency) maxConcurrency = activeCount
+        await new Promise(r => setTimeout(r, 30))
+        activeCount--
+        return { content: name, isError: false }
+      },
+    })
+    const tools = new Map<string, AgentTool>([
+      ["a", makeTrackingHandler("a")],
+      ["b", makeTrackingHandler("b")],
+      ["c", makeTrackingHandler("c")],
+    ])
+    const executor = new StreamingToolExecutor(tools, "test-h4-2", process.cwd())
+    const toolCalls = [
+      { id: "1", type: "function" as const, function: { name: "a", arguments: "{}" } },
+      { id: "2", type: "function" as const, function: { name: "b", arguments: "{}" } },
+      { id: "3", type: "function" as const, function: { name: "c", arguments: "{}" } },
+    ]
+    const results: Array<{ tc: unknown; result: ToolResult }> = []
+    const events: LoopEvent[] = []
+    for await (const e of executor.run(toolCalls, new AbortController().signal, (tc, r) => results.push({ tc, result: r }), undefined, undefined, 2)) {
+      events.push(e as LoopEvent)
+    }
+    expect(results).toHaveLength(3)
+    expect(maxConcurrency).toBeLessThanOrEqual(2)
+    expect(maxConcurrency).toBeGreaterThanOrEqual(2)
+  })
+
+  it("FIX-H4: maxParallelTools undefined 时 3 个 shared 工具全并发", async () => {
+    const { StreamingToolExecutor } = await import("../src/streaming-executor.js")
+    let activeCount = 0
+    let maxConcurrency = 0
+    const makeTrackingHandler = (name: string): AgentTool => ({
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      concurrency: "shared",
+      approval: "read",
+      async execute() {
+        activeCount++
+        if (activeCount > maxConcurrency) maxConcurrency = activeCount
+        await new Promise(r => setTimeout(r, 30))
+        activeCount--
+        return { content: name, isError: false }
+      },
+    })
+    const tools = new Map<string, AgentTool>([
+      ["a", makeTrackingHandler("a")],
+      ["b", makeTrackingHandler("b")],
+      ["c", makeTrackingHandler("c")],
+    ])
+    const executor = new StreamingToolExecutor(tools, "test-h4-3", process.cwd())
+    const toolCalls = [
+      { id: "1", type: "function" as const, function: { name: "a", arguments: "{}" } },
+      { id: "2", type: "function" as const, function: { name: "b", arguments: "{}" } },
+      { id: "3", type: "function" as const, function: { name: "c", arguments: "{}" } },
+    ]
+    const results: Array<{ tc: unknown; result: ToolResult }> = []
+    const events: LoopEvent[] = []
+    for await (const e of executor.run(toolCalls, new AbortController().signal, (tc, r) => results.push({ tc, result: r }))) {
+      events.push(e as LoopEvent)
+    }
+    expect(results).toHaveLength(3)
+    expect(maxConcurrency).toBe(3)
+  })
 })

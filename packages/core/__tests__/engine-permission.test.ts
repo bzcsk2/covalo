@@ -24,13 +24,18 @@ class MockClient {
 const mockClient = new MockClient()
 
 function makeEngine() {
-  return new ReasonixEngine({
+  const engine = new ReasonixEngine({
     apiKey: "sk-test",
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-v4-flash",
     maxTokens: 256,
     temperature: 0.1,
   }, undefined, undefined, mockClient as any)
+  // FIX-H1: 这些测试注册自定义 exec 工具（s0_exec_ok 等），在 normal/coding toolset 下
+  // 会被 applyDeterministicCategoryFilter 当作 "full" 类过滤掉，导致 permission_ask 永不触发。
+  // 切到 loose 让 toolset="full" 放行所有自定义工具。
+  engine.setHarnessStrictness("loose")
+  return engine
 }
 
 /** 构造一个会触发 exec 工具调用的 generator，工具需要 permission ask */
@@ -80,7 +85,9 @@ function driveSubmitInBackground(engine: ReasonixEngine, prompt: string) {
   let resolvePermissionAsk: () => void
   const permissionAskSeen = new Promise<void>(resolve => { resolvePermissionAsk = resolve })
   const submitPromise = (async () => {
-    for await (const e of engine.submit(prompt)) {
+    // FIX-H1: 传不含 toolNames 的 agentConfig 跳过 resolveEffectiveTools 第一层白名单过滤，
+    // 同时 makeEngine() 已 setHarnessStrictness("loose") 让 toolset="full" 放行第二层。
+    for await (const e of engine.submit(prompt, { name: "build" })) {
       events.push(e)
       if (e.role === "permission_ask" && !permissionAskEvent) {
         permissionAskEvent = e
