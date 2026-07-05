@@ -1,4 +1,19 @@
 import type { ChatMessage, ReasonixEngine, QuestionRequest, PermissionRequest, PermissionReply, LoopEvent } from '@covalo/core';
+
+/**
+ * SPEC S0-1: permission 请求来源角色。
+ * - main: 单 engine 模式（无 dualRuntime）
+ * - worker / supervisor: dualRuntime 模式下对应角色 engine 发起
+ */
+export type PermissionOriginRole = 'main' | 'worker' | 'supervisor';
+
+/**
+ * SPEC S0-1: TUI 层 permission prompt 扩展 originRole，
+ * 用于定向 respondPermissionForRequest()，避免广播误消费。
+ */
+export interface TuiPermissionPrompt extends PermissionRequest {
+  originRole: PermissionOriginRole;
+}
 import type { AgentRole } from '@covalo/core/agent-profile/types.js';
 import type { WorkflowMode } from '@covalo/core/dual-agent-runtime/types.js';
 import type { DualAgentRuntime } from '@covalo/core/dual-agent-runtime/dual-runtime.js';
@@ -28,6 +43,18 @@ function appendBoundedQueue(queue: string[], text: string): string[] {
   return [...queue, text];
 }
 
+/**
+ * SPEC S1-1: 闭包级 submit 队列项。
+ * 不再依赖 React state messageQueue 作为队列真源；messageQueue 仅作为 UI 镜像。
+ */
+interface QueuedSubmit {
+  text: string
+  isQueueResubmit: boolean
+  role?: AgentRole
+  mode: WorkflowMode
+  options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean; collectFinalText?: boolean }
+}
+
 export interface ToolStatus {
   key: string;
   name: string;
@@ -39,10 +66,10 @@ export interface ToolStatus {
 }
 
 export type TimelineItem =
-  | { id: string; kind: 'message'; message: ChatMessage; role?: AgentRole }
-  | { id: string; kind: 'assistant_text'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole }
-  | { id: string; kind: 'reasoning'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole }
-  | { id: string; kind: 'tool'; roundId: string; tool: ToolStatus; role?: AgentRole };
+  | { id: string; kind: 'message'; message: ChatMessage; role?: AgentRole; turnId?: string }
+  | { id: string; kind: 'assistant_text'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole; turnId?: string }
+  | { id: string; kind: 'reasoning'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole; turnId?: string }
+  | { id: string; kind: 'tool'; roundId: string; tool: ToolStatus; role?: AgentRole; turnId?: string };
 
 export class WorkflowDriveError extends Error {
   workflowId?: string
@@ -66,7 +93,7 @@ export interface BridgeState {
   contextUsage: number;
   warnings: string[];
   error: string | null;
-  permissionPrompt: PermissionRequest | null;
+  permissionPrompt: TuiPermissionPrompt | null;
   questionPrompt: QuestionRequest | null;
   reasoningActive: boolean;
 }
@@ -77,10 +104,22 @@ function historyRoundId(index: number): string {
 
 export function timelineFromMessages(messages: ChatMessage[]): TimelineItem[] {
   const items: TimelineItem[] = [];
+  // SPEC S2-1 §7.4: 历史 session hydration 保守分组 ——
+  // user message 开启新 turn group；assistant/tool 归入最近 user group；
+  // 若无最近 group 则自成一组。裁剪时按 turn 整体保留/删除。
+  let currentTurnId: string | null = null;
   messages.forEach((message, index) => {
     const id = `message-${index}-${crypto.randomUUID()}`;
+    if (message.role === 'user') {
+      // user message 开启新 turn group
+      currentTurnId = `history-turn-${index}-${crypto.randomUUID()}`;
+      items.push({ id, kind: 'message', message, turnId: currentTurnId });
+      return;
+    }
     if (message.role === 'assistant') {
       const roundId = historyRoundId(index);
+      // 归入最近 user turn；若无则自成一组
+      const turnId = currentTurnId ?? `history-turn-${index}-${crypto.randomUUID()}`;
       if (message.content) {
         items.push({
           id: `${id}-assistant`,
@@ -89,6 +128,7 @@ export function timelineFromMessages(messages: ChatMessage[]): TimelineItem[] {
           text: message.content,
           isStreaming: false,
           startTs: Date.now(),
+          turnId,
         });
       }
       if (message.reasoning_content) {
@@ -99,11 +139,14 @@ export function timelineFromMessages(messages: ChatMessage[]): TimelineItem[] {
           text: message.reasoning_content,
           isStreaming: false,
           startTs: Date.now(),
+          turnId,
         });
       }
       return;
     }
-    items.push({ id, kind: 'message', message });
+    // tool / system / other message：归入最近 user turn；若无则自成一组
+    const turnId = currentTurnId ?? `history-turn-${index}-${crypto.randomUUID()}`;
+    items.push({ id, kind: 'message', message, turnId });
   });
   return items;
 }
@@ -211,7 +254,7 @@ export function createBridge(
     options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
   ) => Promise<string>;
   cancel: () => void;
-  respondPermission: (reply: PermissionReply, message?: string) => void;
+  respondPermission: (requestId: string, originRole: PermissionOriginRole, reply: PermissionReply, message?: string) => void;
   respondQuestion: (requestId: string, answers: string[][]) => void;
   rejectQuestion: (requestId: string) => void;
   /** Run a workflow goal through the WorkflowCoordinator */
@@ -233,8 +276,13 @@ export function createBridge(
   /** Run multi-model evaluation */
   runEval: (options: EvalRunOptions, currentWorkerConfig: { provider: string; model: string; baseUrl: string; apiKey: string }, onProgress?: (progress: EvalRunProgress) => void) => Promise<EvalRunResult>;
 } {
+  // SPEC S1-1: 闭包级调度状态。不再依赖 React state 作为队列真源。
+  // - running: 是否有请求正在执行 submitInternalCore
+  // - draining: 是否正在排空 submitQueue（避免新输入抢跑 drain 中的下一个 item）
+  // - submitQueue: FIFO 真源；messageQueue (React state) 仅作为 UI 镜像
   let running = false;
-  let processingQueue = false;
+  let draining = false;
+  const submitQueue: QueuedSubmit[] = [];
   let activeRequest = 0;
   const transcriptStore = isTranscriptStoreEnabled() ? new TranscriptStore() : null;
   const transcriptReader = transcriptStore ? new TranscriptReader(transcriptStore) : null;
@@ -346,69 +394,125 @@ export function createBridge(
     updateTimeline(items => applyAssistantToTimeline(items, item));
   };
 
-  const processQueue = () => {
-    if (running || processingQueue) return;
-    processingQueue = true;
-    let nextMessage: string | undefined;
-    commitBridge(prev => {
-      const [next, ...rest] = prev.messageQueue;
-      if (!next) {
-        processingQueue = false;
-        return {};
+  /**
+   * SPEC S1-1 + S2-3: 闭包级 submit 队列调度。
+   *
+   * 替代旧 processQueue() —— 旧实现依赖 React setState updater 内部给外部变量赋值
+   * (nextMessage) 抽取队列项，并使用 setTimeout(...,0) 延迟 submit，导致 running=false
+   * 与实际 submit 之间存在新输入抢跑窗口。
+   *
+   * 新实现：
+   * - submitQueue 作为 FIFO 真源（不依赖 React state.messageQueue）
+   * - running/draining 双标志，避免 drain 中新输入抢跑
+   * - drainQueue 使用 queueMicrotask（无 setTimeout 窗口）
+   * - mid-session instruction 在 enqueueOrRun 中处理，不进入 submitInternalCore 的 running 分支
+   */
+
+  /**
+   * 将闭包级 submitQueue 镜像到 React state.messageQueue，仅用于 UI 显示。
+   * SPEC S1-1 §4.2.5: UI messageQueue/pendingInstructionCount 只是状态展示。
+   */
+  const mirrorQueueState = () => {
+    const snapshot = submitQueue.map(item => item.text);
+    commitBridge(() => ({ messageQueue: snapshot }));
+  };
+
+  /**
+   * 入口：决定立即执行还是入队。
+   * - running=true 时：尝试 engine.enqueueInstruction (mid-session)；成功则不入队
+   * - running/draining=true 时 engine 不可用：进入 bridge FIFO
+   * - 否则：立即 runExclusive
+   */
+  const enqueueOrRun = (item: QueuedSubmit): Promise<void> => {
+    if (running || draining) {
+      // running 状态下尝试让 engine 处理为 mid-session instruction
+      if (running && !draining) {
+        const result = engine.enqueueInstruction(item.text);
+        if (result.status === 'ignored') return Promise.resolve();
+        // P0-2: Observe on first successful acceptance
+        if (!item.isQueueResubmit && item.options?.observeInput !== false) {
+          onUserInput?.(item.text);
+        }
+        if (result.status === 'queued') {
+          commitBridge(() => ({ pendingInstructionCount: result.queueLength }));
+          return Promise.resolve();
+        }
+        // 'full' → engine 内部队列已满，更新 pendingInstructionCount 后入 bridge FIFO
+        if (result.status === 'full') {
+          commitBridge(() => ({ pendingInstructionCount: result.queueLength }));
+        }
+        // 'full' 或 'idle' → 进入 bridge FIFO
       }
-      nextMessage = next;
-      return { messageQueue: rest };
-    });
-    // ADV-BUG-04: 副作用在 updater 外执行
-    if (nextMessage !== undefined) {
-      // 使用 setTimeout 而非 queueMicrotask，确保状态更新后再提交
-      const msg = nextMessage;
-      setTimeout(() => {
-        processingQueue = false;
-        void submit(msg, true);
-      }, 0);
+      submitQueue.push(item);
+      if (submitQueue.length > MAX_MESSAGE_QUEUE) submitQueue.shift();
+      mirrorQueueState();
+      return Promise.resolve();
+    }
+    return runExclusive(item);
+  };
+
+  /**
+   * 串行执行单个 submit。running=true 期间不允许其它 submit 并行。
+   * 完成后清空 running 并触发 drainQueue 排空剩余队列。
+   */
+  const runExclusive = async (item: QueuedSubmit): Promise<void> => {
+    if (running) {
+      submitQueue.push(item);
+      if (submitQueue.length > MAX_MESSAGE_QUEUE) submitQueue.shift();
+      mirrorQueueState();
+      return;
+    }
+    running = true;
+    try {
+      await submitInternalCore(item);
+    } finally {
+      running = false;
+      drainQueue();
     }
   };
 
-  const submitInternal = async (
-    text: string,
-    isQueueResubmit = false,
-    role?: AgentRole,
-    mode: WorkflowMode = 'alone',
-    options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean; collectFinalText?: boolean },
-  ): Promise<string> => {
-    if (running) {
-      const result = engine.enqueueInstruction(text);
-      if (result.status === 'ignored') return '';
-      // P0-2: Observe on first successful acceptance (queued/full/queued-ok)
-      if (!isQueueResubmit && options?.observeInput !== false) {
-        onUserInput?.(text);
+  /**
+   * 排空 submitQueue。使用 queueMicrotask 而非 setTimeout，避免抢跑窗口。
+   * draining 标志防止 drain 中新输入再次触发 drain。
+   */
+  const drainQueue = (): void => {
+    if (running || draining) return;
+    draining = true;
+    queueMicrotask(async () => {
+      try {
+        while (!running && submitQueue.length > 0) {
+          const next = submitQueue.shift()!;
+          mirrorQueueState();
+          await runExclusive(next);
+        }
+      } finally {
+        draining = false;
+        // 队列在 drain 期间可能再次被填充，递归触发
+        if (!running && submitQueue.length > 0) drainQueue();
       }
-      if (result.status === 'queued') {
-        commitBridge(() => ({ pendingInstructionCount: result.queueLength }));
-        return '';
-      }
-      if (result.status === 'full') {
-        commitBridge(prev => ({
-          pendingInstructionCount: result.queueLength,
-          messageQueue: appendBoundedQueue(prev.messageQueue, text),
-        }));
-        return '';
-      }
-      commitBridge(prev => ({ messageQueue: appendBoundedQueue(prev.messageQueue, text) }));
-      return '';
-    }
+    });
+  };
+
+  /**
+   * SPEC S1-1: submitInternalCore 接收 QueuedSubmit 而非散乱参数。
+   * - 不再处理 running 分支（mid-session instruction 已在 enqueueOrRun 中处理）
+   * - 不再原地 running=true（由 runExclusive 控制）
+   */
+  const submitInternalCore = async (item: QueuedSubmit): Promise<string> => {
+    const { text, isQueueResubmit, role, mode, options } = item;
 
     // P0-2: Observe fresh user input (not queue re-submissions)
     if (!isQueueResubmit && options?.observeInput !== false) {
       onUserInput?.(text);
     }
 
-    running = true;
     const requestId = ++activeRequest;
     const submitRole: AgentRole | undefined = role;
     const displayedText = options?.displayText ?? text;
     let activeOutputRole: AgentRole | undefined = submitRole;
+    // SPEC S2-1: 本次 submit 的 turnId，关联 user message + assistant/reasoning/tool，
+    // 让 TranscriptStore 裁剪时按完整 turn 整体保留/删除。
+    const submitTurnId = `submit-turn-${requestId}-${crypto.randomUUID()}`;
     let roundNumber = 0;
     let roundId = '';
     let assistantId: string | null = null;
@@ -444,6 +548,7 @@ export function createBridge(
             isStreaming: true,
             startTs: assistantStartTs,
             role: activeOutputRole,
+            turnId: submitTurnId,
           });
         }
 
@@ -457,6 +562,7 @@ export function createBridge(
             isStreaming: true,
             startTs: reasoningStartTs,
             role: activeOutputRole,
+            turnId: submitTurnId,
           });
         }
 
@@ -494,7 +600,7 @@ export function createBridge(
         const id = assistantId;
         if (transcriptStore) {
           if (assistantText) {
-            transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs || Date.now(), activeOutputRole);
+            transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs || Date.now(), activeOutputRole, submitTurnId);
             transcriptStore.setTextPart(id, assistantText, false);
           }
           transcriptStore.finalizePart(id);
@@ -507,6 +613,7 @@ export function createBridge(
             isStreaming: false,
             startTs: assistantStartTs || Date.now(),
             role: activeOutputRole,
+            turnId: submitTurnId,
           }, existing => existing.kind === 'assistant_text'
             ? { ...existing, text: assistantText, isStreaming: false }
             : existing);
@@ -516,7 +623,7 @@ export function createBridge(
         const id = reasoningId;
         if (transcriptStore) {
           if (reasoningText) {
-            transcriptStore.ensureTextPart(id, 'reasoning', roundId, reasoningStartTs || Date.now(), activeOutputRole);
+            transcriptStore.ensureTextPart(id, 'reasoning', roundId, reasoningStartTs || Date.now(), activeOutputRole, submitTurnId);
             transcriptStore.setTextPart(id, reasoningText, false);
           }
           transcriptStore.finalizePart(id);
@@ -529,6 +636,7 @@ export function createBridge(
             isStreaming: false,
             startTs: reasoningStartTs || Date.now(),
             role: activeOutputRole,
+            turnId: submitTurnId,
           }, existing => existing.kind === 'reasoning'
             ? { ...existing, text: reasoningText, isStreaming: false }
             : existing);
@@ -585,7 +693,7 @@ export function createBridge(
           elapsedMs: patch.elapsedMs ?? (patch.status && patch.status !== 'running'
             ? now - existing.startedAt
             : existing.elapsedMs),
-        }), activeOutputRole);
+        }), activeOutputRole, submitTurnId);
         publishTimeline();
         return;
       }
@@ -596,6 +704,7 @@ export function createBridge(
         roundId,
         tool: mergedTool,
         role: activeOutputRole,
+        turnId: submitTurnId,
       }, existing => {
         if (existing.kind !== 'tool') return existing;
         return {
@@ -617,13 +726,14 @@ export function createBridge(
         kind: 'message',
         message: { role: 'user', content: displayedText },
         role: submitRole,
+        turnId: submitTurnId,
       };
 
       if (transcriptStore) {
         if (transcriptStore.getEntryCount() === 0 && prev.timeline.length > 0) {
           hydrateStoreFromTimeline(prev.timeline);
         }
-        transcriptStore.appendUser(userItem.id, displayedText);
+        transcriptStore.appendUser(userItem.id, displayedText, submitRole, submitTurnId);
         bridgeRuntime?.applyPatch({
           isLoading: true,
           error: null,
@@ -684,7 +794,7 @@ export function createBridge(
             assistantText += chunk;
             const id = ensureAssistant();
             if (transcriptStore) {
-              transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs, activeOutputRole);
+              transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs, activeOutputRole, submitTurnId);
               transcriptStore.appendPartDelta(id, chunk);
               streamBatcher.schedule();
             } else {
@@ -703,7 +813,7 @@ export function createBridge(
             if (assistantText) {
               const id = ensureAssistant();
               if (transcriptStore) {
-                transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs || Date.now(), activeOutputRole);
+                transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs || Date.now(), activeOutputRole, submitTurnId);
                 transcriptStore.setTextPart(id, assistantText, false);
               } else {
                 upsertAssistantText({
@@ -714,6 +824,7 @@ export function createBridge(
                   isStreaming: false,
                   startTs: assistantStartTs || Date.now(),
                   role: activeOutputRole,
+                  turnId: submitTurnId,
                 });
               }
             }
@@ -727,6 +838,7 @@ export function createBridge(
                 isStreaming: false,
                 startTs: reasoningStartTs || Date.now(),
                 role: activeOutputRole,
+                turnId: submitTurnId,
               };
               if (transcriptStore) {
                 transcriptStore.upsertReasoning(item);
@@ -744,7 +856,7 @@ export function createBridge(
             reasoningText += chunk;
             const id = ensureReasoning();
             if (transcriptStore) {
-              transcriptStore.ensureTextPart(id, 'reasoning', roundId, reasoningStartTs, activeOutputRole);
+              transcriptStore.ensureTextPart(id, 'reasoning', roundId, reasoningStartTs, activeOutputRole, submitTurnId);
               transcriptStore.appendPartDelta(id, chunk);
               streamBatcher.schedule();
             } else {
@@ -756,6 +868,7 @@ export function createBridge(
                 isStreaming: true,
                 startTs: reasoningStartTs,
                 role: activeOutputRole,
+                turnId: submitTurnId,
               });
               commitBridge(() => ({ reasoningActive: true }));
             }
@@ -873,6 +986,10 @@ export function createBridge(
             break;
 
           case 'permission_ask': {
+            // SPEC S0-1: 推断 originRole 用于定向 respondPermissionForRequest()
+            const originRole: PermissionOriginRole = dualRuntime
+              ? (activeOutputRole === 'supervisor' ? 'supervisor' : 'worker')
+              : 'main';
             // Parse permission request from event metadata
             const requestId = event.metadata?.requestId as string | undefined;
             const sessionId = event.metadata?.sessionId as string | undefined;
@@ -884,7 +1001,7 @@ export function createBridge(
             const parentSessionId = event.metadata?.parentSessionId as string | undefined;
 
             if (requestId && sessionId && permission) {
-              const permissionRequest: PermissionRequest = {
+              const permissionRequest: TuiPermissionPrompt = {
                 id: requestId,
                 sessionId,
                 permission,
@@ -893,13 +1010,14 @@ export function createBridge(
                 metadata: metadata ?? {},
                 tool: tool ?? { toolCallId: '', toolName: event.toolName ?? 'unknown' },
                 parentSessionId,
+                originRole,
               };
               commitBridge(() => ({ permissionPrompt: permissionRequest }));
             } else {
-              // Fallback for legacy permission events
+              // Fallback for legacy permission events (无 requestId)
               let args: Record<string, unknown> = {};
               try { args = JSON.parse(event.content ?? '{}'); } catch {}
-              const fallbackRequest: PermissionRequest = {
+              const fallbackRequest: TuiPermissionPrompt = {
                 id: `perm_${Date.now().toString(36)}`,
                 sessionId: '',
                 permission: event.toolName ?? 'unknown',
@@ -907,6 +1025,7 @@ export function createBridge(
                 always: [],
                 metadata: args,
                 tool: { toolCallId: '', toolName: event.toolName ?? 'unknown' },
+                originRole,
               };
               commitBridge(() => ({ permissionPrompt: fallbackRequest }));
             }
@@ -975,14 +1094,17 @@ export function createBridge(
           reasoningActive: false,
         }));
       }
-      running = false;
-      processQueue();
+      // SPEC S1-1: running 标志由 runExclusive 在 finally 中重置；这里只触发 drainQueue
     }
     return assistantText.trim();
   };
 
+  /**
+   * SPEC S1-1: submit 入口 —— 通过 enqueueOrRun 调度，不再直接调用 submitInternalCore。
+   * 这确保 running/draining 期间的新输入会被正确排队而非抢跑。
+   */
   const submit = async (text: string, isQueueResubmit = false, role?: AgentRole, mode: WorkflowMode = 'alone') => {
-    await submitInternal(text, isQueueResubmit, role, mode);
+    await enqueueOrRun({ text, isQueueResubmit, role, mode });
   };
 
   const submitAndCollect = async (
@@ -991,7 +1113,9 @@ export function createBridge(
     mode: WorkflowMode = 'alone',
     options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
   ): Promise<string> => {
-    return submitInternal(text, false, role, mode, { ...options, collectFinalText: true });
+    // SPEC S1-1: submitAndCollect 用于 dualRuntime 子 engine 输出收集，不走 bridge 队列，
+    // 直接调用 submitInternalCore（不经过 enqueueOrRun）
+    return submitInternalCore({ text, isQueueResubmit: false, role, mode, options: { ...options, collectFinalText: true } });
   };
 
   const cancel = () => {
@@ -1018,14 +1142,45 @@ export function createBridge(
     // SFR-70: 中断正在运行的 Workflow
     workflowCoordinator?.interrupt();
     engine.interrupt();
+    // SPEC S1-1: 清空闭包级 submitQueue 并镜像到 UI（cancel 视为放弃所有 pending 输入）
+    submitQueue.length = 0;
+    mirrorQueueState();
   };
 
-  const respondPermission = (reply: PermissionReply, message?: string) => {
+  /**
+   * SPEC S0-1: 定向响应权限请求。
+   * - 根据 originRole 路由到发起请求的 engine，避免广播误消费。
+   * - 仅当 dualRuntime 不存在时（legacy 单 engine 模式），fallback 到 engine.respondPermission()。
+   * - dualRuntime 存在但未匹配到 pending 时，记录 warning 但不广播。
+   */
+  const respondPermission = (requestId: string, originRole: PermissionOriginRole, reply: PermissionReply, _message?: string) => {
     const allow = reply === 'once' || reply === 'always';
     const alwaysAllow = reply === 'always';
-    engine.respondPermission(allow, alwaysAllow);
-    dualRuntime?.getWorker().getEngine().respondPermission(allow, alwaysAllow);
-    dualRuntime?.getSupervisor().getEngine().respondPermission(allow, alwaysAllow);
+    let handled = false;
+    switch (originRole) {
+      case 'worker':
+        handled = dualRuntime?.getWorker().getEngine().respondPermissionForRequest(requestId, allow, alwaysAllow) ?? false;
+        break;
+      case 'supervisor':
+        handled = dualRuntime?.getSupervisor().getEngine().respondPermissionForRequest(requestId, allow, alwaysAllow) ?? false;
+        break;
+      case 'main':
+      default:
+        if (!dualRuntime) {
+          // Legacy 单 engine 模式：fallback 到 respondPermission，消费任意 pending
+          engine.respondPermission(allow, alwaysAllow);
+          handled = true;
+        } else {
+          handled = engine.respondPermissionForRequest(requestId, allow, alwaysAllow);
+        }
+        break;
+    }
+    if (!handled && dualRuntime) {
+      // SPEC S0-1: dualRuntime 存在但未匹配到 pending — 不广播，记录 warning
+      // （理论上 cancel 已经清理，这里只是防御性日志）
+      // eslint-disable-next-line no-console
+      console.warn(`[bridge] respondPermission: no pending permission found for requestId=${requestId} originRole=${originRole}`);
+    }
     commitBridge(() => ({ permissionPrompt: null }));
   };
 
@@ -1079,10 +1234,55 @@ export function createBridge(
     let toolItemIds = new Map<string, string>();
     let toolCallArgs = new Map<number, string>();
     let toolOutputs = new Map<string, string>();
+    // SPEC S1-3: workflow tool item key 稳定化状态。
+    // - wfToolSequence: 同一 workflow turn 内的工具递增计数，保证每个 tool_start 生成唯一 key
+    // - wfActiveToolKeys: toolCallIndex → key，用于 progress/tool 事件回到对应 item
+    // - wfFallbackToolNameKeys: toolName → keys[]，用于无 toolCallIndex 时的回退查找
+    // - wfToolStatusByKey: key → status，用于 resolveWorkflowToolKey 优先选择 running 的同名 key
+    let wfToolSequence = 0;
+    let wfActiveToolKeys = new Map<number, string>();
+    let wfFallbackToolNameKeys = new Map<string, string[]>();
+    let wfToolStatusByKey = new Map<string, ToolStatus['status']>();
     let assistantText = '';
     let reasoningText = '';
 
+    /**
+     * SPEC S1-2: workflow delta batching flush 实现。
+     * - 只在 batcher 触发时写入 transcriptStore / upsertWorkflowItem
+     * - 避免 workflow 模式下每个 delta chunk 触发 publishTimeline() 导致 UI 卡顿
+     */
+    const flushWorkflowStreamingUI = () => {
+      if (!wfTurnId) return;
+
+      if (wfAssistantId && assistantText) {
+        if (transcriptStore) {
+          transcriptStore.ensureTextPart(wfAssistantId, 'assistant_text', wfTurnId, wfTurnTs, activeRole, wfTurnId);
+          transcriptStore.setTextPart(wfAssistantId, assistantText, true);
+          publishTimeline();
+        } else {
+          upsertWorkflowItem({ id: wfAssistantId, kind: 'assistant_text', roundId: wfTurnId, text: assistantText, isStreaming: true, startTs: wfTurnTs, role: activeRole, turnId: wfTurnId });
+        }
+      }
+
+      if (wfReasoningId && reasoningText) {
+        if (transcriptStore) {
+          transcriptStore.ensureTextPart(wfReasoningId, 'reasoning', wfTurnId, wfTurnTs, activeRole, wfTurnId);
+          transcriptStore.setTextPart(wfReasoningId, reasoningText, true);
+          publishTimeline();
+        } else {
+          upsertWorkflowItem({ id: wfReasoningId, kind: 'reasoning', roundId: wfTurnId, text: reasoningText, isStreaming: true, startTs: wfTurnTs, role: activeRole, turnId: wfTurnId });
+        }
+      }
+    };
+
+    // SPEC S1-2: workflow delta batcher，节流 assistant_delta / reasoning_delta 的 UI 刷新
+    const workflowBatcher = new DeltaBatcher(resolveDeltaFlushMs(), flushWorkflowStreamingUI);
+
     const startWorkflowTurn = () => {
+      // SPEC S1-2: 注意 —— 不在此处调 workflowBatcher.flushNow()。
+      // 所有调用 startWorkflowTurn 的地方（phase_change / tools_completed / finally）
+      // 都已先 flushNow()，再 finalizeWorkflowTurn()，再 startWorkflowTurn()。
+      // 此处若再 flushNow，会因 activeRole 已切换而把旧 turn 的 delta 写入新 role。
       wfTurnSeq += 1;
       wfTurnId = `${wfPhaseId}-turn-${wfTurnSeq}-${crypto.randomUUID()}`;
       wfTurnTs = Date.now();
@@ -1093,6 +1293,11 @@ export function createBridge(
       toolItemIds = new Map<string, string>();
       toolCallArgs = new Map<number, string>();
       toolOutputs = new Map<string, string>();
+      // SPEC S1-3: 重置 workflow tool key 状态，确保新 turn 内的 key 不串到旧 turn
+      wfToolSequence = 0;
+      wfActiveToolKeys = new Map<number, string>();
+      wfFallbackToolNameKeys = new Map<string, string[]>();
+      wfToolStatusByKey = new Map<string, ToolStatus['status']>();
     };
 
     const startWorkflowPhase = () => {
@@ -1129,6 +1334,47 @@ export function createBridge(
       return wfReasoningId;
     };
 
+    /**
+     * SPEC S1-3: 为 tool_start 生成唯一 key 并登记到 wfActiveToolKeys / wfFallbackToolNameKeys。
+     * 同一 workflow turn 内每个 tool_start 都得到独立 key，避免同名工具覆盖 UI item。
+     */
+    const registerWorkflowToolStart = (index: number | undefined, name: string | undefined): string => {
+      const base = fallbackToolKey(index, name);
+      const key = `${base}_${++wfToolSequence}`;
+      if (index !== undefined) {
+        wfActiveToolKeys.set(index, key);
+      } else {
+        const toolName = name ?? 'unknown';
+        const list = wfFallbackToolNameKeys.get(toolName) ?? [];
+        list.push(key);
+        wfFallbackToolNameKeys.set(toolName, list);
+      }
+      return key;
+    };
+
+    /**
+     * SPEC S1-3: 由 progress / tool 事件回查对应的 key。
+     * - 有 toolCallIndex → 查 wfActiveToolKeys
+     * - 无 toolCallIndex → 查 wfFallbackToolNameKeys，优先返回最近一个 status === 'running' 的同名 key；
+     *   若无 running 则返回最新一个 key（避免把已完成工具误更新）
+     */
+    const resolveWorkflowToolKey = (index: number | undefined, name: string | undefined): string => {
+      if (index !== undefined) {
+        return wfActiveToolKeys.get(index) ?? fallbackToolKey(index, name);
+      }
+      const toolName = name ?? 'unknown';
+      const list = wfFallbackToolNameKeys.get(toolName);
+      if (!list || list.length === 0) return fallbackToolKey(undefined, name);
+      // 优先选择最近一个 running 的 key；否则回退到最后一个（最近登记的）
+      for (let i = list.length - 1; i >= 0; i--) {
+        const candidateKey = list[i]!;
+        if (wfToolStatusByKey.get(candidateKey) === 'running') {
+          return candidateKey;
+        }
+      }
+      return list[list.length - 1]!;
+    };
+
     const upsertWorkflowTextItem = (
       item: TimelineItem & { kind: 'assistant_text' | 'reasoning' },
     ) => {
@@ -1157,6 +1403,7 @@ export function createBridge(
             isStreaming: false,
             startTs: wfTurnTs,
             role: activeRole,
+            turnId: wfTurnId,
           });
         } else if (transcriptStore) {
           transcriptStore.finalizePart(wfAssistantId);
@@ -1174,6 +1421,7 @@ export function createBridge(
             isStreaming: false,
             startTs: wfTurnTs,
             role: activeRole,
+            turnId: wfTurnId,
           });
         } else if (transcriptStore) {
           transcriptStore.finalizePart(wfReasoningId);
@@ -1204,14 +1452,18 @@ export function createBridge(
         startedAt: patch.startedAt ?? Date.now(),
         elapsedMs: patch.elapsedMs,
       };
+      // SPEC S1-3: 维护 key → status 映射，供 resolveWorkflowToolKey 优先选择 running 同名 key。
+      // 仅在 patch.status 显式存在时更新，避免 output-only patch 把已 done 的工具重置为 running。
+      if (patch.status) wfToolStatusByKey.set(key, patch.status);
+      else if (!wfToolStatusByKey.has(key)) wfToolStatusByKey.set(key, tool.status);
       if (transcriptStore) {
-        transcriptStore.upsertTool(itemId, wfTurnId, tool, current => ({ ...current, ...patch }), activeRole);
+        transcriptStore.upsertTool(itemId, wfTurnId, tool, current => ({ ...current, ...patch }), activeRole, wfTurnId);
         publishTimeline();
       } else {
         commitBridge(prev => {
           const current = prev.timeline.find(item => item.id === itemId);
           const merged = current?.kind === 'tool' ? { ...current.tool, ...patch } : tool;
-          const item: TimelineItem = { id: itemId, kind: 'tool', roundId: wfTurnId, tool: merged, role: activeRole };
+          const item: TimelineItem = { id: itemId, kind: 'tool', roundId: wfTurnId, tool: merged, role: activeRole, turnId: wfTurnId };
           const index = prev.timeline.findIndex(entry => entry.id === itemId);
           if (index === -1) return { timeline: [...prev.timeline, item] };
           const timeline = [...prev.timeline];
@@ -1232,11 +1484,13 @@ export function createBridge(
       }
       // Phase G: 主动重跑直到 goal 终结
       // TUI-level 防御性 guard（WorkflowCoordinator 已有 maxRounds，此处提供额外保险）
+      // SPEC S3-2: 同时检查 workflowCoordinator.isInterrupted()，
+      // 避免 Ctrl+C 后还继续发起新的 workflow run。
       const MAX_CONTINUATION_CYCLES = 50;
       let continuationCycles = 0;
       let prevSig = '';
       let runAgain = true;
-      while (runAgain) {
+      while (runAgain && !workflowCoordinator.isInterrupted()) {
         runAgain = false;
         continuationCycles++;
         if (continuationCycles > MAX_CONTINUATION_CYCLES) {
@@ -1254,6 +1508,8 @@ export function createBridge(
           const wfEvent = rawEvent as unknown as WorkflowEvent;
 
             if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
+            // SPEC S1-2: phase 切换前 flush batcher，避免前一 turn 的 timer 写入新 turn
+            workflowBatcher.flushNow();
             finalizeWorkflowTurn();
             activeRole = wfEvent.phase === 'worker_do' || wfEvent.phase === 'worker_report' ? 'worker' : 'supervisor';
             onPhaseChange?.(wfEvent.phase, wfEvent.iteration);
@@ -1299,28 +1555,25 @@ export function createBridge(
               ensureWorkflowTurn();
               const chunk = loopEvent.content ?? '';
               assistantText += chunk;
-              const id = ensureWorkflowAssistantId();
-              if (transcriptStore) {
-                transcriptStore.ensureTextPart(id, 'assistant_text', wfTurnId, wfTurnTs, activeRole);
-                transcriptStore.appendPartDelta(id, chunk);
-                publishTimeline();
-              } else {
-                upsertWorkflowItem({ id, kind: 'assistant_text', roundId: wfTurnId, text: assistantText, isStreaming: true, startTs: wfTurnTs, role: activeRole });
-              }
+              // SPEC S1-2: 仅 ensure id + schedule batcher，不再每个 chunk 触发 publishTimeline()
+              ensureWorkflowAssistantId();
+              workflowBatcher.schedule();
               break;
             }
             case 'assistant_final': {
               ensureWorkflowTurn();
+              // SPEC S1-2: final 前先 flush batcher，避免 isStreaming=true 覆盖 final 状态
+              workflowBatcher.flushNow();
               if (loopEvent.content) assistantText = loopEvent.content;
               const metadataReasoning = loopEvent.metadata?.reasoning;
               if (typeof metadataReasoning === 'string' && metadataReasoning.length > 0) reasoningText = metadataReasoning;
               if (assistantText) {
                 const id = ensureWorkflowAssistantId();
-                upsertWorkflowTextItem({ id, kind: 'assistant_text', roundId: wfTurnId, text: assistantText, isStreaming: false, startTs: wfTurnTs, role: activeRole });
+                upsertWorkflowTextItem({ id, kind: 'assistant_text', roundId: wfTurnId, text: assistantText, isStreaming: false, startTs: wfTurnTs, role: activeRole, turnId: wfTurnId });
               }
               if (reasoningText) {
                 const id = ensureWorkflowReasoningId();
-                upsertWorkflowTextItem({ id, kind: 'reasoning', roundId: wfTurnId, text: reasoningText, isStreaming: false, startTs: wfTurnTs, role: activeRole });
+                upsertWorkflowTextItem({ id, kind: 'reasoning', roundId: wfTurnId, text: reasoningText, isStreaming: false, startTs: wfTurnTs, role: activeRole, turnId: wfTurnId });
               }
               break;
             }
@@ -1328,14 +1581,9 @@ export function createBridge(
               ensureWorkflowTurn();
               const chunk = loopEvent.content ?? '';
               reasoningText += chunk;
-              const id = ensureWorkflowReasoningId();
-              if (transcriptStore) {
-                transcriptStore.ensureTextPart(id, 'reasoning', wfTurnId, wfTurnTs, activeRole);
-                transcriptStore.appendPartDelta(id, chunk);
-                publishTimeline();
-              } else {
-                upsertWorkflowItem({ id, kind: 'reasoning', roundId: wfTurnId, text: reasoningText, isStreaming: true, startTs: wfTurnTs, role: activeRole });
-              }
+              // SPEC S1-2: 仅 ensure id + schedule batcher，不再每个 chunk 触发 publishTimeline()
+              ensureWorkflowReasoningId();
+              workflowBatcher.schedule();
               break;
             }
             case 'tool_call_delta':
@@ -1346,7 +1594,8 @@ export function createBridge(
               break;
             case 'tool_start': {
               ensureWorkflowTurn();
-              const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
+              // SPEC S1-3: 用 registerWorkflowToolStart 生成唯一 key，避免同名工具覆盖
+              const key = registerWorkflowToolStart(loopEvent.toolCallIndex, loopEvent.toolName);
               upsertWorkflowTool(key, {
                 name: loopEvent.toolName ?? 'unknown',
                 status: 'running',
@@ -1358,7 +1607,8 @@ export function createBridge(
             }
             case 'tool_progress': {
               ensureWorkflowTurn();
-              const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
+              // SPEC S1-3: 用 resolveWorkflowToolKey 回查对应 key
+              const key = resolveWorkflowToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               if (loopEvent.content === 'done') {
                 upsertWorkflowTool(key, { status: 'done' });
               } else if (loopEvent.content && loopEvent.content !== 'running') {
@@ -1371,7 +1621,8 @@ export function createBridge(
             }
             case 'tool': {
               ensureWorkflowTurn();
-              const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
+              // SPEC S1-3: 用 resolveWorkflowToolKey 回查对应 key
+              const key = resolveWorkflowToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               upsertWorkflowTool(key, {
                 name: loopEvent.toolName ?? 'tool',
                 status: loopEvent.severity === 'error' ? 'error' : 'done',
@@ -1396,6 +1647,8 @@ export function createBridge(
             }
             case 'status':
               if (loopEvent.content === 'tools_completed') {
+                // SPEC S1-2: turn 结束前 flush batcher，确保 final delta 已写入
+                workflowBatcher.flushNow();
                 finalizeWorkflowTurn();
                 startWorkflowTurn();
               }
@@ -1412,6 +1665,10 @@ export function createBridge(
               break;
             }
             case 'permission_ask': {
+              // SPEC S0-1: 推断 originRole 用于定向 respondPermissionForRequest()
+              const originRole: PermissionOriginRole = dualRuntime
+                ? (activeRole === 'supervisor' ? 'supervisor' : 'worker')
+                : 'main';
               const requestId = loopEvent.metadata?.requestId as string | undefined;
               const sessionId = loopEvent.metadata?.sessionId as string | undefined;
               const permission = loopEvent.metadata?.permission as string | undefined;
@@ -1426,6 +1683,7 @@ export function createBridge(
                     metadata: loopEvent.metadata?.metadata as Record<string, unknown> ?? {},
                     tool: loopEvent.metadata?.tool as { toolCallId: string; toolName: string } ?? { toolCallId: '', toolName: loopEvent.toolName ?? 'unknown' },
                     parentSessionId: loopEvent.metadata?.parentSessionId as string | undefined,
+                    originRole,
                   },
                 }));
               }
@@ -1491,6 +1749,9 @@ export function createBridge(
         cause: err,
       })
     } finally {
+      // SPEC S1-2: finally 中 flush batcher，确保中断时 pending delta 仍被写入
+      workflowBatcher.flushNow();
+      workflowBatcher.cancel();
       finalizeWorkflowTurn();
       // SFR-70: 确保 always 恢复 idle，即使中断或异常
       setTUIState('idle');

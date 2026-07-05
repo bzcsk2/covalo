@@ -1,4 +1,5 @@
-import type { QuestionRequest, PermissionRequest } from '@covalo/core';
+import type { QuestionRequest } from '@covalo/core';
+import type { TuiPermissionPrompt } from '../bridge.js';
 import { SubscribeStore } from './subscribe-store.js';
 
 export interface TokenUsage {
@@ -21,7 +22,8 @@ export interface PromptQueueState {
 }
 
 export interface PermissionQuestionState {
-  permissionPrompt: PermissionRequest | null;
+  /** SPEC S0-1: 含 originRole，用于定向 respondPermissionForRequest() */
+  permissionPrompt: TuiPermissionPrompt | null;
   questionPrompt: QuestionRequest | null;
 }
 
@@ -80,7 +82,8 @@ export class BridgeRuntime {
     contextUsage?: number;
     warnings?: string[];
     error?: string | null;
-    permissionPrompt?: PermissionRequest | null;
+    /** SPEC S0-1: 含 originRole 的 TuiPermissionPrompt */
+    permissionPrompt?: TuiPermissionPrompt | null;
     questionPrompt?: QuestionRequest | null;
     reasoningActive?: boolean;
   }): void {

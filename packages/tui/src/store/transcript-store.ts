@@ -43,7 +43,17 @@ export class TranscriptStore {
   private readonly entryRevision = new Map<string, number>();
   private version = 0;
   private readonly listeners = new Set<() => void>();
-  private readonly trimOptions: TranscriptTrimOptions = { ...DEFAULT_TRIM_OPTIONS };
+  private trimOptions: TranscriptTrimOptions = { ...DEFAULT_TRIM_OPTIONS };
+
+  /**
+   * SPEC S2-1: 覆盖裁剪选项，便于测试或生产调优。
+   * 设置后会立即触发一次裁剪。
+   */
+  setTrimOptions(options: Partial<TranscriptTrimOptions>): void {
+    this.trimOptions = { ...this.trimOptions, ...options };
+    this.trimToLimitInternal(this.trimOptions);
+    this.bump();
+  }
 
   /**
    * @returns 当前版本号（每次变更 +1）
@@ -149,9 +159,11 @@ export class TranscriptStore {
 
   /**
    * 追加任意角色消息条目。
+   * SPEC S2-1: turnId 可选，用于裁剪时按完整 turn 分组。
+   * SPEC S2-4: 用 cloneJsonLike 深拷贝 message 嵌套字段，避免调用方后续 mutate 污染 store。
    */
-  appendMessage(id: string, message: ChatMessage, role?: AgentRole): void {
-    const entry: TimelineItem = { id, kind: 'message', message: { ...message }, role };
+  appendMessage(id: string, message: ChatMessage, role?: AgentRole, turnId?: string): void {
+    const entry: TimelineItem = { id, kind: 'message', message: cloneJsonLike(message), role, turnId };
     this.order.push(id);
     this.entries.set(id, entry);
     this.markLiveTouch(id);
@@ -161,12 +173,13 @@ export class TranscriptStore {
   /**
    * 追加用户消息条目。
    */
-  appendUser(id: string, content: string, role?: AgentRole): void {
-    this.appendMessage(id, { role: 'user', content }, role);
+  appendUser(id: string, content: string, role?: AgentRole, turnId?: string): void {
+    this.appendMessage(id, { role: 'user', content }, role, turnId);
   }
 
   /**
    * 确保流式 text / reasoning 条目存在。
+   * SPEC S2-1: turnId 可选，用于裁剪时按完整 turn 分组。
    */
   ensureTextPart(
     id: string,
@@ -174,12 +187,21 @@ export class TranscriptStore {
     roundId: string,
     startTs: number,
     role?: AgentRole,
+    turnId?: string,
   ): void {
     if (this.entries.has(id)) {
-      // 已存在但缺 role（例如 hydration 合并进来的旧条目）：补齐角色信息
+      // 已存在但缺 role/turnId（例如 hydration 合并进来的旧条目）：补齐
       const existing = this.entries.get(id)!;
+      let mutated = false;
       if (role && !(existing as TimelineEntryWithRole).role) {
         (existing as TimelineEntryWithRole).role = role;
+        mutated = true;
+      }
+      if (turnId && !(existing as { turnId?: string }).turnId) {
+        (existing as { turnId?: string }).turnId = turnId;
+        mutated = true;
+      }
+      if (mutated) {
         this.markLiveTouch(id);
         this.bumpAfterMutation();
       }
@@ -194,6 +216,7 @@ export class TranscriptStore {
       isStreaming: true,
       startTs,
       role,
+      turnId,
     };
 
     if (kind === 'assistant_text') {
@@ -310,6 +333,8 @@ export class TranscriptStore {
 
   /**
    * upsert 工具条目。
+   * SPEC S2-1: turnId 可选，用于裁剪时按完整 turn 分组。
+   * SPEC S2-4: 新建条目时用 cloneJsonLike 深拷贝 tool.args，避免调用方后续 mutate 污染 store。
    */
   upsertTool(
     id: string,
@@ -317,19 +342,32 @@ export class TranscriptStore {
     tool: ToolStatus,
     merge?: (existing: ToolStatus) => ToolStatus,
     role?: AgentRole,
+    turnId?: string,
   ): void {
     const existing = this.entries.get(id);
     if (existing?.kind === 'tool') {
-      existing.tool = merge ? merge(existing.tool) : { ...existing.tool, ...tool };
-      // 补齐 role（hydration 合并进来的旧条目可能缺失）
+      const next = merge ? merge(existing.tool) : { ...existing.tool, ...tool };
+      // SPEC S2-4: 始终深拷贝 args，无论 merge 还是浅合并路径
+      existing.tool = { ...next, args: cloneJsonLike(next.args) };
+      // 补齐 role/turnId（hydration 合并进来的旧条目可能缺失）
       if (role && !existing.role) (existing as TimelineEntryWithRole).role = role;
+      if (turnId && !(existing as { turnId?: string }).turnId) {
+        (existing as { turnId?: string }).turnId = turnId;
+      }
       this.markLiveTouch(id);
       this.bumpAfterMutation();
       return;
     }
 
     this.order.push(id);
-    this.entries.set(id, { id, kind: 'tool', roundId, tool: { ...tool }, role });
+    this.entries.set(id, {
+      id,
+      kind: 'tool',
+      roundId,
+      tool: { ...tool, args: cloneJsonLike(tool.args) },
+      role,
+      turnId,
+    });
     this.markLiveTouch(id);
     this.bumpAfterMutation();
   }
@@ -363,6 +401,9 @@ export class TranscriptStore {
 
   private getTrimGroupId(id: string, entry: TimelineItem | undefined): string {
     if (!entry) return `missing:${id}`;
+    // SPEC S2-1: 优先按 turnId 分组，让整个 turn（user + assistant + tool）整体裁剪/保留
+    const turnId = (entry as { turnId?: string }).turnId;
+    if (turnId) return `turn:${turnId}`;
     if ('roundId' in entry) return `round:${entry.roundId}`;
     return `entry:${id}`;
   }
@@ -436,16 +477,32 @@ export class TranscriptStore {
 }
 
 /**
+ * SPEC S2-4: 深拷贝 JSON-like 值（args / message 嵌套字段）。
+ * 优先用 structuredClone（深拷贝），fallback 到 JSON.parse(JSON.stringify)。
+ */
+function cloneJsonLike<T>(value: T): T {
+  if (typeof structuredClone === 'function') {
+    try {
+      return structuredClone(value);
+    } catch {
+      // structuredClone 不支持函数/Symbol 等，fallback 到 JSON
+    }
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
  * 克隆 timeline 条目，避免外部修改污染 store。
+ * SPEC S2-4: 深拷贝 tool.args 和 message 嵌套字段，避免浅拷贝导致引用污染。
  */
 function cloneTimelineItem(item: TimelineItem): TimelineItem {
   switch (item.kind) {
     case 'message':
-      return { ...item, message: { ...item.message } };
+      return { ...item, message: cloneJsonLike(item.message) };
     case 'assistant_text':
     case 'reasoning':
       return { ...item, text: item.text };
     case 'tool':
-      return { ...item, tool: { ...item.tool, args: { ...item.tool.args } } };
+      return { ...item, tool: { ...item.tool, args: cloneJsonLike(item.tool.args) } };
   }
 }

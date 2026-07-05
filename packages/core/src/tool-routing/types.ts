@@ -60,6 +60,9 @@ export interface ToolRoutingContext {
   schemaTokenBudget?: number
   /** 当前是否处于 category_select 阶段（Stage 1 已返回类别） */
   awaitingCategorySelection?: boolean
+  /** 显式声明的自定义工具名集合（由 engine.registerTool 动态注册），
+   *  用于在 deterministic 过滤中放行非内置工具 */
+  customToolNames?: Set<string>
 }
 
 /** 类别元数据 */

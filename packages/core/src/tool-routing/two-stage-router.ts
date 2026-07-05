@@ -174,6 +174,7 @@ export function applyDeterministicCategoryFilter(
     toolset?: ToolsetSize
     selectedCategory?: ToolCategory
     toolCategoryMap?: Record<string, ToolCategory>
+    customToolNames?: Set<string>
   } = {},
 ): { tools: ToolSpec[]; categories: ToolCategory[] } {
   const toolset = options.toolset ?? "full"
@@ -296,12 +297,16 @@ export function parseSelectedCategory(argumentsJson: string): ToolCategory | und
  * 主入口：根据上下文决定注入哪些 tool schema
  */
 export function resolveToolRouting(ctx: ToolRoutingContext): ToolRoutingDecision {
+  // customToolNames 由 engine 层在 submit() 时根据 TOOL_CATEGORIES 识别并传入，
+  // 用于在 deterministic 过滤中对显式动态注册的自定义工具放行，
+  // 避免 router 自推断导致 category==="full" 等价于 return true。
   const { tools: deterministicTools, categories } = applyDeterministicCategoryFilter(
     ctx.allTools,
     {
       toolset: ctx.toolset,
       selectedCategory: ctx.selectedCategory,
       toolCategoryMap: ctx.toolCategoryMap,
+      customToolNames: ctx.customToolNames,
     },
   )
 

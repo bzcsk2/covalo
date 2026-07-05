@@ -178,7 +178,12 @@ function computeScore(
   objectiveSignals: ObjectiveSignals | null,
   supervisorAssessment: Record<string, number> | null,
   policyGates: PolicyGateResult[] = [],
-): CaseScore {
+  classifiedVerifier?: ClassifiedVerifierResult | null,
+): CaseScore | null {
+  if (classifiedVerifier && !classifiedVerifier.scoreEligible) {
+    return null;
+  }
+
   const VW = 0.7;
   const OW = 0.2;
   const SW = 0.1;
@@ -187,13 +192,13 @@ function computeScore(
   let verifierSkipped = false;
   if (verifierResult) {
     if (verifierResult.verdict === "pass") verifierScore = 100;
-    else if (verifierResult.verdict === "error") verifierScore = 0;
-    else verifierScore = 0;
+    else if (classifiedVerifier && !classifiedVerifier.scoreEligible) {
+      verifierScore = 0;
+    } else {
+      verifierScore = 0;
+    }
   } else {
-    // verifier was not run (skipped) — treat as neutral instead of failure
     verifierSkipped = true;
-    // When skipped, renormalize without verifier weight
-    // Use only objective + supervisor weights
   }
 
   let objectiveScore = 50;
@@ -222,7 +227,6 @@ function computeScore(
 
   let finalScore: number;
   if (verifierSkipped) {
-    // Renormalize without verifier weight
     const remainingWeight = OW + SW;
     if (remainingWeight > 0) {
       finalScore = (objectiveScore * OW + supervisorScore * SW) / remainingWeight;
@@ -234,9 +238,6 @@ function computeScore(
 
     if (verifierResult && verifierResult.verdict === "fail") {
       finalScore = Math.min(finalScore, 40);
-    }
-    if (verifierResult && verifierResult.verdict === "error") {
-      finalScore = 0;
     }
   }
 
@@ -485,6 +486,10 @@ async function runSingleCase(
     }
   }
 
+  if (unsafeOoBPaths.length > 0) {
+    error = `Manifest contract error: unsafe outOfBoundsCheckPaths: ${unsafeOoBPaths.join(", ")}`;
+  }
+
   let toolTrackingValid = false;
   evalToolTracker.enable();
 
@@ -638,11 +643,11 @@ async function runSingleCase(
     );
     // Write verifier classification
     if (verifierResult) {
-      const vc = classifyVerifierResult(verifierResult, manifest);
+      classifiedVerifier = classifyVerifierResult(verifierResult, manifest);
       await writeCaseArtifact(
         caseDir,
         "verifier-classification.json",
-        JSON.stringify(vc, null, 2),
+        JSON.stringify(classifiedVerifier, null, 2),
       );
     }
   } catch (err) {
@@ -820,7 +825,7 @@ async function runSingleCase(
     await writeCaseArtifact(caseDir, "review-packet.json", JSON.stringify(reviewPacket, null, 2));
   }
 
-  const score = computeScore(verifierResult, objectiveSignals, supervisorAssessment, policyGates);
+  const score = computeScore(verifierResult, objectiveSignals, supervisorAssessment, policyGates, classifiedVerifier);
   await writeCaseArtifact(
     caseDir,
     "score.json",

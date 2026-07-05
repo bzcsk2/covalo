@@ -199,6 +199,8 @@ describe("TT2: E2E tool chains through engine", () => {
     const engine = makeEngine()
     // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     let executed = false
+    // 同上 — loose + 不含 toolNames 的 agentConfig 让自定义工具通过两层过滤。
+    engine.setHarnessStrictness("loose")
     engine.registerTool({
       name: "slow_tool", description: "slow",
       parameters: { type: "object", properties: {} },

@@ -33,6 +33,19 @@ export function detectInfraFailureFromOutput(
   return null;
 }
 
+export function detectVerifierContractFailure(
+  details: string[],
+): { isContractFailure: boolean; reason: string } | null {
+  const joined = details.join("\n");
+  if (
+    joined.includes("Unsafe file assertion path") ||
+    joined.includes("unsafe file assertion path")
+  ) {
+    return { isContractFailure: true, reason: "Unsafe file assertion path in manifest" };
+  }
+  return null;
+}
+
 function extractEvidence(
   verifierResult: VerifierResult,
   manifest: EvalCaseManifest,
@@ -53,8 +66,18 @@ export function classifyVerifierResult(
   verifierResult: VerifierResult,
   manifest: EvalCaseManifest,
 ): ClassifiedVerifierResult {
-  const { stdout, stderr, exitCode } = verifierResult;
+  const { stdout, stderr, exitCode, details } = verifierResult;
   const combined = `${stdout}\n${stderr}`;
+
+  const contractFailure = detectVerifierContractFailure(details);
+  if (contractFailure) {
+    return {
+      verdict: "verifier_contract_failure",
+      reason: contractFailure.reason,
+      evidence: extractEvidence(verifierResult, manifest),
+      scoreEligible: false,
+    };
+  }
 
   const infra = detectInfraFailureFromOutput(stdout, stderr);
   if (infra) {

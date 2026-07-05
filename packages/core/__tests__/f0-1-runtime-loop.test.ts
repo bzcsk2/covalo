@@ -25,6 +25,7 @@ let ContextManager: ContextManagerCtor
 
 // 直接构造 EffectiveHarnessPolicy 对象，避免引入 zod 依赖（resolveEffectiveHarnessPolicy
 // 通过 strictness.ts 间接 import zod，单元测试环境可能解析不到）
+// 值必须与 src/harness/policy.ts 中的 STRICT/NORMAL/LOOSE_POLICY 保持一致。
 function makePolicy(strictness: "strict" | "normal" | "loose"): EffectiveHarnessPolicy {
   if (strictness === "strict") {
     return {

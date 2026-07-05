@@ -17,6 +17,7 @@ import { PermissionEngine, HookManager } from "@covalo/security"
 import { getAgent, agentConfigFor, getMainMode } from "./agent.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import { resolveEffectiveTools } from "./resolve-effective-tools.js"
+import { TOOL_CATEGORIES } from "./tool-routing/two-stage-router.js"
 import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
 import { getSubagentSystemPrompt } from "./subagent/definition.js"
@@ -162,8 +163,16 @@ export class ReasonixEngine implements CoreEngine {
   /** SPEC-G: 上次 build prefix 时的 system prompt 文本，用于检测 prompt 变化 */
   private lastSystemPromptKey = ""
 
-  /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve */
-  private pendingPermission: { resolve: (v: boolean) => void; toolName: string; args: Record<string, unknown> } | null = null
+  /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve。
+   * SPEC S0-1: 改为 request-id 化的 Map，避免跨 engine 广播误消费。
+   * key = requestId，value = pending entry（含 resolve、toolName、args）。
+   */
+  private pendingPermissions = new Map<string, {
+    id: string;
+    resolve: (v: boolean) => void;
+    toolName: string;
+    args: Record<string, unknown>;
+  }>()
 
   /** LIFE-01: shutdown flag for idempotent cleanup */
   private _shutDown = false
@@ -239,9 +248,16 @@ export class ReasonixEngine implements CoreEngine {
   private isSubmitting = false
   private static readonly MAX_PENDING_INSTRUCTIONS = 10
 
-  /** 流式执行器内部调用，等待 TUI 返回确认结果 */
-  private requestPermission = async (toolName: string, args: Record<string, unknown>): Promise<boolean> => {
-    return new Promise(resolve => { this.pendingPermission = { resolve, toolName, args } })
+  /** 流式执行器内部调用，等待 TUI 返回确认结果。
+   * SPEC S0-1: 返回 { requestId, promise }，requestId 用于 permission_ask 事件 metadata
+   * 和定向 respondPermissionForRequest()。
+   */
+  private requestPermission = (toolName: string, args: Record<string, unknown>): { requestId: string; promise: Promise<boolean> } => {
+    const requestId = `perm_${randomUUID()}`
+    const promise = new Promise<boolean>(resolve => {
+      this.pendingPermissions.set(requestId, { id: requestId, resolve, toolName, args })
+    })
+    return { requestId, promise }
   }
 
   /** TUI-FIX-10: 设置编排事件发射回调 */
@@ -249,14 +265,41 @@ export class ReasonixEngine implements CoreEngine {
     this.emitOrchestration = handler
   }
 
-  /** TUI 调用以响应权限确认提示 */
-  respondPermission(allow: boolean, alwaysAllow?: boolean): void {
-    if (this.pendingPermission) {
+  /** TUI 调用以定向响应某个 permission 请求。
+   * SPEC S0-1: 按 requestId 查找 pending entry，避免广播误消费。
+   * 返回 true 表示找到并 resolve；返回 false 表示未找到。
+   */
+  respondPermissionForRequest(requestId: string, allow: boolean, alwaysAllow?: boolean): boolean {
+    const entry = this.pendingPermissions.get(requestId)
+    if (entry) {
       if (allow && alwaysAllow) {
-        this.permissionEngine.addAllowRule({ toolName: this.pendingPermission.toolName })
+        this.permissionEngine.addAllowRule({ toolName: entry.toolName })
       }
-      this.pendingPermission.resolve(allow)
-      this.pendingPermission = null
+      this.pendingPermissions.delete(requestId)
+      entry.resolve(allow)
+      return true
+    }
+    // 递归 child engines 查找（保持与旧广播语义兼容的定向查找）
+    for (const child of this.activeChildEngines) {
+      if (child.respondPermissionForRequest(requestId, allow, alwaysAllow)) return true
+    }
+    return false
+  }
+
+  /** TUI 调用以响应权限确认提示（legacy 兼容路径）。
+   * SPEC S0-1: 推荐使用 respondPermissionForRequest(requestId, ...)。
+   * 此方法消费 Map 中任意一个 pending（用于无 dualRuntime 的 legacy 场景或 cancel 中断）。
+   */
+  respondPermission(allow: boolean, alwaysAllow?: boolean): void {
+    // 消费任意一个 pending entry（取第一个插入的）
+    const firstKey = this.pendingPermissions.keys().next().value
+    if (firstKey) {
+      const entry = this.pendingPermissions.get(firstKey)!
+      if (allow && alwaysAllow) {
+        this.permissionEngine.addAllowRule({ toolName: entry.toolName })
+      }
+      this.pendingPermissions.delete(firstKey)
+      entry.resolve(allow)
       return
     }
     for (const child of this.activeChildEngines) child.respondPermission(allow, alwaysAllow)
@@ -912,15 +955,23 @@ export class ReasonixEngine implements CoreEngine {
 WorkflowCoordinator 控制执行顺序：
 supervisor_analyse -> worker_do -> worker_report -> supervisor_check
 
+**工具约束（严格遵守）**：
+本阶段仅允许调用以下三个工具：\`get_goal\`、\`update_goal\`、\`list_dir\`。
+以下工具在本阶段**不可用**，调用会被拒绝并浪费轮次：
+- \`read_file\` / \`grep\`：本阶段不能读文件内容。如需了解文件内容，请在计划中标注"由 Worker 检查"。
+- \`bash\` / \`edit\` / \`write\` / \`apply_patch\`：本阶段不能执行或修改。
+- \`AgentTool\` / mailbox / dispatch：本阶段不能委派子任务。
+若某工具不在上面三个允许列表中，**不要调用它**。
+
 你当前的任务：
 - 为 Worker 制定具体计划。
 - 不要自行执行计划。
 - 不要检查实现文件。
 - 不要验证代码。
 - 不要执行 Worker 任务。
-- 不要调用 read_file、grep、bash、edit、write、apply_patch、AgentTool 或调度工具。
-- 如果工具可用，最多使用 get_goal 和 list_dir 做浅层了解。
-- 不要重复调用工具。如果浅层了解不够，在计划中说明假设，让 Worker 去检查细节。
+- 使用 get_goal 和 list_dir 做浅层目录了解，**不要重复调用同一工具**。
+- 仅在需要更新结构化目标状态时才调用 update_goal；否则不要调用它。
+- 如果浅层了解不够，在计划中说明假设，让 Worker 去检查细节。
 - 制定计划后停止。协调器会将你的计划传递给 Worker。
 
 返回结构化计划，包含：
@@ -936,15 +987,23 @@ You are the Supervisor in the planning phase.
 The WorkflowCoordinator owns execution order:
 supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
 
+**Tool constraints (strict)**:
+Only these three tools are available in this phase: \`get_goal\`, \`update_goal\`, \`list_dir\`.
+The following tools are NOT available in this phase; calling them will be rejected and waste a turn:
+- \`read_file\` / \`grep\`: do not read file contents in this phase. If you need file contents, mark "Worker to inspect" in the plan.
+- \`bash\` / \`edit\` / \`write\` / \`apply_patch\`: do not execute or modify.
+- \`AgentTool\` / mailbox / dispatch: do not delegate subtasks in this phase.
+If a tool is not in the three-tool allow list above, **do not call it**.
+
 Your current job:
 - Create a concrete plan for the Worker.
 - Do not execute the plan yourself.
 - Do not inspect implementation files.
 - Do not verify code.
 - Do not perform Worker tasks.
-- Do not call read_file, grep, bash, edit, write, apply_patch, AgentTool, mailbox, or dispatch tools.
-- If tools are available, use at most get_goal and list_dir for shallow orientation.
-- Do not call tools repeatedly. If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
+- Use get_goal and list_dir for shallow directory orientation; do NOT call the same tool repeatedly.
+- Only call update_goal when you need to update structured goal state; otherwise do not call it.
+- If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
 - After producing the plan, stop. The coordinator will pass your plan to the Worker.
 
 Return a structured plan with:
@@ -1350,6 +1409,13 @@ Do not change goal status.`
         workflowPhase,
         config: maybeCovaloConfig,
       })
+      const builtinToolNames = new Set(Object.values(TOOL_CATEGORIES).flatMap(cat => cat.tools))
+      const customToolNames = new Set<string>()
+      for (const spec of toolSpecs) {
+        if (!builtinToolNames.has(spec.function.name)) {
+          customToolNames.add(spec.function.name)
+        }
+      }
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {
           role: effectiveRole,
