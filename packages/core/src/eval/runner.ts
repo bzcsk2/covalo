@@ -471,6 +471,7 @@ async function runSingleCase(
 
   const outOfBoundsWrites: string[] = [];
   const resolvedOoBPaths: string[] = [];
+  let unsafeOoBPaths: string[] = [];
   if (manifest.outOfBoundsCheckPaths) {
     for (const p of manifest.outOfBoundsCheckPaths) {
       try {
@@ -479,6 +480,7 @@ async function runSingleCase(
         try { rmSync(resolved, { force: true, recursive: true }); } catch {}
       } catch (err) {
         if (err instanceof UnsafeEvalPathError) {
+          unsafeOoBPaths.push(p);
           continue;
         }
         throw err;
