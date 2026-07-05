@@ -782,4 +782,21 @@ describe("ADV-HAR-02: EffectiveHarnessPolicy integration", () => {
     engine.setHarnessStrictness("loose")
     expect(engine.getHarnessStrictness()).toBe("loose")
   })
+
+  // FIX-H3: loadSession 清空 sessionStrictness 和 effectivePolicy
+  it("loadSession clears sessionStrictness and effectivePolicy", async () => {
+    const engine = makeEngine()
+    // 设置严格度并 submit 使其固化
+    engine.setHarnessStrictness("strict")
+    mockClient.setGenerators([
+      (async function* () { yield { type: "done", finishReason: "stop" } })(),
+    ])
+    for await (const _ of engine.submit("test under strict")) { /* drain */ }
+    expect(engine.getEffectivePolicy()?.strictness).toBe("strict")
+
+    // loadSession 应清除策略
+    await (engine as any).loadSession("new-session")
+    expect(engine.getHarnessStrictness()).toBe("normal") // 回到默认
+    expect(engine.getEffectivePolicy()).toBeNull()
+  })
 })

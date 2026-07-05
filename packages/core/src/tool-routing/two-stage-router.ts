@@ -190,8 +190,9 @@ export function applyDeterministicCategoryFilter(
 
   const filtered = allTools.filter((tool) => {
     const category = inferToolCategory(tool.function.name, options.toolCategoryMap)
-    if (category === "full") {
-      return allowedCategories.size === TOOLSET_CATEGORIES.full.length
+      if (category === "full") {
+      // 未知类别的工具（通常是用户自定义的工具）始终可用，不受 toolset 限制
+      return true
     }
     return allowedCategories.has(category)
   })

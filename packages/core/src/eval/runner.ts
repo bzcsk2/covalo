@@ -8,13 +8,13 @@ import type { PromptLocale } from "../prompt-locale.js";
 import { evalToolTracker } from "./tool-tracker";
 import { resolveProfile } from "./profile/resolver";
 import { getBenchmarkToolchainStatus, type BenchmarkToolchainStatus } from "./profile/installer";
+import { extractAssessment } from "./supervisor-assessment";
 
 const COMMON_TEST_FILE_PATTERNS = [
   /\.(test|spec|e2e)\.[jt]sx?$/,
   /_test\.(py|go)$/,
   /__tests__\//,
   /(vitest|jest|playwright)\.config\./,
-  /tsconfig\.json$/,
   /test_/,
   /\/test\//,
 ];
@@ -49,8 +49,10 @@ import {
 import { createCaseWorkspace, writeCaseArtifact, getCaseWorkspaceDir, setEvalSandboxProvider, getEvalSandboxProvider, SetupFailedError } from "./workspace";
 import { runVerifier, setSandboxProvider as setVerifierSandboxProvider } from "./verifier";
 import { classifyVerifierResult } from "./verifier-classifier";
+import { resolveWithinRoot, UnsafeEvalPathError } from "./path-guards";
 import { initDefaultProviders, detectBestProvider } from "../sandbox/provider-registry";
 import { resolveEvalEnvironment } from "../sandbox/types";
+import type { ClassifiedVerifierResult } from "./verifier-classifier";
 let _currentCaseWorkspace: string | null = null;
 let _currentEvalRunId: string | null = null;
 let _currentEvalContext: { evalRunId: string; environmentId: string; providerId: string; caseId?: string } | null = null;
@@ -76,6 +78,22 @@ function getEvalsDir(): string {
   return join(getCovaloRoot(), "evals");
 }
 
+function getOutOfBoundsSentinelRoot(evalDir: string, caseId: string): string {
+  return join(evalDir, "sentinels", caseId);
+}
+
+function resolveOutOfBoundsPath(
+  evalDir: string,
+  caseId: string,
+  candidatePath: string,
+): string {
+  if (!candidatePath || typeof candidatePath !== "string") {
+    throw new UnsafeEvalPathError("outOfBoundsCheckPaths entry must be a non-empty string");
+  }
+  const sentinelRoot = getOutOfBoundsSentinelRoot(evalDir, caseId);
+  return resolveWithinRoot(sentinelRoot, candidatePath, `outOfBoundsCheckPaths[${candidatePath}]`);
+}
+
 function countVerifierCommands(manifest: import("./types").EvalCaseManifest): number {
   if (manifest.verifier.type === "file-assert") return 0;
   if (manifest.verifier.type === "script") return 1;
@@ -86,27 +104,50 @@ function countVerifierCommands(manifest: import("./types").EvalCaseManifest): nu
   return 0;
 }
 
-function getObjectiveSignals(workspaceDir: string): ObjectiveSignals {
+export function getObjectiveSignals(workspaceDir: string): ObjectiveSignals {
+  const gitEnv = {
+    ...process.env,
+    LC_ALL: "C.UTF-8",
+    LANG: "C.UTF-8",
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+  };
+
   try {
-    const diffNames = execSync("git diff --name-only 2>&1", {
+    const trackedDiffNames = execSync("git diff --name-only 2>&1", {
       cwd: workspaceDir,
       encoding: "utf-8",
       stdio: "pipe",
+      env: gitEnv,
     }).toString().trim();
+    const trackedChangedFiles = trackedDiffNames ? trackedDiffNames.split("\n").filter(Boolean).length : 0;
+    const trackedPaths = trackedDiffNames ? trackedDiffNames.split("\n").filter(Boolean) : [];
 
-    const changedFiles = diffNames ? diffNames.split("\n").filter(Boolean).length : 0;
+    const untrackedNames = execSync("git ls-files --others --exclude-standard 2>&1", {
+      cwd: workspaceDir,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: gitEnv,
+    }).toString().trim();
+    const untrackedFiles = untrackedNames ? untrackedNames.split("\n").filter(Boolean).length : 0;
+    const untrackedPaths = untrackedNames ? untrackedNames.split("\n").filter(Boolean) : [];
 
     const diffOutput = execSync("git diff 2>&1", {
       cwd: workspaceDir,
       encoding: "utf-8",
       stdio: "pipe",
+      env: gitEnv,
     }).toString();
     const diffSize = diffOutput ? diffOutput.split(/\r?\n/).filter(Boolean).length : 0;
 
-    const cleanGitDiff = !diffNames;
+    const changedFiles = trackedChangedFiles + untrackedFiles;
+    const cleanGitDiff = trackedChangedFiles === 0 && untrackedFiles === 0;
 
     return {
       changedFiles,
+      trackedChangedFiles,
+      untrackedFiles,
+      changedFilePaths: trackedPaths,
+      untrackedFilePaths: untrackedPaths,
       diffSize: diffSize || 0,
       toolFailureCount: 0,
       verificationCommandsRun: 0,
@@ -117,6 +158,10 @@ function getObjectiveSignals(workspaceDir: string): ObjectiveSignals {
   } catch {
     return {
       changedFiles: 0,
+      trackedChangedFiles: 0,
+      untrackedFiles: 0,
+      changedFilePaths: [],
+      untrackedFilePaths: [],
       diffSize: 0,
       toolFailureCount: 0,
       verificationCommandsRun: 0,
@@ -133,7 +178,12 @@ function computeScore(
   objectiveSignals: ObjectiveSignals | null,
   supervisorAssessment: Record<string, number> | null,
   policyGates: PolicyGateResult[] = [],
-): CaseScore {
+  classifiedVerifier?: ClassifiedVerifierResult | null,
+): CaseScore | null {
+  if (classifiedVerifier && !classifiedVerifier.scoreEligible) {
+    return null;
+  }
+
   const VW = 0.7;
   const OW = 0.2;
   const SW = 0.1;
@@ -142,13 +192,13 @@ function computeScore(
   let verifierSkipped = false;
   if (verifierResult) {
     if (verifierResult.verdict === "pass") verifierScore = 100;
-    else if (verifierResult.verdict === "error") verifierScore = 0;
-    else verifierScore = 0;
+    else if (classifiedVerifier && !classifiedVerifier.scoreEligible) {
+      verifierScore = 0;
+    } else {
+      verifierScore = 0;
+    }
   } else {
-    // verifier was not run (skipped) — treat as neutral instead of failure
     verifierSkipped = true;
-    // When skipped, renormalize without verifier weight
-    // Use only objective + supervisor weights
   }
 
   let objectiveScore = 50;
@@ -177,7 +227,6 @@ function computeScore(
 
   let finalScore: number;
   if (verifierSkipped) {
-    // Renormalize without verifier weight
     const remainingWeight = OW + SW;
     if (remainingWeight > 0) {
       finalScore = (objectiveScore * OW + supervisorScore * SW) / remainingWeight;
@@ -189,9 +238,6 @@ function computeScore(
 
     if (verifierResult && verifierResult.verdict === "fail") {
       finalScore = Math.min(finalScore, 40);
-    }
-    if (verifierResult && verifierResult.verdict === "error") {
-      finalScore = 0;
     }
   }
 
@@ -267,6 +313,9 @@ async function resolveSandboxProvider(
 
 function formatBenchmarkToolchainReason(status: BenchmarkToolchainStatus): string {
   const parts: string[] = [];
+  if (status.unsupportedPlatform) {
+    parts.push(`unsupported platform: ${status.unsupportedPlatform}`);
+  }
   if (status.missingTools.length > 0) {
     parts.push(`missing managed tools: ${status.missingTools.join(", ")}`);
   }
@@ -415,15 +464,32 @@ async function runSingleCase(
   let supervisorOutput = "";
   let verifierResult: VerifierResult | null = null;
   let supervisorAssessment: Record<string, number> | null = null;
+  let classifiedVerifier: ClassifiedVerifierResult | null = null;
   let error: string | undefined;
   let protectedViolations: string[] = [];
   let changedFiles: string[] = [];
 
   const outOfBoundsWrites: string[] = [];
+  const resolvedOoBPaths: string[] = [];
+  let unsafeOoBPaths: string[] = [];
   if (manifest.outOfBoundsCheckPaths) {
     for (const p of manifest.outOfBoundsCheckPaths) {
-      try { rmSync(p, { force: true, recursive: true }); } catch {}
+      try {
+        const resolved = resolveOutOfBoundsPath(join(getEvalsDir(), runId || "eval"), caseId, p);
+        resolvedOoBPaths.push(resolved);
+        try { rmSync(resolved, { force: true, recursive: true }); } catch {}
+      } catch (err) {
+        if (err instanceof UnsafeEvalPathError) {
+          unsafeOoBPaths.push(p);
+          continue;
+        }
+        throw err;
+      }
     }
+  }
+
+  if (unsafeOoBPaths.length > 0) {
+    error = `Manifest contract error: unsafe outOfBoundsCheckPaths: ${unsafeOoBPaths.join(", ")}`;
   }
 
   let toolTrackingValid = false;
@@ -532,15 +598,7 @@ async function runSingleCase(
       }
     }
 
-    async function getChangedFiles(dir: string): Promise<string[]> {
-      try {
-        const { execSync } = await import("node:child_process");
-        const out = execSync("git diff --name-only 2>/dev/null", { cwd: dir, encoding: "utf-8", stdio: "pipe" }).toString().trim();
-        return out ? out.split("\n").filter(Boolean) : [];
-      } catch { return []; }
-    }
-
-    changedFiles = await getChangedFiles(workspaceDir);
+    const objectiveSignals = getObjectiveSignals(workspaceDir);
     function matchProtectedFile(filePath: string, pattern: string): boolean {
       const p = pattern.replace(/\/+$/, "").replace(/\\/g, "/");
       const f = filePath.replace(/\\/g, "/");
@@ -548,25 +606,26 @@ async function runSingleCase(
       return f === p || f.startsWith(p + "/");
     }
     if (manifest.protectedFiles && manifest.protectedFiles.length > 0) {
-      for (const pf of manifest.protectedFiles) {
-        if (changedFiles.some(cf => matchProtectedFile(cf, pf))) {
-          protectedViolations.push(pf);
+      const allCandidateFiles = [
+        ...objectiveSignals.changedFilePaths,
+        ...objectiveSignals.untrackedFilePaths,
+      ];
+      for (const cf of allCandidateFiles) {
+        for (const pf of manifest.protectedFiles) {
+          if (matchProtectedFile(cf, pf)) {
+            if (!protectedViolations.some(v => cf === v || cf.startsWith(v + "/") || cf.startsWith(v))) {
+              protectedViolations.push(pf);
+            }
+          }
         }
       }
     }
 
     // Auto-protect test/verifier files for all case types
-    const allChangedFiles = new Set(changedFiles);
-    try {
-      const untracked = execSync("git ls-files --others --exclude-standard 2>/dev/null", {
-        cwd: workspaceDir, encoding: "utf-8", stdio: "pipe",
-      }).toString().trim();
-      if (untracked) {
-        for (const uf of untracked.split("\n").filter(Boolean)) {
-          allChangedFiles.add(uf);
-        }
-      }
-    } catch {}
+    const allChangedFiles = new Set([
+      ...objectiveSignals.changedFilePaths,
+      ...objectiveSignals.untrackedFilePaths,
+    ]);
     for (const cf of allChangedFiles) {
       if (COMMON_TEST_FILE_PATTERNS.some(p => p.test(cf))) {
         const alreadyListed = protectedViolations.some(v => cf === v || cf.startsWith(v + "/") || cf.startsWith(v));
@@ -586,19 +645,19 @@ async function runSingleCase(
     );
     // Write verifier classification
     if (verifierResult) {
-      const vc = classifyVerifierResult(verifierResult, manifest);
+      classifiedVerifier = classifyVerifierResult(verifierResult, manifest);
       await writeCaseArtifact(
         caseDir,
         "verifier-classification.json",
-        JSON.stringify(vc, null, 2),
+        JSON.stringify(classifiedVerifier, null, 2),
       );
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
 
-  if (manifest.outOfBoundsCheckPaths) {
-    for (const p of manifest.outOfBoundsCheckPaths) {
+  if (resolvedOoBPaths.length > 0) {
+    for (const p of resolvedOoBPaths) {
       if (existsSync(p)) {
         outOfBoundsWrites.push(p);
       }
@@ -617,6 +676,7 @@ async function runSingleCase(
     objectiveSignals.toolFailureCount = toolStats.failures;
   }
   const patchDiff = getPatchDiff(workspaceDir);
+  const classified = classifiedVerifier;
 
   if (patchDiff) {
     await writeCaseArtifact(caseDir, "patch.diff", patchDiff);
@@ -637,13 +697,23 @@ async function runSingleCase(
     JSON.stringify({ event: "tool.summary", ...toolSummary }),
   );
 
-  let verdict: "pass" | "fail" | "error" | "skipped" = error
-    ? "error"
-    : !verifierResult
-      ? "skipped"
-      : verifierResult.verdict === "pass"
-        ? "pass"
-        : "fail";
+  let verdict: "pass" | "fail" | "error" | "skipped" | "infra_error";
+  if (error) {
+    verdict = "error";
+  } else if (!verifierResult) {
+    verdict = "skipped";
+  } else {
+    const verifierClassification = verifierResult
+      ? classifyVerifierResult(verifierResult, manifest)
+      : null;
+    if (verifierClassification?.verdict === "task_pass") {
+      verdict = "pass";
+    } else if (verifierClassification && !verifierClassification.scoreEligible) {
+      verdict = "infra_error";
+    } else {
+      verdict = "fail";
+    }
+  }
 
   const policyGates: import("./types").PolicyGateResult[] = [];
   if (objectiveSignals) {
@@ -757,7 +827,7 @@ async function runSingleCase(
     await writeCaseArtifact(caseDir, "review-packet.json", JSON.stringify(reviewPacket, null, 2));
   }
 
-  const score = computeScore(verifierResult, objectiveSignals, supervisorAssessment, policyGates);
+  const score = computeScore(verifierResult, objectiveSignals, supervisorAssessment, policyGates, classifiedVerifier);
   await writeCaseArtifact(
     caseDir,
     "score.json",
@@ -1046,28 +1116,6 @@ ${isZh
   : `Please provide a structured assessment with scores (0-100) for dimensions: taskCompletion, verification, toolUse, efficiency, safety.
 
 Return your assessment as JSON object with a "dimensions" field containing scores for each dimension.`}`;
-}
-
-function extractAssessment(
-  supervisorOutput: string,
-): Record<string, number> | null {
-  try {
-    const jsonMatch = supervisorOutput.match(/\{[\s\S]*"dimensions"[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.dimensions) {
-        const result: Record<string, number> = {};
-        for (const [key, value] of Object.entries(parsed.dimensions)) {
-          if (typeof value === "number" && !isNaN(value)) {
-            result[key] = value > 1 ? Math.max(0, Math.min(1, value / 100)) : Math.max(0, Math.min(1, value));
-          }
-        }
-        return Object.keys(result).length > 0 ? result : null;
-      }
-    }
-  } catch {
-  }
-  return null;
 }
 
 export async function runFixedEval(

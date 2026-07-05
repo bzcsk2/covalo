@@ -1124,7 +1124,10 @@ Do not change goal status.`
     // ADV-HAR-03: 根据 effectivePolicy.shellPolicy 重新注册 bash 工具
     if (this.effectivePolicy.shellPolicy === "dual-track" || this.effectivePolicy.shellPolicy === "dual-track-conservative") {
       const { createBashTool } = await import("@covalo/tools")
-      this.tools.set("bash", createBashTool({ dualTrack: true }))
+      this.tools.set("bash", createBashTool({
+        dualTrack: true,
+        conservative: this.effectivePolicy.shellPolicy === "dual-track-conservative",
+      }))
     }
 
     // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率
@@ -1334,11 +1337,16 @@ Do not change goal status.`
       // 不带 worker/supervisor 键时 isToolAllowed 会访问 config.tools[role][mode] 崩溃。
       // 这里做结构守卫，避免把任意带 tools 字段的对象误当 CovaloConfig。
       const maybeCovaloConfig = isCovaloConfigLike(this.config) ? (this.config as unknown as CovaloConfig) : undefined
+      // 合并 agent 预设 toolNames 与用户动态注册的工具（registerTool），
+      // 确保自定义工具不被 agentToolNames 过滤掉
+      const mergedToolNames = ac.toolNames !== undefined
+        ? [...new Set([...ac.toolNames, ...this.tools.keys()])]
+        : undefined
       const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
         registeredTools: this.tools,
         role: effectiveRole,
         mode: effectiveMode,
-        agentToolNames: ac.toolNames,
+        agentToolNames: mergedToolNames,
         workflowPhase,
         config: maybeCovaloConfig,
       })
