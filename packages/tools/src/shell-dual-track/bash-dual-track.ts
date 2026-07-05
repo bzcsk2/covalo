@@ -26,26 +26,21 @@ import { truncateOutput, pushBounded, finalizeBounded, createProgressThrottle, t
 import { resolvePath, PathContainmentError } from "../resolve-path.js"
 
 const DEFAULT_TIMEOUT = 30_000
-const CONSERVATIVE_TIMEOUT = 15_000
 const DEFAULT_MAX_CHARS = 200_000
 
 export interface DualTrackBashOptions {
   /** 工具名称，默认 bash */
   name?: string
-  /** FIX-H6: 保守模式 — 更短前台超时、禁止后台 destructive 命令、更短 auto 升级时间 */
-  conservative?: boolean
 }
 
 /**
  * 创建支持双轨执行的 bash 工具。
  */
 export function createDualTrackBashTool(options: DualTrackBashOptions = {}): AgentTool {
-  const conservative = options.conservative ?? false
   return {
     name: options.name ?? "bash",
     description:
-      "Run shell commands with dual-track execution. Short commands (git status, ls, echo) run foreground with a 10s cap. Long jobs (npm test/build/dev, vitest, docker build) start in background and return task_id. Ambiguous commands run foreground but escalate to background after 8s if still running. Use action:\"check\" with task_id and since (cursor) to poll incremental output. Use action:\"list\" to list background tasks. Use action:\"stop\" to kill a running task. Force background with background:true; never use background for destructive commands."
-      + (conservative ? " Conservative mode: shorter foreground timeouts, shorter auto-escalation threshold, destructive commands blocked from background." : ""),
+      "Run shell commands with dual-track execution. Short commands (git status, ls, echo) run foreground with a 10s cap. Long jobs (npm test/build/dev, vitest, docker build) start in background and return task_id. Ambiguous commands run foreground but escalate to background after 8s if still running. Use action:\"check\" with task_id and since (cursor) to poll incremental output. Use action:\"list\" to list background tasks. Use action:\"stop\" to kill a running task. Force background with background:true; never use background for destructive commands.",
     parameters: {
       type: "object",
       properties: {
@@ -188,7 +183,7 @@ export function createDualTrackBashTool(options: DualTrackBashOptions = {}): Age
         const timeoutMs = pickForegroundTimeout(
           shellClass,
           typeof args.timeout_ms === "number" ? args.timeout_ms : undefined,
-          conservative ? CONSERVATIVE_TIMEOUT : DEFAULT_TIMEOUT,
+          DEFAULT_TIMEOUT,
         )
         const result = await ctx.sandboxProvider.run({
           command,
@@ -223,15 +218,6 @@ export function createDualTrackBashTool(options: DualTrackBashOptions = {}): Age
       const explicitForeground = args.background === false
       const destructive = isDestructiveShellCommand(command, backend.id)
 
-      // FIX-H6: conservative 模式下 destructive 命令不能后台
-      const destructiveBackground = destructive && explicitBackground && conservative
-      if (destructiveBackground) {
-        return {
-          content: safeStringify({ error: "Destructive command cannot run in background in conservative mode." }),
-          isError: true,
-        }
-      }
-
       const shouldBackground =
         !destructive &&
         !explicitForeground &&
@@ -265,7 +251,7 @@ export function createDualTrackBashTool(options: DualTrackBashOptions = {}): Age
       const timeoutMs = pickForegroundTimeout(
         shellClass,
         typeof args.timeout_ms === "number" ? args.timeout_ms : undefined,
-        conservative ? CONSERVATIVE_TIMEOUT : DEFAULT_TIMEOUT,
+        DEFAULT_TIMEOUT,
       )
       const enableEscalate = shellClass === "auto" && !explicitForeground
 
@@ -278,7 +264,6 @@ export function createDualTrackBashTool(options: DualTrackBashOptions = {}): Age
         reportProgress: ctx.reportProgress,
         backend,
         enableEscalate,
-        conservative,
         bgManager,
         label: typeof args.label === "string" ? args.label : command.substring(0, 40),
       })
@@ -307,7 +292,6 @@ interface ForegroundRunOptions {
   reportProgress?: (update: ToolProgressUpdate) => void
   backend: { id: ShellBackendId; executable: string; args: string[] }
   enableEscalate: boolean
-  conservative: boolean
   bgManager: ReturnType<typeof getBackgroundTaskManagerFor>
   label: string
 }
@@ -425,7 +409,6 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
       })
     }, opts.timeoutMs)
 
-    const softTimeoutMs = opts.conservative ? 5_000 : SOFT_TIMEOUT_MS
     let softTimer: ReturnType<typeof setTimeout> | null = null
     if (opts.enableEscalate) {
       softTimer = setTimeout(() => {
@@ -470,7 +453,7 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
           hint: "Command still running after 8s; moved to background. Poll with action:\"check\" and task_id.",
           classifiedAs: "auto",
         })
-      }, softTimeoutMs)
+      }, SOFT_TIMEOUT_MS)
     }
 
     if (opts.signal) {

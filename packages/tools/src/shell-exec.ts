@@ -12,8 +12,6 @@ import { resolvePath, PathContainmentError } from "./resolve-path.js"
 export interface BashToolOptions {
   /** 启用 Shell 双轨执行（short 前台 / long 后台 / auto 软超时升级） */
   dualTrack?: boolean
-  /** FIX-H6: 保守模式 — 更短前台超时、禁止后台 destructive 命令 */
-  conservative?: boolean
 }
 
 /**
@@ -21,7 +19,7 @@ export interface BashToolOptions {
  */
 export function createBashTool(options: BashToolOptions = {}): AgentTool {
   if (options.dualTrack) {
-    return createDualTrackBashTool({ conservative: options.conservative })
+    return createDualTrackBashTool()
   }
   return createForegroundBashTool()
 }

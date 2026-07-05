@@ -37,13 +37,6 @@ export interface RepairRound {
   gateResults?: DeterministicGateResult[];
 }
 
-/**
- * 有界修复循环 — 实验性模块，尚未实际接入 engine runtime 路径。
- *
- * 在门禁检查失败后自动修复提示表面。真正接入需要单独设计，当前不要在生产 submit 中依赖。
- *
- * @experimental
- */
 export class BoundedRepairLoop {
   private config: RepairLoopConfig;
   private store: PacketStore;
