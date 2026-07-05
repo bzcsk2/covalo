@@ -1493,6 +1493,7 @@ Do not change goal status.`
         allowedToolNames: effectiveMode === "loop"
           ? new Set(toolSpecs.map(spec => spec.function.name))
           : undefined,
+        customToolNames,
         supervisorGuidance: this.effectivePolicy?.supervisorPolicy !== "off"
           ? this.buildSupervisorGuidanceConfig()
           : undefined,
