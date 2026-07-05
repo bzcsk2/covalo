@@ -75,8 +75,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     ])
 
     const engine = makeEngine()
-    // FIX-H1: 自定义工具 shared_ok/exclusive_done 需 loose toolset 放行 + 跳过白名单
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     const sharedTool: AgentTool = {
       name: "shared_ok", description: "shared tool",
       parameters: { type: "object", properties: { x: { type: "number" } }, required: ["x"] },
@@ -136,8 +135,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     ])
 
     const engine = makeEngine()
-    // FIX-H1: 自定义工具 ok 需 loose toolset 放行 + 跳过白名单
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     engine.registerTool(tool)
 
     const events: LoopEvent[] = []
@@ -165,8 +163,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     mockClient.setGenerators(Array.from({ length: 5 }, repeatedToolCall))
 
     const engine = makeEngine()
-    // FIX-H1: 自定义工具 read_same 需 loose toolset 放行 + 跳过白名单
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     engine.registerTool({
       name: "read_same", description: "read same file",
       parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
@@ -332,8 +329,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     ])
 
     const engine = makeEngine()
-    // FIX-H1: 自定义工具 t1/t2 需 loose toolset 放行 + 跳过白名单
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     const tool1: AgentTool = { name: "t1", description: "t1", parameters: { type: "object", properties: { x: { type: "number" } } }, concurrency: "shared", approval: "read", async execute() { return { content: "ok1", isError: false } } }
     const tool2: AgentTool = { name: "t2", description: "t2", parameters: { type: "object", properties: { y: { type: "number" } } }, concurrency: "exclusive", approval: "read", async execute() { return { content: "ok2", isError: false } } }
     engine.registerTool(tool1)

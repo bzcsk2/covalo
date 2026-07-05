@@ -175,8 +175,8 @@ describe("TT2: E2E tool chains through engine", () => {
       genText("recovered"),
     ])
     const engine = makeEngine()
-    // FIX-H1: 自定义工具 failing_tool 需 loose toolset 放行 + 跳过白名单
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行，
+    // 并通过 engine.ts agentToolNames 合并 this.tools.keys() 加入白名单。
     engine.registerTool({
       name: "failing_tool", description: "fails",
       parameters: { type: "object", properties: {} },
@@ -197,8 +197,7 @@ describe("TT2: E2E tool chains through engine", () => {
       genTool("slow_tool", {}),
     ])
     const engine = makeEngine()
-    // FIX-H1: 自定义工具 slow_tool 需 loose toolset 放行 + 跳过白名单
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     let executed = false
     engine.registerTool({
       name: "slow_tool", description: "slow",

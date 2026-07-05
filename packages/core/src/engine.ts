@@ -1341,7 +1341,12 @@ Do not change goal status.`
         registeredTools: this.tools,
         role: effectiveRole,
         mode: effectiveMode,
-        agentToolNames: ac.toolNames,
+        // FIX-CUSTOM-TOOLS: 合并 ac.toolNames 与 registerTool() 注册的自定义工具。
+        // 否则 resolveEffectiveTools 的 agentToolNames 白名单会过滤掉自定义工具，
+        // 导致 H1 effectiveAllowedToolNames 限制下自定义工具无法执行。
+        agentToolNames: ac.toolNames
+          ? [...new Set([...ac.toolNames, ...this.tools.keys()])]
+          : ac.toolNames,
         workflowPhase,
         config: maybeCovaloConfig,
       })

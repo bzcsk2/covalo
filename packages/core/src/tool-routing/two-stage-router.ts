@@ -191,7 +191,10 @@ export function applyDeterministicCategoryFilter(
   const filtered = allTools.filter((tool) => {
     const category = inferToolCategory(tool.function.name, options.toolCategoryMap)
     if (category === "full") {
-      return allowedCategories.size === TOOLSET_CATEGORIES.full.length
+      // FIX-CUSTOM-TOOLS: 自定义工具（未在 TOOL_CATEGORIES 中注册的工具）始终放行，
+      // 不受 toolset 规模过滤。strict/normal/coding/minimal toolset 不应阻止
+      // registerTool() 注册的自定义工具通过。
+      return true
     }
     return allowedCategories.has(category)
   })

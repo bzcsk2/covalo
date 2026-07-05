@@ -579,7 +579,15 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
     expect(capturedAllowedSet!.has("LSP")).toBe(false)
   })
 
-  it("H2: textToolSalvage 'off' (loose) does not execute salvage on text with embedded tool calls", async () => {
+  // H2: 验证 textToolSalvage policy gate 对 parser 可识别的嵌入工具调用的执行差异。
+  // FIX-H2: 原 H2 使用 'I need to read_file({"path": "/tmp/x"})' 函数调用式文本，
+  // 不是当前 parser 支持的嵌入工具调用格式（XML 块 / JSON 对象 / fenced JSON /
+  // delimited channel）。改为 parser 确认可识别的 JSON 对象格式，并拆分为 H2a/H2b
+  // 以同时验证 off 不执行、always 会执行。
+  const H2_EMBEDDED_TOOL_CALL_TEXT =
+    'Before reading, I will call: {"name":"read_file","arguments":{"path":"/tmp/x"}} done.'
+
+  it("H2a: textToolSalvage 'off' (loose) does not execute salvage on parser-recognized embedded tool call", async () => {
     // Create a mock that registers a salvage-counter tool
     let salvageToolExecuted = false
     const tools = new Map<string, (args: Record<string, unknown>) => ToolResult>([
@@ -591,14 +599,14 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
     const toolExecutor = makeMockExecutor(tools)
     const tracker = new BranchBudgetTracker()
     tracker.bindWorkspaceRoot(tmpDir)
-    const checkpoint = new CheckpointEngine(tmpDir, "rt-h2")
+    const checkpoint = new CheckpointEngine(tmpDir, "rt-h2a")
     const modeEngine = new ModeDecisionEngine()
     const ctx = new ContextManager(20, 32_768)
     const config = { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" }
 
-    // Model output contains text that looks like a tool call — salvage-able pattern
+    // Model output contains parser-recognized JSON embedded tool call.
     const client = makeClient([
-      [{ type: "text_delta", delta: 'I need to read_file({"path": "/tmp/x"})' },
+      [{ type: "text_delta", delta: H2_EMBEDDED_TOOL_CALL_TEXT },
        { type: "done", finishReason: "stop" }],
     ])
 
@@ -621,6 +629,48 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
 
     // With loose policy (textToolSalvage: "off"), salvage should NOT execute the tool
     expect(salvageToolExecuted).toBe(false)
+  })
+
+  it("H2b: textToolSalvage 'always' (strict) executes salvage on parser-recognized embedded tool call", async () => {
+    let salvageToolExecuted = false
+    const tools = new Map<string, (args: Record<string, unknown>) => ToolResult>([
+      ["read_file", async () => {
+        salvageToolExecuted = true
+        return { content: "read", isError: false }
+      }],
+    ])
+    const toolExecutor = makeMockExecutor(tools)
+    const tracker = new BranchBudgetTracker()
+    tracker.bindWorkspaceRoot(tmpDir)
+    const checkpoint = new CheckpointEngine(tmpDir, "rt-h2b")
+    const modeEngine = new ModeDecisionEngine()
+    const ctx = new ContextManager(20, 32_768)
+    const config = { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" }
+
+    const client = makeClient([
+      [{ type: "text_delta", delta: H2_EMBEDDED_TOOL_CALL_TEXT },
+       { type: "done", finishReason: "stop" }],
+    ])
+
+    await drainLoop(runLoop({
+      ctx, client, toolExecutor, toolSpecs: [
+        { type: "function", function: { name: "read_file", description: "r", parameters: {} } },
+      ],
+      config,
+      signal: new AbortController().signal,
+      stats: makeStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      maxTurns: 1,
+      effectivePolicy: makePolicy("strict"), // textToolSalvage: "always"
+      branchBudgetTracker: tracker,
+      checkpointEngine: checkpoint,
+      modeDecisionEngine: modeEngine,
+      workspaceRoot: tmpDir,
+    }))
+
+    // With strict policy (textToolSalvage: "always"), salvage SHOULD execute the tool
+    expect(salvageToolExecuted).toBe(true)
   })
 
   it("H4: StreamingToolExecutor respects maxParallelTools concurrency limit", async () => {
