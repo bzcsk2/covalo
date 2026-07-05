@@ -101,6 +101,8 @@ export interface LoopOptions {
   verificationPolicy?: "block" | "require-or-waive" | "warn"
   /** Tool names allowed to execute in this loop turn. Undefined preserves legacy execution behavior. */
   allowedToolNames?: ReadonlySet<string>
+  /** Explicitly registered non-builtin tool names allowed through deterministic routing. */
+  customToolNames?: Set<string>
   /** F0-1: 分支预算追踪器 — 工具前硬拦截、工具后计数 */
   branchBudgetTracker?: BranchBudgetTracker
   /** F0-1: CheckpointEngine — safe point 落盘与恢复 */
@@ -127,6 +129,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     /** ADV-HAR-08: 验证策略 */
     verificationPolicy: verificationMode,
     allowedToolNames,
+    customToolNames,
     /** F0-1: governance/checkpoint 三件套 */
     branchBudgetTracker,
     checkpointEngine,
@@ -621,6 +624,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         // 不应再受 toolset 二次过滤（否则 AskUserQuestion/todowrite/AgentTool/get_goal 等
         // 治理工具会被 applyDeterministicCategoryFilter 误删），所以 supervisor 跳过 toolset。
         toolset: role === "supervisor" ? undefined : effectivePolicy?.toolset,
+        customToolNames,
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools
