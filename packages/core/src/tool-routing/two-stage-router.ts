@@ -174,6 +174,7 @@ export function applyDeterministicCategoryFilter(
     toolset?: ToolsetSize
     selectedCategory?: ToolCategory
     toolCategoryMap?: Record<string, ToolCategory>
+    customToolNames?: Set<string>
   } = {},
 ): { tools: ToolSpec[]; categories: ToolCategory[] } {
   const toolset = options.toolset ?? "full"
@@ -191,8 +192,10 @@ export function applyDeterministicCategoryFilter(
   const filtered = allTools.filter((tool) => {
     const category = inferToolCategory(tool.function.name, options.toolCategoryMap)
       if (category === "full") {
-      // 未知类别的工具（通常是用户自定义的工具）始终可用，不受 toolset 限制
-      return true
+      // 自定义工具（未匹配内置类别）只有显式注册时才放行，
+      // 或者当 toolset=full 时允许所有（包括自定义工具）
+      return options.customToolNames?.has(tool.function.name) === true
+        || allowedCategories.size === TOOLSET_CATEGORIES.full.length
     }
     return allowedCategories.has(category)
   })
@@ -294,12 +297,21 @@ export function parseSelectedCategory(argumentsJson: string): ToolCategory | und
  * 主入口：根据上下文决定注入哪些 tool schema
  */
 export function resolveToolRouting(ctx: ToolRoutingContext): ToolRoutingDecision {
+  // 识别自定义工具（不匹配任何内置类别的工具），供类别过滤时放行
+  const customToolNames = new Set<string>()
+  for (const tool of ctx.allTools) {
+    if (inferToolCategory(tool.function.name, ctx.toolCategoryMap) === "full") {
+      customToolNames.add(tool.function.name)
+    }
+  }
+
   const { tools: deterministicTools, categories } = applyDeterministicCategoryFilter(
     ctx.allTools,
     {
       toolset: ctx.toolset,
       selectedCategory: ctx.selectedCategory,
       toolCategoryMap: ctx.toolCategoryMap,
+      customToolNames,
     },
   )
 
