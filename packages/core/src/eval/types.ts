@@ -154,6 +154,10 @@ export interface SetupResult {
 
 export interface ObjectiveSignals {
   changedFiles: number;
+  trackedChangedFiles: number;
+  untrackedFiles: number;
+  changedFilePaths: string[];
+  untrackedFilePaths: string[];
   diffSize: number;
   toolFailureCount: number;
   verificationCommandsRun: number;

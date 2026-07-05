@@ -108,6 +108,8 @@ export interface LoopOptions {
   modeDecisionEngine?: ModeDecisionEngine
   /** F0-1: 工作区根（BranchBudgetTracker 路径规范化用） */
   workspaceRoot?: string
+  /** 显式声明的自定义工具名集合（由 engine.registerTool 动态注册） */
+  customToolNames?: Set<string>
 }
 
 const DEFAULT_MAX_TURNS = 100
@@ -611,6 +613,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         // - undefined / false：router 看到 selectedCategory 存在 → 进入 Stage 2（category_tools）
         // - true：router 重新注入 select_category（用于重置后让模型重新选择）
         // 这里我们已经有 selectedCategory，希望进入 Stage 2，所以保持 undefined。
+        customToolNames: opts.customToolNames,
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools

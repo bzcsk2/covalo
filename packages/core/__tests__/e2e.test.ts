@@ -175,6 +175,12 @@ describe("TT2: E2E tool chains through engine", () => {
       genText("recovered"),
     ])
     const engine = makeEngine()
+    // 自定义测试工具需要绕过两层过滤：
+    // 1) resolveEffectiveTools 按 MAIN_MODES.build.toolNames 过滤 → 传入不含 toolNames
+    //    的 agentConfig 使 ac.toolNames === undefined，跳过该过滤；
+    // 2) resolveToolRouting 按 toolset 类别过滤 → loose policy 的 toolset="full" 让
+    //    inferToolCategory 返回 "full" 的工具也被保留。
+    engine.setHarnessStrictness("loose")
     engine.registerTool({
       name: "failing_tool", description: "fails",
       parameters: { type: "object", properties: {} },
@@ -182,7 +188,7 @@ describe("TT2: E2E tool chains through engine", () => {
       async execute() { return { content: JSON.stringify({ error: "something went wrong" }), isError: true } },
     })
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("trigger error")) events.push(e)
+    for await (const e of engine.submit("trigger error", { name: "build" })) events.push(e)
     const errorEvent = events.find((e) => e.role === "error" && e.toolName === "failing_tool")
     expect(errorEvent).toBeDefined()
     expect(errorEvent!.severity).toBe("error")
@@ -196,6 +202,8 @@ describe("TT2: E2E tool chains through engine", () => {
     ])
     const engine = makeEngine()
     let executed = false
+    // 同上 — loose + 不含 toolNames 的 agentConfig 让自定义工具通过两层过滤。
+    engine.setHarnessStrictness("loose")
     engine.registerTool({
       name: "slow_tool", description: "slow",
       parameters: { type: "object", properties: {} },
@@ -207,7 +215,7 @@ describe("TT2: E2E tool chains through engine", () => {
       },
     })
     const events: LoopEvent[] = []
-    const iter = engine.submit("interrupt test")
+    const iter = engine.submit("interrupt test", { name: "build" })
     setTimeout(() => engine.interrupt(), 50)
     for await (const e of iter) events.push(e)
     expect(executed).toBe(true)

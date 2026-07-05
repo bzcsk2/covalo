@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import type { EvalCaseManifest, VerifierResult, FileAssertion } from "./types";
 import type { SandboxProvider, SandboxCommand } from "../sandbox/types";
+import { resolveWithinRoot, UnsafeEvalPathError } from "./path-guards";
 
 let _sandboxProvider: SandboxProvider | null = null;
 
@@ -77,7 +78,24 @@ async function runCommandViaProvider(
     writeRoots: [workspaceDir],
   };
 
-  const result = await provider.run(sandboxCmd);
+  let result;
+  try {
+    result = await provider.run(sandboxCmd);
+  } catch (err) {
+    const stderr = err instanceof Error ? err.message : String(err);
+    const errName = err instanceof Error ? err.name : "UnknownError";
+    return {
+      passed: false,
+      verdict: "error",
+      stdout: "",
+      stderr,
+      exitCode: null,
+      details: [
+        "Sandbox provider threw during command verifier",
+        errName,
+      ],
+    };
+  }
 
   const fileResults = await runFileAssertions(
     manifest.verifier.fileAssertions ?? [],
@@ -307,14 +325,31 @@ async function runScriptVerifier(
   if (provider) {
     const timeout = manifest.verifier.timeoutMs ?? 60_000;
     // Use validated resolved path for sandbox provider
-    const result = await provider.run({
-      command: `bun run ${resolvedScriptPath}`,
-      cwd: workspaceDir,
-      timeoutMs: timeout,
-      allowNetwork: false,
-      readRoots: [workspaceDir],
-      writeRoots: [workspaceDir],
-    });
+    let result;
+    try {
+      result = await provider.run({
+        command: `bun run ${resolvedScriptPath}`,
+        cwd: workspaceDir,
+        timeoutMs: timeout,
+        allowNetwork: false,
+        readRoots: [workspaceDir],
+        writeRoots: [workspaceDir],
+      });
+    } catch (err) {
+      const stderr = err instanceof Error ? err.message : String(err);
+      const errName = err instanceof Error ? err.name : "UnknownError";
+      return {
+        passed: false,
+        verdict: "error",
+        stdout: "",
+        stderr,
+        exitCode: null,
+        details: [
+          "Sandbox provider threw during script verifier",
+          errName,
+        ],
+      };
+    }
 
     if (result.exitCode === 0) {
       return {
@@ -402,7 +437,13 @@ async function runFileAssertions(
   const details: string[] = [];
 
   for (const assertion of assertions) {
-    const fullPath = join(workspaceDir, assertion.path);
+    let fullPath: string;
+    try {
+      fullPath = resolveWithinRoot(workspaceDir, assertion.path, "file assertion path");
+    } catch (err) {
+      details.push(`ERROR: unsafe file assertion path ${assertion.path}`);
+      return { passed: false, details };
+    }
     const exists = existsSync(fullPath);
 
     if (assertion.mustExist === true && !exists) {

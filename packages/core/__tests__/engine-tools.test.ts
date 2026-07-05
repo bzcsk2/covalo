@@ -786,4 +786,5 @@ describe("ADV-HAR-02: EffectiveHarnessPolicy integration", () => {
     engine.setHarnessStrictness("loose")
     expect(engine.getHarnessStrictness()).toBe("loose")
   })
+
 })

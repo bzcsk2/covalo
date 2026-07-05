@@ -107,6 +107,39 @@ describe("applyDeterministicCategoryFilter", () => {
     const filtered = applyDeterministicCategoryFilter(tools, { toolset: "full" })
     expect(filtered.tools.some((t) => t.function.name === "mcp_unknown")).toBe(true)
   })
+
+  it("REGRESSION: category==='full' 的未知工具在 minimal 中不应放行，除非在 customToolNames 中", () => {
+    // 模拟一个"忘记分类"的内置工具（category='full' 但不在 customToolNames 中）
+    const tools = [...ALL_BUILTIN_TOOLS, makeTool("unlisted_builtin")]
+    // minimal + 无 customToolNames：未知工具被过滤
+    const { tools: filtered } = applyDeterministicCategoryFilter(tools, {
+      toolset: "minimal",
+    })
+    expect(filtered.some((t) => t.function.name === "unlisted_builtin")).toBe(false)
+
+    // minimal + customToolNames 包含它：放行
+    const { tools: filtered2 } = applyDeterministicCategoryFilter(tools, {
+      toolset: "minimal",
+      customToolNames: new Set(["unlisted_builtin"]),
+    })
+    expect(filtered2.some((t) => t.function.name === "unlisted_builtin")).toBe(true)
+  })
+
+  it("REGRESSION: category==='full' 的自定义工具在 coding 中不应放行，除非在 customToolNames 中", () => {
+    const tools = [...ALL_BUILTIN_TOOLS, makeTool("my_custom_api")]
+    // coding + 无 customToolNames：过滤
+    const { tools: filtered } = applyDeterministicCategoryFilter(tools, {
+      toolset: "coding",
+    })
+    expect(filtered.some((t) => t.function.name === "my_custom_api")).toBe(false)
+
+    // coding + customToolNames：放行
+    const { tools: filtered2 } = applyDeterministicCategoryFilter(tools, {
+      toolset: "coding",
+      customToolNames: new Set(["my_custom_api"]),
+    })
+    expect(filtered2.some((t) => t.function.name === "my_custom_api")).toBe(true)
+  })
 })
 
 describe("getToolsForCategory", () => {
@@ -240,6 +273,49 @@ describe("resolveToolRouting", () => {
     expect(decision.tools.some(t => t.function.name === "select_category")).toBe(false)
     // 应包含 read 类工具
     expect(decision.tools.some(t => t.function.name === "read_file")).toBe(true)
+  })
+
+  it("REGRESSION: resolveToolRouting 使用 ctx.customToolNames 在 direct 模式放行自定义工具", () => {
+    const tools = [...ALL_BUILTIN_TOOLS, makeTool("custom_db_query")]
+    // large context + routingOverride=direct + minimal + customToolNames
+    // → 直接模式，custom_db_query 因在 customToolNames 中得以放行
+    const decision = resolveToolRouting({
+      allTools: tools,
+      contextWindow: 128_000,
+      toolset: "minimal",
+      sizeClass: "large",
+      routingOverride: "direct",
+      customToolNames: new Set(["custom_db_query"]),
+    })
+    expect(decision.mode).toBe("direct")
+    expect(decision.tools.some((t) => t.function.name === "custom_db_query")).toBe(true)
+  })
+
+  it("REGRESSION: resolveToolRouting 无 customToolNames 时 category==='full' 的未知工具在 direct minimal 中被过滤", () => {
+    const tools = [...ALL_BUILTIN_TOOLS, makeTool("unlisted_builtin")]
+    // large context + direct + minimal + 无 customToolNames → unknown 工具被过滤
+    const decision = resolveToolRouting({
+      allTools: tools,
+      contextWindow: 128_000,
+      toolset: "minimal",
+      sizeClass: "large",
+      routingOverride: "direct",
+    })
+    expect(decision.mode).toBe("direct")
+    expect(decision.tools.some((t) => t.function.name === "unlisted_builtin")).toBe(false)
+  })
+
+  it("REGRESSION: resolveToolRouting full toolset 时所有工具都放行（即使不在 customToolNames）", () => {
+    const tools = [...ALL_BUILTIN_TOOLS, makeTool("weird_tool")]
+    const decision = resolveToolRouting({
+      allTools: tools,
+      contextWindow: 128_000,
+      toolset: "full",
+      sizeClass: "large",
+      routingOverride: "direct",
+    })
+    expect(decision.mode).toBe("direct")
+    expect(decision.tools.some((t) => t.function.name === "weird_tool")).toBe(true)
   })
 
   it("TR-1: selectedCategory 存在但 awaitingCategorySelection=true → 重新进入 category_select", () => {

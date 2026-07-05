@@ -457,13 +457,24 @@ export function getToolchainInfo(): Record<string, { installed: boolean; path: s
 }
 
 export interface BenchmarkToolchainStatus {
-  ready: boolean
-  missingTools: string[]
-  missingSha256: string[]
-  versionMismatches: Array<{ name: string; expected: string; actual: string | null }>
+  ready: boolean;
+  unsupportedPlatform?: string;
+  missingTools: string[];
+  missingSha256: string[];
+  versionMismatches: Array<{ name: string; expected: string; actual: string | null }>;
 }
 
 export function getBenchmarkToolchainStatus(): BenchmarkToolchainStatus {
+  if (TOOL_MANIFEST.length === 0) {
+    return {
+      ready: false,
+      unsupportedPlatform: process.platform,
+      missingTools: [],
+      missingSha256: [],
+      versionMismatches: [],
+    };
+  }
+
   const missingTools: string[] = []
   const missingSha256: string[] = []
   const versionMismatches: Array<{ name: string; expected: string; actual: string | null }> = []

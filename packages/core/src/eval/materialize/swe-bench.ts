@@ -99,16 +99,40 @@ export const sweBenchMaterializer: Materializer = {
         cwd: workspaceDir,
         stdio: "pipe",
         timeout: 30000,
+        encoding: "utf-8",
       });
-    } catch (e) {
+    } catch (e: unknown) {
+      const err = e as Error & {
+        stdout?: Buffer | string;
+        stderr?: Buffer | string;
+        status?: number;
+        signal?: string;
+      };
+
+      const stdout = Buffer.isBuffer(err.stdout)
+        ? err.stdout.toString("utf-8")
+        : err.stdout ?? "";
+
+      const stderr = Buffer.isBuffer(err.stderr)
+        ? err.stderr.toString("utf-8")
+        : err.stderr ?? "";
+
       throw new EvalAssetExtractionError(
-        `Failed to apply test_patch for ${manifest.id}: ${e}`,
+        [
+          `Failed to apply test_patch for ${manifest.id}`,
+          `status: ${err.status ?? "unknown"}`,
+          `signal: ${err.signal ?? "none"}`,
+          stdout ? `stdout:\n${stdout.slice(0, 2000)}` : "",
+          stderr ? `stderr:\n${stderr.slice(0, 2000)}` : "",
+          `message: ${err.message}`,
+        ].filter(Boolean).join("\n"),
       );
-    }
-    try {
-      unlinkSync(patchFile);
-    } catch {
-      // ignore cleanup failures
+    } finally {
+      try {
+        unlinkSync(patchFile);
+      } catch {
+        // ignore cleanup failures
+      }
     }
   },
 };
