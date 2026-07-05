@@ -149,12 +149,9 @@ export class StreamingToolExecutor {
         return exec.executeToolResult(tc, index, signal, logger, q.push).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>
       }
 
-      for (const { tc, index } of allowedBatch) {
-        yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
-        yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
-      }
-
-      let completed: PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>[]
+      // P1: completionPromise 必须在 yield 之前创建，否则 abort signal 在 yield
+      // 期间被设置会拦截尚未启动的工具（P0-4 回归）。
+      let completionPromise: Promise<PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>[]>
       if (concurrencyLimit !== undefined && concurrencyLimit > 0 && concurrencyLimit < allowedBatch.length) {
         const results: Array<PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>> = new Array(allowedBatch.length)
         let next = 0
@@ -170,12 +167,18 @@ export class StreamingToolExecutor {
           }
         }
         const workers = Array.from({ length: Math.min(concurrencyLimit, allowedBatch.length) }, () => worker())
-        await Promise.all(workers)
-        completed = results
+        completionPromise = Promise.all(workers).then(() => results)
       } else {
         const pending = allowedBatch.map(({ tc, index }) => executeTool(tc, index))
-        completed = await Promise.allSettled(pending)
+        completionPromise = Promise.allSettled(pending)
       }
+
+      for (const { tc, index } of allowedBatch) {
+        yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
+        yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
+      }
+
+      const completed = await completionPromise
       // Reorder by declaration index before yielding
       const settled_results: Array<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }> = []
       for (let i = 0; i < completed.length; i++) {

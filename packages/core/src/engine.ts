@@ -1434,6 +1434,8 @@ Do not change goal status.`
             ledgerStagnantRounds: doneSteps === 0 && this.taskLedger.plan.length > 0 ? 1 : 0,
           }
         },
+        // FIX-H1: 传入 role 让 loop 跳过 supervisor 的 toolset 二次过滤
+        role: effectiveRole,
       }
 
       const loopIterator = runLoop(loopOpts)[Symbol.asyncIterator]()

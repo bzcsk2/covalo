@@ -49,6 +49,7 @@ import {
   type ModeDecision,
 } from "./governance/mode-decision.js"
 import type { HarnessMode } from "./model-profile/types.js"
+import type { AgentRole } from "./agent-profile/types.js"
 
 export interface PendingInstruction {
   content: string
@@ -108,6 +109,8 @@ export interface LoopOptions {
   modeDecisionEngine?: ModeDecisionEngine
   /** F0-1: 工作区根（BranchBudgetTracker 路径规范化用） */
   workspaceRoot?: string
+  /** FIX-H1: 当前 loop 的角色（supervisor 的工具集由 resolveEffectiveTools phase/mode 策略决定，不参与 toolset 二次过滤） */
+  role?: AgentRole
 }
 
 const DEFAULT_MAX_TURNS = 100
@@ -129,6 +132,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     checkpointEngine,
     modeDecisionEngine,
     workspaceRoot,
+    /** FIX-H1: 当前 loop 角色，supervisor 跳过 toolset 二次过滤 */
+    role,
     /** F0-1: 有效策略（executionMode / branchBudget / checkpoint 三字段被运行时消费） */
     effectivePolicy,
   } = opts
@@ -611,8 +616,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         // - undefined / false：router 看到 selectedCategory 存在 → 进入 Stage 2（category_tools）
         // - true：router 重新注入 select_category（用于重置后让模型重新选择）
         // 这里我们已经有 selectedCategory，希望进入 Stage 2，所以保持 undefined。
-        // FIX-H1: 传入 effectivePolicy.toolset 使工具集规模（minimal/coding/full）真实生效
-        toolset: effectivePolicy?.toolset,
+        // FIX-H1: 传入 effectivePolicy.toolset 使工具集规模（minimal/coding/full）真实生效。
+        // Supervisor 的工具集已由 resolveEffectiveTools 的 phase/mode 策略决定，
+        // 不应再受 toolset 二次过滤（否则 AskUserQuestion/todowrite/AgentTool/get_goal 等
+        // 治理工具会被 applyDeterministicCategoryFilter 误删），所以 supervisor 跳过 toolset。
+        toolset: role === "supervisor" ? undefined : effectivePolicy?.toolset,
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools
