@@ -8,6 +8,7 @@ import { BranchBudgetTracker } from "../src/governance/branch-budget.js"
 import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
+  type CheckpointSaveTrigger,
   type RuntimeCheckpointV2,
 } from "../src/checkpoint/runtime-checkpoint.js"
 import type { SessionCheckpointEnvelope } from "../src/checkpoint/checkpoint-envelope.js"
@@ -253,34 +254,28 @@ describe("CheckpointEngine - 写入原子性", () => {
 })
 
 describe("CheckpointEngine forced policy", () => {
-  it("defaults to free policy and treats step_completed as eligible-to-skip", async () => {
-    const tmp = await makeTempDir()
-    const engine = new CheckpointEngine(tmp)
-    expect(engine.isForcedPolicyActive()).toBe(false)
-    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
-    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
-    await fs.rm(tmp, { recursive: true, force: true })
-  })
-
-  it("persists on every step_completed once forced policy is active", async () => {
+  it("forcedPolicy does NOT override checkpointPolicy — safe-point persists step_completed", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
     engine.setForcedPolicy(true)
-
-    expect(engine.isForcedPolicyActive()).toBe(true)
+    // checkpointPolicy remains safe-point, so step_completed persists
     expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
-    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    // verification_started not in safe-point, so false even when forced
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 
-  it("falls back to free policy when forced policy is cleared", async () => {
+  it("forcedPolicy + minimal policy — tool_failed persists, step_completed does not", async () => {
     const tmp = await makeTempDir()
     const engine = new CheckpointEngine(tmp)
+    engine.setCheckpointPolicy("minimal")
     engine.setForcedPolicy(true)
-    engine.setForcedPolicy(false)
 
-    expect(engine.isForcedPolicyActive()).toBe(false)
+    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("final_draft")).toBe(true)
     expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
     await fs.rm(tmp, { recursive: true, force: true })
   })
 })
@@ -374,7 +369,54 @@ describe("SPEC-I: checkpoint persists taskLedger and verificationGate", () => {
     expect(v2!.verificationGate!.continuationCount).toBe(1)
   })
 
-  it("cloneV2 对 taskLedger 做深拷贝 — 外部 mutation 不影响内部状态", async () => {
+// FIX-H5: checkpoint policy
+describe("FIX-H5: setCheckpointPolicy / shouldPersistOnTrigger", () => {
+  it("默认 policy 是 safe-point", () => {
+    const engine = new CheckpointEngine("/tmp/nonexistent", "policy-test")
+    // 通过 shouldPersistOnTrigger 间接验证默认值
+    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("verification_failed")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("compaction")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("final_draft")).toBe(true)
+    // safe-point does NOT persist verification_started
+    expect(engine.shouldPersistOnTrigger("verification_started")).toBe(false)
+  })
+
+  it("frequent 保存所有有效的 trigger", () => {
+    const engine = new CheckpointEngine("/tmp/nonexistent", "policy-freq")
+    engine.setCheckpointPolicy("frequent")
+    const triggers: Array<CheckpointSaveTrigger> = [
+      "step_completed", "tool_failed", "verification_started",
+      "verification_failed", "compaction", "final_draft",
+    ]
+    for (const t of triggers) {
+      expect(engine.shouldPersistOnTrigger(t)).toBe(true)
+    }
+  })
+
+  it("minimal 只保存 tool_failed 和 final_draft", () => {
+    const engine = new CheckpointEngine("/tmp/nonexistent", "policy-min")
+    engine.setCheckpointPolicy("minimal")
+    expect(engine.shouldPersistOnTrigger("tool_failed")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("final_draft")).toBe(true)
+    expect(engine.shouldPersistOnTrigger("step_completed")).toBe(false)
+    expect(engine.shouldPersistOnTrigger("verification_failed")).toBe(false)
+    expect(engine.shouldPersistOnTrigger("compaction")).toBe(false)
+  })
+
+  it("manual 触发器永远落盘，不受 policy 影响", () => {
+    const engine = new CheckpointEngine("/tmp/nonexistent", "policy-manual")
+    engine.setCheckpointPolicy("minimal")
+    expect(engine.shouldPersistOnTrigger("manual")).toBe(true)
+    engine.setCheckpointPolicy("frequent")
+    expect(engine.shouldPersistOnTrigger("manual")).toBe(true)
+    engine.setCheckpointPolicy("safe-point")
+    expect(engine.shouldPersistOnTrigger("manual")).toBe(true)
+  })
+})
+
+it("cloneV2 对 taskLedger 做深拷贝 — 外部 mutation 不影响内部状态", async () => {
     const engine = new CheckpointEngine(tmp, "sess-spece")
     const taskLedger = {
       goal: "deep copy test",

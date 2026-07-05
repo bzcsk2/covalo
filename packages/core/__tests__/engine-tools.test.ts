@@ -79,6 +79,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     ])
 
     const engine = makeEngine()
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     const sharedTool: AgentTool = {
       name: "shared_ok", description: "shared tool",
       parameters: { type: "object", properties: { x: { type: "number" } }, required: ["x"] },
@@ -95,7 +96,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     engine.registerTool(exclusiveTool)
 
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("hi")) events.push(e)
+    for await (const e of engine.submit("hi", { name: "build" })) events.push(e)
 
     const toolStarts = events.filter((e) => e.role === "tool_start")
     expect(toolStarts.map((e) => e.toolCallIndex)).toEqual([0, 1])
@@ -138,10 +139,11 @@ describe("ReasonixEngine tool loop regressions", () => {
     ])
 
     const engine = makeEngine()
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     engine.registerTool(tool)
 
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("hi")) events.push(e)
+    for await (const e of engine.submit("hi", { name: "build" })) events.push(e)
 
     const toolResults = events.filter((e) => e.role === "tool")
     expect(toolResults).toHaveLength(1)
@@ -165,6 +167,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     mockClient.setGenerators(Array.from({ length: 5 }, repeatedToolCall))
 
     const engine = makeEngine()
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     engine.registerTool({
       name: "read_same", description: "read same file",
       parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
@@ -176,7 +179,7 @@ describe("ReasonixEngine tool loop regressions", () => {
     })
 
     const events: LoopEvent[] = []
-    for await (const event of engine.submit("loop")) events.push(event)
+    for await (const event of engine.submit("loop", { name: "build" })) events.push(event)
 
     expect(executions).toBe(4)
     expect(events.some((event) => event.role === "error" && event.metadata?.reason === "toolCallLoop")).toBe(true)
@@ -330,13 +333,14 @@ describe("ReasonixEngine tool loop regressions", () => {
     ])
 
     const engine = makeEngine()
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     const tool1: AgentTool = { name: "t1", description: "t1", parameters: { type: "object", properties: { x: { type: "number" } } }, concurrency: "shared", approval: "read", async execute() { return { content: "ok1", isError: false } } }
     const tool2: AgentTool = { name: "t2", description: "t2", parameters: { type: "object", properties: { y: { type: "number" } } }, concurrency: "exclusive", approval: "read", async execute() { return { content: "ok2", isError: false } } }
     engine.registerTool(tool1)
     engine.registerTool(tool2)
 
     const events: LoopEvent[] = []
-    for await (const e of engine.submit("multi")) events.push(e)
+    for await (const e of engine.submit("multi", { name: "build" })) events.push(e)
 
     const toolResults = events.filter((e: any) => e.role === "tool")
     expect(toolResults).toHaveLength(2)
@@ -787,4 +791,20 @@ describe("ADV-HAR-02: EffectiveHarnessPolicy integration", () => {
     expect(engine.getHarnessStrictness()).toBe("loose")
   })
 
+  // FIX-H3: loadSession 清空 sessionStrictness 和 effectivePolicy
+  it("loadSession clears sessionStrictness and effectivePolicy", async () => {
+    const engine = makeEngine()
+    // 设置严格度并 submit 使其固化
+    engine.setHarnessStrictness("strict")
+    mockClient.setGenerators([
+      (async function* () { yield { type: "done", finishReason: "stop" } })(),
+    ])
+    for await (const _ of engine.submit("test under strict")) { /* drain */ }
+    expect(engine.getEffectivePolicy()?.strictness).toBe("strict")
+
+    // loadSession 应清除策略
+    await (engine as any).loadSession("new-session")
+    expect(engine.getHarnessStrictness()).toBe("normal") // 回到默认
+    expect(engine.getEffectivePolicy()).toBeNull()
+  })
 })

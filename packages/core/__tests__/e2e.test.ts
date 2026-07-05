@@ -175,12 +175,8 @@ describe("TT2: E2E tool chains through engine", () => {
       genText("recovered"),
     ])
     const engine = makeEngine()
-    // 自定义测试工具需要绕过两层过滤：
-    // 1) resolveEffectiveTools 按 MAIN_MODES.build.toolNames 过滤 → 传入不含 toolNames
-    //    的 agentConfig 使 ac.toolNames === undefined，跳过该过滤；
-    // 2) resolveToolRouting 按 toolset 类别过滤 → loose policy 的 toolset="full" 让
-    //    inferToolCategory 返回 "full" 的工具也被保留。
-    engine.setHarnessStrictness("loose")
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行，
+    // 并通过 engine.ts agentToolNames 合并 this.tools.keys() 加入白名单。
     engine.registerTool({
       name: "failing_tool", description: "fails",
       parameters: { type: "object", properties: {} },
@@ -201,6 +197,7 @@ describe("TT2: E2E tool chains through engine", () => {
       genTool("slow_tool", {}),
     ])
     const engine = makeEngine()
+    // FIX-CUSTOM-TOOLS: 自定义工具通过 applyDeterministicCategoryFilter 始终放行。
     let executed = false
     // 同上 — loose + 不含 toolNames 的 agentConfig 让自定义工具通过两层过滤。
     engine.setHarnessStrictness("loose")

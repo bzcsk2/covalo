@@ -153,15 +153,15 @@ export class StreamingToolExecutor {
       // CL-50: Collect progress from shared tools via per-tool progress queues
       const progressQueues = new Map<number, ReturnType<typeof createProgressQueue>>()
 
+      // FIX-H4: 使用 concurrencyLimit 限制共享工具同时执行数
       async function executeTool(tc: ToolCall, index: number): Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }> {
         const q = createProgressQueue()
         progressQueues.set(index, q)
         return exec.executeToolResult(tc, index, signal, logger, q.push).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>
       }
-      // P1: Start executing tools BEFORE yielding events, so tools that complete
-      // synchronously finish before the consumer can abort. H4 重构时误把执行
-      // 启动移到了 yield 之后，导致 abort 后才启动的工具被 signal.aborted
-      // 拦截（P0-4 回归）。这里恢复 "先启动执行、再 yield 事件" 的契约。
+
+      // P1: completionPromise 必须在 yield 之前创建，否则 abort signal 在 yield
+      // 期间被设置会拦截尚未启动的工具（P0-4 回归）。
       let completionPromise: Promise<PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>[]>
       if (concurrencyLimit !== undefined && concurrencyLimit > 0 && concurrencyLimit < allowedBatch.length) {
         const results: Array<PromiseSettledResult<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>> = new Array(allowedBatch.length)

@@ -191,9 +191,9 @@ export function applyDeterministicCategoryFilter(
 
   const filtered = allTools.filter((tool) => {
     const category = inferToolCategory(tool.function.name, options.toolCategoryMap)
-      if (category === "full") {
+    if (category === "full") {
       // 自定义工具（未匹配内置类别）只有显式注册时才放行，
-      // 或者当 toolset=full 时允许所有（包括自定义工具）
+      // 或者当 toolset=full 时允许所有（包括自定义工具）。
       return options.customToolNames?.has(tool.function.name) === true
         || allowedCategories.size === TOOLSET_CATEGORIES.full.length
     }
