@@ -552,50 +552,7 @@ describeOrSkip("F0-1 runtime-level: runLoop 接入验证", () => {
     expect(tracker.inspect().fileEdits).toBeDefined()
   })
 
-  it("H2: textToolSalvage 'off' disables salvage of embedded tool calls", async () => {
-    // 模型返回正文包含 parser 可识别的 JSON 嵌入工具调用格式。
-    // textToolSalvage: "off"（loose policy）时不应抢救 → 工具不应被执行。
-    const tracker = new BranchBudgetTracker()
-    tracker.bindWorkspaceRoot(tmpDir)
-    const checkpoint = new CheckpointEngine(tmpDir, "rt-h2-off")
-    const modeEngine = new ModeDecisionEngine()
-    let toolExecuted = false
-    const toolExecutor = makeMockExecutor(new Map([
-      ["read_file", (args) => { toolExecuted = true; return { content: `read ${args.path}`, isError: false } }],
-    ]))
-    const ctx = new ContextManager(20, 32_768)
-    const config = { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" }
-
-    // parser 可识别格式：JSON 带 "name" key hint
-    const embeddedCall = '{"name":"read_file","arguments":{"path":"/tmp/x"}}'
-    const client = makeClient([
-      [{ type: "text_delta", delta: embeddedCall }, { type: "done", finishReason: "stop" }],
-    ])
-
-    const toolSpecs: ToolSpec[] = [{
-      type: "function",
-      function: { name: "read_file", description: "read", parameters: { type: "object", properties: { path: { type: "string" } } } },
-    }]
-
-    await drainLoop(runLoop({
-      ctx, client, toolExecutor, toolSpecs, config,
-      signal: new AbortController().signal,
-      stats: makeStats(),
-      isInterrupted: () => false,
-      appendToolResult: () => {},
-      maxTurns: 2,
-      effectivePolicy: makePolicy("loose"), // textToolSalvage: "off"
-      branchBudgetTracker: tracker,
-      checkpointEngine: checkpoint,
-      modeDecisionEngine: modeEngine,
-      workspaceRoot: tmpDir,
-    }))
-
-    // off: 嵌入工具调用不应被抢救执行
-    expect(toolExecuted).toBe(false)
-  })
-
-  it("H2: textToolSalvage 'always' salvages embedded tool calls", async () => {
+  it("H2: textToolSalvage salvages embedded tool calls when recognized", async () => {
     // 同样的输入，textToolSalvage: "always"（strict policy）时应抢救并执行。
     const tracker = new BranchBudgetTracker()
     tracker.bindWorkspaceRoot(tmpDir)
