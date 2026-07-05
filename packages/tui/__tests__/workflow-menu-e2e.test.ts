@@ -130,8 +130,6 @@ describe('SFR-90: workflow e2e integration', () => {
       setState,
       undefined,
       undefined,
-      undefined,
-      undefined,
       coordinator as unknown as WorkflowCoordinator,
     );
   });
@@ -279,7 +277,7 @@ describe('SFR-90: workflow e2e integration', () => {
     const setState = (update: any) => {
       setStateCalls = typeof update === 'function' ? update(setStateCalls) : update;
     };
-    const modeBridge = createBridge(engine as any, setState, undefined, undefined, undefined, dualRuntime as any);
+    const modeBridge = createBridge(engine as any, setState, undefined, dualRuntime as any);
 
     await modeBridge.submit('delegate this', false, 'supervisor', 'subagent');
 
@@ -310,8 +308,6 @@ describe('SFR-90: workflow e2e integration', () => {
     const modeBridge = createBridge(
       engine as any,
       setState,
-      undefined,
-      undefined,
       { apply: (event: any) => orchestrationEvents.push(event) } as any,
       dualRuntime as any,
     );

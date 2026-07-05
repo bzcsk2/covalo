@@ -111,8 +111,6 @@ describe('SPEC S1-3: workflow tool item key 稳定化', () => {
       setState as any,
       undefined,
       undefined,
-      undefined,
-      undefined,
       coordinator as unknown as WorkflowCoordinator,
     );
   }

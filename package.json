@@ -57,10 +57,8 @@
     "smoke:cli": "node ./dist/index.js --help",
     "test": "bun test packages/core packages/tools packages/tui packages/cli packages/security",
     "test:eval": "bun test packages/core/src/eval/assets packages/core/src/eval/materialize packages/core/src/eval/__tests__",
-    "test:all": "bun run test && cd packages/memory && bun run test",
-    "test:memory": "cd packages/memory && bun run test",
+    "test:all": "bun run test",
     "benchmark:fusion": "bun run packages/core/scripts/benchmark-matrix.ts",
-    "test:memory-native": "bun test packages/cli/src/__tests__/memory-integration.test.ts",
     "postinstall": "bun run scripts/download-bwrap.ts 2>/dev/null || true",
     "download-bwrap": "bun run scripts/download-bwrap.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"

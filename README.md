@@ -29,12 +29,12 @@ Covalo is a TypeScript/Bun CLI and TUI agent runtime with:
 - a Supervisor / Worker workflow for long-running engineering tasks
 - adjustable harness levels for weak, local, or unreliable models
 - a terminal UI built with Ink and React
-- 30+ built-in tools for file operations, search, editing, shell, web, tasks, workflow, MCP, memory, and notebooks
-- Skills, MCP, plugin/content-pack, and AgentMemory integration
+- 30+ built-in tools for file operations, search, editing, shell, web, tasks, workflow, MCP, and notebooks
+- Skills, MCP, and plugin/content-pack integration
 - deny-first permission handling for shell commands and file modifications
 - session persistence and recovery for interrupted work
 
-Covalo is currently **pre-1.0**. Core CLI, tools, security, memory, plugin, skills, MCP, and workflow foundations are implemented, but public APIs and configuration formats may still change.
+Covalo is currently **pre-1.0**. Core CLI, tools, security, plugin, skills, MCP, and workflow foundations are implemented, but public APIs and configuration formats may still change.
 
 ---
 
@@ -161,7 +161,6 @@ packages/core      -> agent loop, API adaptation, context, cache, retry, workflo
 packages/tui       -> Ink/React terminal UI, input, status, model picker, workflow display
 packages/tools     -> file, shell, search, edit, web, MCP, workflow, task, notebook tools
 packages/plugin    -> plugin/content-pack runtime, hooks, schema validation
-packages/memory    -> AgentMemory integration and memory tools
 packages/security  -> deny-first PermissionEngine, HookManager, FileSnapshot
 packages/cli       -> command-line entry point
 ```
@@ -199,7 +198,6 @@ Covalo includes tools for:
 - MCP tool discovery and invocation
 - workflow control
 - notebook-style operations
-- memory operations
 
 ### Editing safety
 
@@ -215,10 +213,6 @@ Covalo uses layered edit safeguards:
 ### Skills and MCP
 
 Skills are reusable domain instruction packages. MCP support lets Covalo connect to external tools and data sources through JSON-RPC 2.0 / stdio MCP servers.
-
-### AgentMemory
-
-Covalo includes memory integration for project and agent continuity. Memory behavior should be treated as configurable runtime state and reviewed before using Covalo in sensitive repositories.
 
 ---
 

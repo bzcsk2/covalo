@@ -31,8 +31,6 @@
       "@covalo/tools/*": ["./packages/tools/src/*"],
       "@covalo/tui": ["./packages/tui/src/index.ts"],
       "@covalo/tui/*": ["./packages/tui/src/*"],
-      "@covalo/memory": ["./packages/memory/src/index.ts"],
-      "@covalo/memory/*": ["./packages/memory/src/*"],
       "@covalo/plugin": ["./packages/plugin/src/index.ts"],
       "@covalo/plugin/*": ["./packages/plugin/src/*"],
       "@covalo/shell": ["./packages/shell/src/index.ts"],
