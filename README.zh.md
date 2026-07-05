@@ -146,7 +146,7 @@ bun run dev
 - Skills 系统：按任务自动注入领域知识。
 - MCP 支持：通过 JSON-RPC 2.0 / stdio 接入外部工具。
 - Plugin / content-pack 支持。
-- AgentMemory 集成和记忆工具。
+- Session 持久化、检查点与 harness-evolution 经验召回。
 
 ---
 
@@ -159,7 +159,6 @@ packages/core      -> 推理循环、API 适配、上下文管理、缓存、工
 packages/tui       -> Ink/React 终端界面、状态栏、输入、模型选择、workflow 展示
 packages/tools     -> 文件、Shell、搜索、编辑、Web、MCP、Workflow、Task、Notebook 工具
 packages/plugin    -> Plugin/content-pack、Hook、Schema 工具验证
-packages/memory    -> AgentMemory 集成和 memory tools
 packages/security  -> Deny-first PermissionEngine、HookManager、FileSnapshot
 packages/cli       -> 命令行入口
 ```
@@ -220,7 +219,7 @@ Covalo 当前处于 **pre-1.0** 阶段。
 | 模块 | 状态 |
 | --- | --- |
 | 核心引擎、30+ 工具、安全层、Plugin/Skills | 已实现 |
-| AgentMemory 与 memory tools | 已实现 |
+
 | 小模型 harness 定制 | 已实现 |
 | MCP 基础接入 | 已实现 |
 | 双 Agent Workflow 编排 | 部分实现，持续打磨 |

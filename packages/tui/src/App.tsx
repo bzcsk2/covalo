@@ -233,8 +233,6 @@ interface AppProps {
   contentPackCount?: number;
   assetCounts?: { skills: number; agents: number; rules: number; commands: number; mcp: number; hooks: number };
   diagnosticCounts?: { errors: number; warnings: number };
-  onUserInput?: (text: string) => void;
-  beforeSubmit?: () => Promise<void>;
   dualRuntime?: DualAgentRuntime;
   workflowCoordinator?: WorkflowCoordinator;
   onPromptLocaleChange?: (locale: "zh-CN" | "en") => void;
@@ -267,7 +265,7 @@ function AgentGroupDisplayFromStore({ terminalWidth }: { terminalWidth: number }
   );
 }
 
-export function App({ engine, config, pluginCount = 0, contentPackCount = 0, assetCounts, diagnosticCounts, onUserInput, beforeSubmit, dualRuntime, workflowCoordinator, onPromptLocaleChange }: AppProps) {
+export function App({ engine, config, pluginCount = 0, contentPackCount = 0, assetCounts, diagnosticCounts, dualRuntime, workflowCoordinator, onPromptLocaleChange }: AppProps) {
   // TUI-FIX-20: 编排状态存储（引擎生命周期内持久）
   const [orchestrationStore] = useState(() => new OrchestrationStore());
 
@@ -306,7 +304,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     engineRef.current.setThinkingMode?.(thinkingMode as 'off' | 'open' | 'high');
   }, [thinkingMode]);
   const [bridgeState, setBridgeState] = useState<BridgeState>(() => ({ ...initialState }));
-  const bridge = useMemo(() => createBridge(engine, setBridgeState, onUserInput, beforeSubmit, orchestrationStore, dualRuntime, workflowCoordinator), [engine, onUserInput, beforeSubmit, orchestrationStore, dualRuntime, workflowCoordinator]);
+  const bridge = useMemo(() => createBridge(engine, setBridgeState, orchestrationStore, dualRuntime, workflowCoordinator), [engine, orchestrationStore, dualRuntime, workflowCoordinator]);
   const transcriptReader = useMemo(() => bridge.getTranscriptReader(), [bridge]);
   const bridgeRuntime = useMemo(() => bridge.getBridgeRuntime(), [bridge]);
   const bridgeSplit = isBridgeRuntimeSplitEnabled();
@@ -544,14 +542,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           return bridgeRef.current.submitAndCollect(prompt, 'worker', 'alone', {
             displayText: `[eval/worker] ${category.title} · ${suite.title}`,
             signal: abortController.signal,
-            observeInput: false,
           });
         },
         executeSupervisor: async (prompt: string) => {
           return bridgeRef.current.submitAndCollect(prompt, 'supervisor', 'alone', {
             displayText: `[eval/supervisor] ${category.title} · ${suite.title}`,
             signal: abortController.signal,
-            observeInput: false,
           });
         },
         onProgress: (event) => {

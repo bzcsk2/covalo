@@ -112,8 +112,6 @@ describe('SPEC S1-2: workflow delta batching', () => {
       setState as any,
       undefined,
       undefined,
-      undefined,
-      undefined,
       coordinator as unknown as WorkflowCoordinator,
     );
   }

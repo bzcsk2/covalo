@@ -52,7 +52,7 @@ interface QueuedSubmit {
   isQueueResubmit: boolean
   role?: AgentRole
   mode: WorkflowMode
-  options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean; collectFinalText?: boolean }
+  options?: { displayText?: string; signal?: AbortSignal; collectFinalText?: boolean }
 }
 
 export interface ToolStatus {
@@ -240,8 +240,6 @@ function workflowPhaseToLoopPhase(phase: string): TuiLoopPhase {
 export function createBridge(
   engine: ReasonixEngine,
   setState: React.Dispatch<React.SetStateAction<BridgeState>>,
-  onUserInput?: (text: string) => void,
-  beforeSubmit?: () => Promise<void>,
   orchestrationStore?: import('./store/orchestration-store.js').OrchestrationStore,
   dualRuntime?: DualAgentRuntime,
   workflowCoordinator?: WorkflowCoordinator,
@@ -251,7 +249,7 @@ export function createBridge(
     text: string,
     role?: AgentRole,
     mode?: WorkflowMode,
-    options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
+    options?: { displayText?: string; signal?: AbortSignal },
   ) => Promise<string>;
   cancel: () => void;
   respondPermission: (requestId: string, originRole: PermissionOriginRole, reply: PermissionReply, message?: string) => void;
@@ -429,10 +427,6 @@ export function createBridge(
       if (running && !draining) {
         const result = engine.enqueueInstruction(item.text);
         if (result.status === 'ignored') return Promise.resolve();
-        // P0-2: Observe on first successful acceptance
-        if (!item.isQueueResubmit && item.options?.observeInput !== false) {
-          onUserInput?.(item.text);
-        }
         if (result.status === 'queued') {
           commitBridge(() => ({ pendingInstructionCount: result.queueLength }));
           return Promise.resolve();
@@ -500,11 +494,6 @@ export function createBridge(
    */
   const submitInternalCore = async (item: QueuedSubmit): Promise<string> => {
     const { text, isQueueResubmit, role, mode, options } = item;
-
-    // P0-2: Observe fresh user input (not queue re-submissions)
-    if (!isQueueResubmit && options?.observeInput !== false) {
-      onUserInput?.(text);
-    }
 
     const requestId = ++activeRequest;
     const submitRole: AgentRole | undefined = role;
@@ -761,7 +750,6 @@ export function createBridge(
 
     let abortHandler: (() => void) | undefined;
     try {
-      await beforeSubmit?.();
       // WF-FIX-10: Route through DualAgentRuntime when available
       abortHandler = () => {
         if (dualRuntime && submitRole) {
@@ -1111,7 +1099,7 @@ export function createBridge(
     text: string,
     role?: AgentRole,
     mode: WorkflowMode = 'alone',
-    options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
+    options?: { displayText?: string; signal?: AbortSignal },
   ): Promise<string> => {
     // SPEC S1-1: submitAndCollect 用于 dualRuntime 子 engine 输出收集，不走 bridge 队列，
     // 直接调用 submitInternalCore（不经过 enqueueOrRun）

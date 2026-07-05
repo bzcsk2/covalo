@@ -24,7 +24,6 @@
     "@covalo/mcp": "workspace:*",
     "@covalo/tui": "workspace:*",
     "@covalo/plugin": "workspace:*",
-    "@covalo/memory": "workspace:*",
     "smol-toml": "^1.7.0"
   }
 }

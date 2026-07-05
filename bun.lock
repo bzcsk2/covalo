@@ -58,7 +58,6 @@
       "dependencies": {
         "@covalo/core": "workspace:*",
         "@covalo/mcp": "workspace:*",
-        "@covalo/memory": "workspace:*",
         "@covalo/plugin": "workspace:*",
         "@covalo/tools": "workspace:*",
         "@covalo/tui": "workspace:*",
@@ -106,27 +105,6 @@
         "@covalo/tools": "workspace:*",
         "zod": "4.4.3",
       },
-    },
-    "packages/memory": {
-      "name": "@covalo/memory",
-      "version": "0.1.0",
-      "dependencies": {
-        "@covalo/core": "workspace:*",
-        "zod": "4.4.3",
-      },
-      "devDependencies": {
-        "typescript": "^5.7.0",
-      },
-      "peerDependencies": {
-        "@anthropic-ai/claude-agent-sdk": "*",
-        "@anthropic-ai/sdk": "*",
-        "@xenova/transformers": "*",
-      },
-      "optionalPeers": [
-        "@anthropic-ai/claude-agent-sdk",
-        "@anthropic-ai/sdk",
-        "@xenova/transformers",
-      ],
     },
     "packages/plugin": {
       "name": "@covalo/plugin",
@@ -190,8 +168,6 @@
     "@covalo/ink": ["@covalo/ink@workspace:packages/ink"],
 
     "@covalo/mcp": ["@covalo/mcp@workspace:packages/mcp"],
-
-    "@covalo/memory": ["@covalo/memory@workspace:packages/memory"],
 
     "@covalo/plugin": ["@covalo/plugin@workspace:packages/plugin"],
 

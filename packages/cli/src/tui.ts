@@ -15,8 +15,6 @@ import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBa
 import { LspClientPool } from "@covalo/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@covalo/mcp"
 import { PluginRuntime, pluginToolsToAgentTools } from "@covalo/plugin"
-import type { ToolCallHooks } from "@covalo/security"
-// P1-4: Memory is dynamically imported when enabled to avoid loading when COVALO_MEMORY=false
 import React from "react"
 import { wrappedRender as render } from "@covalo/ink"
 import { App, createFrameMetricsHandler } from "@covalo/tui"
@@ -74,7 +72,6 @@ async function main(): Promise<void> {
   setPromptLocale(promptLocale)
   let currentPromptLocale: import("@covalo/core").PromptLocale = promptLocale
   let pluginRulesPrompt = ""
-  let memoryContextPrompt = ""
 
   function rebuildBaseSystemPrompt(locale = currentPromptLocale): string {
     currentPromptLocale = locale
@@ -85,7 +82,6 @@ async function main(): Promise<void> {
         locale,
       }),
       pluginRulesPrompt,
-      memoryContextPrompt,
     ].filter(Boolean).join("\n\n")
   }
 
@@ -155,101 +151,18 @@ async function main(): Promise<void> {
     }
   })
 
-  // Memory is fully background-loaded and never gates the first model request.
-  let memoryService: import("@covalo/memory").MemoryService | undefined
-  let memoryBridge: import("@covalo/memory").DeepreefMemoryBridge | undefined
-  let memoryHookAdapter: ToolCallHooks | undefined
-  const enableMemory = process.env.COVALO_MEMORY !== "false"
-  const memoryReady = deferTask(async () => {
-    if (!enableMemory) return
-    try {
-      const memory = await import("@covalo/memory")
-      // P1-2: Config from env vars with sensible defaults
-      const memoryAutoObserve = process.env.COVALO_MEMORY_AUTO_OBSERVE !== "false"
-      const memoryInjectContext = process.env.COVALO_MEMORY_INJECT_CONTEXT !== "false"
-      const memoryAdvanced = process.env.COVALO_MEMORY_ADVANCED === "true"
 
-      memoryService = new memory.MemoryService({
-        autoObserve: memoryAutoObserve,
-        injectContext: memoryInjectContext,
-        advancedTools: memoryAdvanced,
-        enableGraph: process.env.COVALO_MEMORY_GRAPH === "true",
-        enableConsolidation: process.env.COVALO_MEMORY_CONSOLIDATE === "true",
-        enableReflect: process.env.COVALO_MEMORY_REFLECT === "true",
-        enableSlots: process.env.COVALO_MEMORY_SLOTS === "true",
-      })
-      await memoryService.start()
-      memoryBridge = new memory.DeepreefMemoryBridge(memoryService, { autoObserve: memoryAutoObserve, injectContext: memoryInjectContext })
-
-      // P1-1: Session lifecycle — call onSessionStart after service is ready
-      await memoryBridge.onSessionStart(engine.getSessionId()).catch(() => {})
-
-      // P0-1: Inject initial memory context into system prompt, then re-set on engine
-      if (memoryInjectContext) {
-        // Apply memory context after plugin rules so concurrent prompt updates cannot overwrite it.
-        await pluginReady
-        const memContext = await memoryService.trigger("mem::context", {
-          sessionId: engine.getSessionId(),
-          project: process.cwd(),
-          maxChars: 2000,
-        }).catch(() => null)
-        if (memContext && typeof memContext === "object" && "context" in memContext) {
-          const ctx = (memContext as { context: string }).context
-          if (ctx) memoryContextPrompt = `<covalo-memory-context>\n${ctx}\n</covalo-memory-context>`
-        }
-        // P0-1: Re-set system prompt after memory context is appended
-        baseSystemPrompt = rebuildBaseSystemPrompt()
-        engine.setSystemPrompt(baseSystemPrompt)
-      }
-
-      // Wire bridge hooks into engine's HookManager
-      // P0-2: onLoopEvent only handles generation complete (done event)
-      const hookAdapter: ToolCallHooks = {
-        afterToolCall: async (toolName: string, result: { content: string; isError: boolean }) => {
-          if (result.isError) {
-            await memoryBridge?.onPostToolFailure(engine.getSessionId(), toolName, result.content).catch(() => {})
-          } else {
-            await memoryBridge?.onPostToolUse(engine.getSessionId(), toolName, result).catch(() => {})
-          }
-        },
-        onLoopEvent: async (event: Record<string, unknown>) => {
-          // P1-1: Wire onGenerationComplete for the done event
-          if (event.role === "done") {
-            await memoryBridge?.onGenerationComplete(engine.getSessionId()).catch(() => {})
-          }
-        },
-      }
-      // P1-1: Save reference for cleanup on exit
-      memoryHookAdapter = hookAdapter
-      engine.hookManager.addHooks(hookAdapter)
-
-      // P1-3: Register memory_migrate tool + P0-3 fix via dynamic import
-      engine.registerTool(memory.createMemoryRecallTool(memoryService))
-      engine.registerTool(memory.createMemorySaveTool(memoryService))
-      engine.registerTool(memory.createMemorySmartSearchTool(memoryService))
-      engine.registerTool(memory.createMemoryForgetTool(memoryService))
-      engine.registerTool(memory.createMemoryTimelineTool(memoryService))
-      engine.registerTool(memory.createMemoryStatusTool(memoryService))
-      engine.registerTool(memory.createMemoryMigrateTool())
-
-      process.stderr.write(`[covalo] Memory initialized\n`)
-    } catch (e) {
-      process.stderr.write(`[covalo] Memory init skipped: ${e instanceof Error ? e.message : String(e)}\n`)
-      memoryService = undefined
-      memoryBridge = undefined
-    }
-  })
 
   try {
     // TUI: 非 TTY 进入 pipe 模式
     if (!input.isTTY) {
-      await Promise.all([pluginReady, memoryReady])
-      await runPipeMode(engine, memoryBridge)
+      await pluginReady
+      await runPipeMode(engine)
       return
     }
 
     // WF-FIX-10: Create supervisor engine and wire DualAgentRuntime
-    await Promise.all([pluginReady, memoryReady])
+    await pluginReady
 
     // per-role 模型配置：优先读取持久化的 role-config.json，缺省回退到全局 config。
     // worker 引擎即传入的 engine（已按 config 创建），其模型在 App 的 /model 命令里
@@ -397,26 +310,16 @@ async function main(): Promise<void> {
       config,
       pluginRuntime,
       mcpConfigCount,
-      () => memoryBridge,
-      () => pluginReady,
-      memoryReady,
       dualRuntime,
       workflowCoordinator,
       { os: platform, shell: shellBackend.id, shellBackend: `${shellBackend.id} (${shellBackend.executable})` },
       rebuildBaseSystemPrompt,
     )
   } finally {
-    await Promise.allSettled([pluginReady, memoryReady])
+    await pluginReady.catch(() => {})
     // P3-3: Drain all pending hook observations before cleanup
     // (engine's void runOnLoopEvent is fire-and-forget; drain waits for all in-flight hooks)
     await engine.hookManager.drain().catch(() => {})
-    // Phase C: Stop memory subsystem before engine (best-effort)
-    await memoryBridge?.onSessionEnd(engine.getSessionId()).catch(() => {})
-    // P1-1: Remove hook adapter to avoid duplicate observations on restart
-    if (memoryHookAdapter) {
-      engine.hookManager.removeHooks(memoryHookAdapter)
-    }
-    await memoryService?.stop().catch(() => {})
     // LIFE-01: close engine (tokenizer worker, logger, session writer)
     await engine.shutdown()
     // P3: plugin runtime 现在是 async dispose，会派发 onShutdown hooks
@@ -429,15 +332,11 @@ async function main(): Promise<void> {
   }
 }
 
-async function runPipeMode(engine: ReasonixEngine, memoryBridge?: import("@covalo/memory").DeepreefMemoryBridge): Promise<void> {
+async function runPipeMode(engine: ReasonixEngine): Promise<void> {
   const chunks: Buffer[] = []
   for await (const chunk of input) chunks.push(Buffer.from(chunk))
   const prompt = Buffer.concat(chunks).toString("utf8").trim()
   if (!prompt) return
-  // P0-2: Observe user prompt at the real entry point (before engine.submit)
-  if (memoryBridge) {
-    await memoryBridge.onPromptSubmit(engine.getSessionId(), prompt).catch(() => {})
-  }
   for await (const event of engine.submit(prompt)) {
     switch (event.role) {
       case "assistant_delta":
@@ -483,9 +382,6 @@ async function runTUIMode(
   config: ReturnType<typeof loadConfig>,
   pluginRuntime: PluginRuntime,
   mcpConfigCount: number = 0,
-  getMemoryBridge?: () => import("@covalo/memory").DeepreefMemoryBridge | undefined,
-  beforeSubmit?: () => Promise<void>,
-  memoryReady?: Promise<void>,
   dualRuntime?: DualAgentRuntime,
   workflowCoordinator?: WorkflowCoordinator,
   platformInfo?: { os: string; shell: string; shellBackend: string },
@@ -500,16 +396,9 @@ async function runTUIMode(
     errors: status.diagnostics.filter(d => d.startsWith("[error]")).length,
     warnings: status.diagnostics.filter(d => d.startsWith("[warn]")).length,
   }
-  // P0-2: Provide onUserInput callback so bridge can observe user prompts at the real entry point
-  const onUserInput = (text: string) => {
-    void (memoryReady ?? Promise.resolve()).then(() =>
-      getMemoryBridge?.()?.onPromptSubmit(engine.getSessionId(), text),
-    ).catch(() => {})
-  }
-
   try {
     const { waitUntilExit } = await render(
-      React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts, onUserInput, beforeSubmit, dualRuntime, workflowCoordinator, onPromptLocaleChange: (locale: "zh-CN" | "en") => {
+      React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts, dualRuntime, workflowCoordinator, onPromptLocaleChange: (locale: "zh-CN" | "en") => {
         const newPrompt = rebuildBaseSystemPrompt?.(locale) ?? buildSystemPrompt(process.cwd(), {
           osPlatform: platformInfo?.os ?? "linux",
           shellBackend: platformInfo?.shellBackend ?? "",

@@ -156,34 +156,6 @@ describe('TUI bridge with TranscriptStore', () => {
 });
 
 describe('TUI bridge turn state', () => {
-  it('accepts and displays input before background startup finishes', async () => {
-    let releaseStartup!: () => void;
-    const startupReady = new Promise<void>(resolve => { releaseStartup = resolve; });
-    const engine = mockEngine([
-      async function* () {
-        yield { role: 'assistant_final', content: 'ready' };
-        yield { role: 'done' };
-      },
-    ]);
-    const harness = stateHarness();
-    const bridge = createBridge(
-      engine as unknown as ReasonixEngine,
-      harness.setState,
-      undefined,
-      () => startupReady,
-    );
-
-    const pending = bridge.submit('typed during startup');
-    expect(harness.state.isLoading).toBe(true);
-    expect(harness.state.timeline.some(item => item.kind === 'message' && item.message.content === 'typed during startup')).toBe(true);
-    expect(engine.submitted).toEqual([]);
-
-    releaseStartup();
-    await pending;
-
-    expect(engine.submitted).toEqual(['typed during startup']);
-    expect(harness.state.isLoading).toBe(false);
-  });
 
   it('keeps final reasoning metadata when a provider emits no reasoning deltas', async () => {
     const engine = mockEngine([
@@ -589,7 +561,7 @@ describe('TUI bridge turn state', () => {
     const bridge = createBridge(
       {} as ReasonixEngine,
       harness.setState,
-      undefined, undefined, undefined,
+      undefined,
       dualRuntime as any,
     )
 

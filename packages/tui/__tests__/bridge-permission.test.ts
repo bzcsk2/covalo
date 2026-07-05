@@ -88,7 +88,7 @@ describe('SPEC S0-1: bridge.respondPermission(requestId, originRole, reply)', ()
     const bridge = createBridge(
       mainEngine as unknown as ReasonixEngine,
       harness.setState,
-      undefined, undefined, undefined,
+      undefined,
       dualRuntime as any,
     );
 
@@ -114,7 +114,7 @@ describe('SPEC S0-1: bridge.respondPermission(requestId, originRole, reply)', ()
     const bridge = createBridge(
       mainEngine as unknown as ReasonixEngine,
       harness.setState,
-      undefined, undefined, undefined,
+      undefined,
       dualRuntime as any,
     );
 
@@ -135,7 +135,7 @@ describe('SPEC S0-1: bridge.respondPermission(requestId, originRole, reply)', ()
     const bridge = createBridge(
       mainEngine as unknown as ReasonixEngine,
       harness.setState,
-      undefined, undefined, undefined,
+      undefined,
       dualRuntime as any,
     );
 
@@ -176,7 +176,7 @@ describe('SPEC S0-1: bridge.respondPermission(requestId, originRole, reply)', ()
     const bridge = createBridge(
       mainEngine as unknown as ReasonixEngine,
       harness.setState,
-      undefined, undefined, undefined,
+      undefined,
       dualRuntime as any,
     );
 
@@ -198,7 +198,7 @@ describe('SPEC S0-1: bridge.respondPermission(requestId, originRole, reply)', ()
     const bridge = createBridge(
       mainEngine as unknown as ReasonixEngine,
       harness.setState,
-      undefined, undefined, undefined,
+      undefined,
       dualRuntime as any,
     );
 
