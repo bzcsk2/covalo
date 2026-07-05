@@ -108,6 +108,8 @@ export interface LoopOptions {
   modeDecisionEngine?: ModeDecisionEngine
   /** F0-1: 工作区根（BranchBudgetTracker 路径规范化用） */
   workspaceRoot?: string
+  /** 显式声明的自定义工具名集合（由 engine.registerTool 动态注册） */
+  customToolNames?: Set<string>
 }
 
 const DEFAULT_MAX_TURNS = 100
@@ -613,6 +615,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         // 这里我们已经有 selectedCategory，希望进入 Stage 2，所以保持 undefined。
         // FIX-H1: 传入 effectivePolicy.toolset 使工具集规模（minimal/coding/full）真实生效
         toolset: effectivePolicy?.toolset,
+        customToolNames: opts.customToolNames,
       }
       const routingDecision = resolveToolRouting(routingCtx)
       routedTools = routingDecision.tools

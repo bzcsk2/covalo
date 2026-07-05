@@ -17,6 +17,7 @@ import { PermissionEngine, HookManager } from "@covalo/security"
 import { getAgent, agentConfigFor, getMainMode } from "./agent.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import { resolveEffectiveTools } from "./resolve-effective-tools.js"
+import { TOOL_CATEGORIES } from "./tool-routing/two-stage-router.js"
 import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
 import { getSubagentSystemPrompt } from "./subagent/definition.js"
@@ -1345,6 +1346,15 @@ Do not change goal status.`
         workflowPhase,
         config: maybeCovaloConfig,
       })
+      // 识别自定义工具：不在任何内置类别中的工具名集合，
+      // 用于在 two-stage-router 中放行 custom tool，而非直接 return true
+      const builtinToolNames = new Set(Object.values(TOOL_CATEGORIES).flatMap(cat => cat.tools))
+      const customToolNames = new Set<string>()
+      for (const spec of toolSpecs) {
+        if (!builtinToolNames.has(spec.function.name)) {
+          customToolNames.add(spec.function.name)
+        }
+      }
       if (filteredCount > 0 && this.logger.isEnabled("warn")) {
         this.logger.warn("tools.filtered", {
           role: effectiveRole,
@@ -1434,6 +1444,7 @@ Do not change goal status.`
             ledgerStagnantRounds: doneSteps === 0 && this.taskLedger.plan.length > 0 ? 1 : 0,
           }
         },
+        customToolNames,
       }
 
       const loopIterator = runLoop(loopOpts)[Symbol.asyncIterator]()
