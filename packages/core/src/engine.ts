@@ -33,6 +33,7 @@ import { buildSupervisorLoopModePrompt } from "./engine-runtime/build-supervisor
 import { buildActiveSkillsPrompt } from "./engine-runtime/build-active-skills-prompt.js"
 import { injectExperienceRecall } from "./engine-runtime/inject-experience-recall.js"
 import { recoverCheckpoint, saveFinalCheckpoint } from "./engine-runtime/checkpoint-policy.js"
+import { configureBranchBudget } from "./engine-runtime/branch-budget-policy.js"
 
 import type { EngineStatusSnapshot } from "./status.js"
 import type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
@@ -791,11 +792,10 @@ Do not change goal status.`
       this.toolRuntime.toolExecutor.setReadTracker(undefined)
     }
 
-    // F0-1: 根据 effectivePolicy 配置 governance 三件套
-    // branchBudget: "enforce" → 启用 + 硬拦截；"recover" → 启用 + 仅记录；"observe" → 禁用
-    const branchBudgetMode = this.governanceRuntime.effectivePolicy.branchBudget
-    this.governanceRuntime.branchBudgetTracker.setEnabled(branchBudgetMode !== "observe")
-    this.governanceRuntime.branchBudgetTracker.bindWorkspaceRoot(process.cwd())
+    configureBranchBudget(
+      this.governanceRuntime.branchBudgetTracker,
+      this.governanceRuntime.effectivePolicy.branchBudget,
+    )
     // checkpoint: "frequent" → 任何 trigger 都落盘；"safe-point" → safe point 落盘；"minimal" → 仅 tool_failed/final_draft
     // 由 CheckpointEngine.shouldPersistOnTrigger 内部根据 forcedPolicyActive 判定，这里只负责 loadV2 恢复
     // executionMode: "forced" → 强制 forced；"adaptive" → 自适应决策；"free" → 强制 free
