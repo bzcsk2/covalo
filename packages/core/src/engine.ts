@@ -34,6 +34,7 @@ import { buildActiveSkillsPrompt } from "./engine-runtime/build-active-skills-pr
 import { injectExperienceRecall } from "./engine-runtime/inject-experience-recall.js"
 import { recoverCheckpoint, saveFinalCheckpoint } from "./engine-runtime/checkpoint-policy.js"
 import { configureBranchBudget } from "./engine-runtime/branch-budget-policy.js"
+import { configureReadBeforeWrite } from "./engine-runtime/read-before-write-policy.js"
 
 import type { EngineStatusSnapshot } from "./status.js"
 import type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
@@ -50,7 +51,6 @@ import { getPromptLocale, setPromptLocale } from "./prompt-locale.js"
 import { resolveModelProfile } from "./model-profile/resolver.js"
 import { resolveHarnessStrictness, resolveEffectiveHarnessPolicy, readProjectHarnessConfig } from "./harness/index.js"
 import type { EffectiveHarnessPolicy, HarnessStrictness } from "./harness/index.js"
-import { ReadTracker } from "./read-before-write.js"
 import { EarlyStopDetector } from "./early-stop.js"
 import { CheckpointEngine } from "./checkpoint/checkpoint-engine.js"
 import { createSupervisorGuidanceState } from "./supervisor/index.js"
@@ -783,14 +783,10 @@ Do not change goal status.`
     // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率
     this.checkpointEngine.setCheckpointPolicy(this.governanceRuntime.effectivePolicy.checkpoint)
 
-    // ADV-HAR-05: 根据 effectivePolicy.readBeforeWrite 配置 ReadTracker
-    if (this.governanceRuntime.effectivePolicy.readBeforeWrite === "block") {
-      this.toolRuntime.toolExecutor.setReadTracker(new ReadTracker({ strict: true }))
-    } else if (this.governanceRuntime.effectivePolicy.readBeforeWrite === "warn") {
-      this.toolRuntime.toolExecutor.setReadTracker(new ReadTracker({ strict: false }))
-    } else {
-      this.toolRuntime.toolExecutor.setReadTracker(undefined)
-    }
+    configureReadBeforeWrite(
+      this.toolRuntime.toolExecutor,
+      this.governanceRuntime.effectivePolicy.readBeforeWrite,
+    )
 
     configureBranchBudget(
       this.governanceRuntime.branchBudgetTracker,
