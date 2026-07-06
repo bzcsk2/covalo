@@ -979,7 +979,8 @@ describe("SPEC-A: loadSession context isolation", () => {
       adviceInjectionCount: 1,
       consecutiveDegradedCount: 2,
     }
-    state.pendingInstructionQueue = ["instr1", "instr2"]
+    const { EngineInstructionRuntime: EIR } = await import("../src/engine-runtime/instruction-runtime.js")
+    state.instructionRuntime = EIR.withQueue(["instr1", "instr2"])
 
     await engine.loadSession("session-b")
 
@@ -995,7 +996,7 @@ describe("SPEC-A: loadSession context isolation", () => {
       adviceInjectionCount: 0,
       consecutiveDegradedCount: 0,
     })
-    expect(after.pendingInstructionQueue).toEqual([])
+    expect(after.instructionRuntime.getQueueSnapshot()).toEqual([])
   })
 })
 

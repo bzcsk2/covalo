@@ -3,29 +3,35 @@ import { resolve } from "node:path"
 import type { DeepreefConfig } from "./config.js"
 import type { CovaloConfig } from "./config/schema.js"
 import { ContextManager } from "./context/manager.js"
-import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
+import type { ToolCall, ChatMessage } from "./types.js"
 import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult, ChatClient } from "./interface.js"
 import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
-import { QuestionService } from "./question/service.js"
 import { DeepSeekClient } from "./client.js"
 
 import { StreamingToolExecutor } from "./streaming-executor.js"
-import { AsyncSessionWriter, SessionLoader } from "./session.js"
+import { SessionLoader } from "./session.js"
 import { runLoop } from "./loop.js"
 import type { LoopOptions } from "./loop.js"
-import { PermissionEngine, HookManager } from "@covalo/security"
-import { getAgent, agentConfigFor, getMainMode } from "./agent.js"
+import { getAgent, agentConfigFor } from "./agent.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import { resolveEffectiveTools } from "./resolve-effective-tools.js"
 import { TOOL_CATEGORIES } from "./tool-routing/two-stage-router.js"
 import type { WorkflowPhase } from "./workflow-coordinator/types.js"
-import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
+import { checkSubagentPermission } from "./subagent/index.js"
 import { getSubagentSystemPrompt } from "./subagent/definition.js"
-import type { SubagentRunOptions, SubagentRunResult, SubagentDefinition } from "./subagent/index.js"
+import type { SubagentRunOptions, SubagentRunResult } from "./subagent/index.js"
 import type { ThinkingMode } from "./provider-thinking.js"
 import { createRuntimeLoggerFromEnv, type RuntimeLogger } from "./runtime-logger.js"
 import type { ResultPersistenceConfig } from "./result-persistence.js"
 import type { ToolRuntimeHooks, ReasonixEngineOptions } from "./tool-runtime-hooks.js"
+import { EngineInstructionRuntime } from "./engine-runtime/instruction-runtime.js"
+import { EngineSessionRuntime } from "./engine-runtime/session-runtime.js"
+import { EngineToolRuntime } from "./engine-runtime/tool-runtime.js"
+import { EngineSupervisorRuntime } from "./engine-runtime/supervisor-runtime.js"
+import { EngineGovernanceRuntime } from "./engine-runtime/governance-runtime.js"
+import { buildSupervisorLoopModePrompt } from "./engine-runtime/build-supervisor-loop-prompt.js"
+import { buildActiveSkillsPrompt } from "./engine-runtime/build-active-skills-prompt.js"
+import { injectExperienceRecall } from "./engine-runtime/inject-experience-recall.js"
 
 import type { EngineStatusSnapshot } from "./status.js"
 import type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
@@ -44,16 +50,8 @@ import { resolveHarnessStrictness, resolveEffectiveHarnessPolicy, readProjectHar
 import type { EffectiveHarnessPolicy, HarnessStrictness } from "./harness/index.js"
 import { ReadTracker } from "./read-before-write.js"
 import { EarlyStopDetector } from "./early-stop.js"
-import type { VerificationGateState } from "./governance/verification-gate.js"
-import { BranchBudgetTracker } from "./governance/branch-budget.js"
-import { ModeDecisionEngine } from "./governance/mode-decision.js"
 import { CheckpointEngine } from "./checkpoint/checkpoint-engine.js"
-import {
-  createSupervisorGuidanceState,
-  SupervisorBudgetTracker,
-  loadSupervisorPool,
-  type SupervisorGuidanceConfig,
-} from "./supervisor/index.js"
+import { createSupervisorGuidanceState } from "./supervisor/index.js"
 import { resolveModelTarget, targetToConfig, createClientForTarget } from "./model-target.js"
 import type { ModelTarget } from "./model-target.js"
 export type { ContextPolicy } from "./context/policy.js"
@@ -117,43 +115,42 @@ function isCovaloConfigLike(config: unknown): config is CovaloConfig {
  */
 export class ReasonixEngine implements CoreEngine {
   /** 当前会话 ID（公开供外部扩展使用） */
-  getSessionId(): string { return this.sessionId }
+  getSessionId(): string { return this.sessionRuntime.getSessionId() }
+
+  /** Public accessors for backward-compatible test access */
+  get sessionId(): string { return this.sessionRuntime.sessionId }
+  set sessionId(val: string) { this.sessionRuntime.sessionId = val }
+  get subagentRegistry() { return this.supervisorRuntime.subagentRegistry }
+  get verificationGateState() { return this.governanceRuntime.verificationGateState }
+  set verificationGateState(val: typeof this.governanceRuntime.verificationGateState) { this.governanceRuntime.verificationGateState = val }
+  get supervisorGuidanceState() { return this.supervisorRuntime.supervisorGuidanceState }
+  set supervisorGuidanceState(val: typeof this.supervisorRuntime.supervisorGuidanceState) { this.supervisorRuntime.supervisorGuidanceState = val }
+  get effectivePolicy() { return this.governanceRuntime.effectivePolicy }
+  get sessionStrictness() { return this.governanceRuntime.sessionStrictness }
 
   /** Deepreef 全局配置 */
   private config: DeepreefConfig
   /** 上下文管理器，负责维护消息历史和 system prompt */
   private ctx: ContextManager
-  /** 注册的工具集合，key 为工具名 */
-  private tools: Map<string, AgentTool> = new Map()
   /** LLM 客户端 */
   private client: ChatClient
-  /** 流式工具执行器，负责并发执行工具调用并流式返回结果 */
-  private toolExecutor: StreamingToolExecutor
   /** 中断标记，由外部调用 interrupt() 设置 */
   private _interrupted = false
   /** 当前活动的 AbortController，用于中断正在进行的 API 请求 */
   private activeAbortController?: AbortController
-  /** 当前会话 ID */
-  private sessionId: string
-  /** 会话持久化写入器（best-effort，失败静默忽略） */
-  private sessionWriter?: AsyncSessionWriter
   /** 开发诊断日志。默认关闭，不参与业务语义。 */
   private logger: RuntimeLogger
-  /** 会话级别的 token 用量和成本统计 */
-  private stats: SessionStats = {
-    promptTokens: 0, completionTokens: 0,
-    cacheHitTokens: 0, cacheMissTokens: 0,
-    apiCalls: 0, toolCalls: 0, totalCost: 0,
-  }
   /** 可选：新引擎初始化时调用的清理钩子（如清除全局 stale-read tracker） */
   private onStart?: () => void
   /** 可选：工具运行时钩子（由 CLI 层注入，解耦 core 对 tools 的编译时依赖） */
   private toolRuntimeHooks?: ToolRuntimeHooks
+  /** P2-N: Engine runtime services */
+  private instructionRuntime = new EngineInstructionRuntime()
+  private sessionRuntime: EngineSessionRuntime
+  private toolRuntime = new EngineToolRuntime()
+  private supervisorRuntime = new EngineSupervisorRuntime()
+  private governanceRuntime = new EngineGovernanceRuntime()
 
-  /** 权限引擎：三级判定（Deny → Allow → Ask） */
-  permissionEngine: PermissionEngine
-  /** Hook 管理器：tool call 前后 + loop 事件 */
-  hookManager: HookManager
   /** 当前活跃 agent 名称 */
   private currentAgent: string
 
@@ -166,21 +163,8 @@ export class ReasonixEngine implements CoreEngine {
   /** SPEC-G: 上次 build prefix 时的 system prompt 文本，用于检测 prompt 变化 */
   private lastSystemPromptKey = ""
 
-  /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve。
-   * SPEC S0-1: 改为 request-id 化的 Map，避免跨 engine 广播误消费。
-   * key = requestId，value = pending entry（含 resolve、toolName、args）。
-   */
-  private pendingPermissions = new Map<string, {
-    id: string;
-    resolve: (v: boolean) => void;
-    toolName: string;
-    args: Record<string, unknown>;
-  }>()
-
   /** LIFE-01: shutdown flag for idempotent cleanup */
   private _shutDown = false
-
-
 
   /**
    * @deprecated 使用 AgentProfile 中的 thinking 配置代替
@@ -194,181 +178,79 @@ export class ReasonixEngine implements CoreEngine {
   private policyStore: ContextPolicyStore
   private contextPolicyLoadPromise: Promise<void> = Promise.resolve()
 
-
-
-  /** Subagent registry for resolving subagent definitions */
-  private subagentRegistry: SubagentRegistry
-
-  /** QST-10: Question service for user interaction */
-  private questionService: QuestionService
-
   /** DRF-40: 当前 submit 的任务账本 */
   private taskLedger?: TaskLedgerTracker
-  /** DRF-40: Verification Gate 计数器 */
-  private verificationGateState: VerificationGateState = { continuationCount: 0 }
-  /** DRF-60: Supervisor 指导状态（单 submit 生命周期） */
-  private supervisorGuidanceState = createSupervisorGuidanceState()
-
-  /** TUI-FIX-10: 编排事件发射回调（供 TUI Bridge 消费） */
-  private emitOrchestration?: (event: LoopEvent) => void
-  /** 子 Worker 的原始事件，在父 submit 流中按顺序转发给 TUI。 */
-  private delegatedEvents: LoopEvent[] = []
-  private delegatedEventWaiters = new Set<() => void>()
-  private activeChildEngines = new Set<ReasonixEngine>()
-
-  /**
-   * SA-1: 可测试的 child client factory 注入点。
-   * 生产代码留 undefined → spawnSubagent 用默认 createClientForTarget。
-   * 测试时注入 mock factory → 避免触发真实 DeepSeekClient / 网络。
-   */
-  private childClientFactory?: (target: ModelTarget, logger: RuntimeLogger) => ChatClient
-
-  /** SA-1: 注入 child client factory（测试用） */
-  setChildClientFactory(factory: (target: ModelTarget, logger: RuntimeLogger) => ChatClient): void {
-    this.childClientFactory = factory
-  }
-
-  /**
-   * @deprecated 使用 AgentProfile 中的 harness 配置代替
-   * ADV-HAR-01: 当前会话的 Harness 严格度（可通过 /harness 切换）
-   */
-  private sessionStrictness?: HarnessStrictness
-  /** ADV-HAR-02: 当前 submit 解析后的不可变策略（每次 submit 刷新） */
-  private effectivePolicy: EffectiveHarnessPolicy | null = null
-
-  /** F0-1: governance/checkpoint 三件套（构造时实例化，submit 中按 effectivePolicy 启停） */
-  private branchBudgetTracker: BranchBudgetTracker = new BranchBudgetTracker()
   private checkpointEngine: CheckpointEngine
-  private modeDecisionEngine: ModeDecisionEngine = new ModeDecisionEngine()
+
+  get permissionEngine() { return this.toolRuntime.permissionEngine }
+  get hookManager() { return this.toolRuntime.hookManager }
 
   /** Get context window size */
   getContextWindow(): number {
     return this.ctx.getContextWindow()
   }
 
-  /** P2: Mid-session instruction queue — consumed by loop at safe points */
-  private pendingInstructionQueue: string[] = []
   private isSubmitting = false
-  private static readonly MAX_PENDING_INSTRUCTIONS = 10
 
-  /** 流式执行器内部调用，等待 TUI 返回确认结果。
-   * SPEC S0-1: 返回 { requestId, promise }，requestId 用于 permission_ask 事件 metadata
-   * 和定向 respondPermissionForRequest()。
-   */
-  private requestPermission = (toolName: string, args: Record<string, unknown>): { requestId: string; promise: Promise<boolean> } => {
-    const requestId = `perm_${randomUUID()}`
-    const promise = new Promise<boolean>(resolve => {
-      this.pendingPermissions.set(requestId, { id: requestId, resolve, toolName, args })
-    })
-    return { requestId, promise }
+  /** SA-1: 注入 child client factory（测试用） */
+  setChildClientFactory(factory: (target: ModelTarget, logger: RuntimeLogger) => ChatClient): void {
+    this.supervisorRuntime.setChildClientFactory(factory)
   }
 
   /** TUI-FIX-10: 设置编排事件发射回调 */
   setOnOrchestrationEvent(handler: (event: LoopEvent) => void): void {
-    this.emitOrchestration = handler
+    this.supervisorRuntime.setOnOrchestrationEvent(handler)
   }
 
-  /** TUI 调用以定向响应某个 permission 请求。
-   * SPEC S0-1: 按 requestId 查找 pending entry，避免广播误消费。
-   * 返回 true 表示找到并 resolve；返回 false 表示未找到。
-   */
+  /** TUI 调用以定向响应某个 permission 请求。 */
   respondPermissionForRequest(requestId: string, allow: boolean, alwaysAllow?: boolean): boolean {
-    const entry = this.pendingPermissions.get(requestId)
-    if (entry) {
-      if (allow && alwaysAllow) {
-        this.permissionEngine.addAllowRule({ toolName: entry.toolName })
-      }
-      this.pendingPermissions.delete(requestId)
-      entry.resolve(allow)
-      return true
-    }
-    // 递归 child engines 查找（保持与旧广播语义兼容的定向查找）
-    for (const child of this.activeChildEngines) {
+    if (this.toolRuntime.respondPermissionForRequest(requestId, allow, alwaysAllow)) return true
+    for (const child of this.supervisorRuntime.activeChildEngines) {
       if (child.respondPermissionForRequest(requestId, allow, alwaysAllow)) return true
     }
     return false
   }
 
-  /** TUI 调用以响应权限确认提示（legacy 兼容路径）。
-   * SPEC S0-1: 推荐使用 respondPermissionForRequest(requestId, ...)。
-   * 此方法消费 Map 中任意一个 pending（用于无 dualRuntime 的 legacy 场景或 cancel 中断）。
-   */
+  /** TUI 调用以响应权限确认提示（legacy 兼容路径）。 */
   respondPermission(allow: boolean, alwaysAllow?: boolean): void {
-    // 消费任意一个 pending entry（取第一个插入的）
-    const firstKey = this.pendingPermissions.keys().next().value
-    if (firstKey) {
-      const entry = this.pendingPermissions.get(firstKey)!
-      if (allow && alwaysAllow) {
-        this.permissionEngine.addAllowRule({ toolName: entry.toolName })
-      }
-      this.pendingPermissions.delete(firstKey)
-      entry.resolve(allow)
-      return
-    }
-    for (const child of this.activeChildEngines) child.respondPermission(allow, alwaysAllow)
+    this.toolRuntime.respondPermission(allow, alwaysAllow, this.supervisorRuntime.activeChildEngines)
   }
 
   /** QST-10: TUI 调用以回答 Question */
   respondQuestion(requestId: string, answers: QuestionAnswer[]): void {
-    if (this.questionService.list().some(request => request.id === requestId)) {
-      this.questionService.reply({ requestId, answers })
-      return
-    }
-    for (const child of this.activeChildEngines) child.respondQuestion(requestId, answers)
+    this.supervisorRuntime.respondQuestion(requestId, answers)
   }
 
   /** QST-10: TUI 调用以拒绝 Question */
   rejectQuestion(requestId: string): void {
-    if (this.questionService.list().some(request => request.id === requestId)) {
-      this.questionService.reject(requestId)
-      return
-    }
-    for (const child of this.activeChildEngines) child.rejectQuestion(requestId)
+    this.supervisorRuntime.rejectQuestion(requestId)
   }
 
   /** QST-10: 获取待处理的 Question 列表 */
   listPendingQuestions(): Array<{ id: string; sessionId: string; questions: QuestionInfo[] }> {
-    return this.questionService.list()
+    return this.supervisorRuntime.listPendingQuestions()
   }
 
   /** QST-10: 内部方法，供 ToolContext.askUser 调用 */
   private async askUserFromTool(questions: QuestionInfo[]): Promise<QuestionAnswer[]> {
-    return this.questionService.ask({
-      sessionId: this.sessionId,
-      questions,
-    })
+    return this.supervisorRuntime.askUserFromTool(this.sessionRuntime.sessionId, questions)
   }
 
   /** P2: Enqueue a mid-session instruction for consumption at the next safe point */
   enqueueInstruction(instruction: string): EnqueueInstructionResult {
-    const trimmed = instruction.trim()
-    if (!trimmed) {
-      return { status: "ignored", queueLength: this.pendingInstructionQueue.length }
-    }
-    if (!this.isSubmitting) {
-      return { status: "idle", queueLength: 0 }
-    }
-    if (this.pendingInstructionQueue.length >= ReasonixEngine.MAX_PENDING_INSTRUCTIONS) {
-      return { status: "full", queueLength: this.pendingInstructionQueue.length }
-    }
-    this.pendingInstructionQueue.push(trimmed)
-    return { status: "queued", queueLength: this.pendingInstructionQueue.length }
+    return this.instructionRuntime.enqueue(instruction, this.isSubmitting)
   }
 
   constructor(config: DeepreefConfig, onStart?: () => void, sessionId?: string, customClient?: ChatClient, runtimeLogger?: RuntimeLogger, options?: ReasonixEngineOptions) {
     this.config = config
     this.toolRuntimeHooks = options?.toolRuntimeHooks
     this.ctx = new ContextManager(config.maxContextRounds, config.contextWindow)
-    this.sessionId = sessionId ?? randomUUID()
-    this.logger = runtimeLogger ?? createRuntimeLoggerFromEnv({ sessionId: this.sessionId })
+    this.sessionRuntime = new EngineSessionRuntime(sessionId ?? randomUUID())
+    this.logger = runtimeLogger ?? createRuntimeLoggerFromEnv({ sessionId: this.sessionRuntime.sessionId })
     this.client = this.resolveClient(customClient)
     this.currentAgent = "build"
-    this.permissionEngine = new PermissionEngine()
-    this.configurePermissionDefaults()
-    this.hookManager = new HookManager()
-    this.subagentRegistry = new SubagentRegistry()
-    this.questionService = new QuestionService()
-    this.hookManager.setErrorObserver((error, phase) => {
+    this.toolRuntime.configurePermissionDefaults(config as unknown as { tools?: { approvalPolicy?: string; strictMode?: boolean } })
+    this.toolRuntime.hookManager.setErrorObserver((error, phase) => {
       if (this.logger.isEnabled("error")) {
         this.logger.error("hook.error", error, { phase })
       }
@@ -381,13 +263,13 @@ export class ReasonixEngine implements CoreEngine {
       baseDir: process.cwd(),
     }
 
-    this.toolExecutor = new StreamingToolExecutor(
-      this.tools,
-      this.sessionId,
+    this.toolRuntime.toolExecutor = new StreamingToolExecutor(
+      this.toolRuntime.tools,
+      this.sessionRuntime.sessionId,
       undefined,
-      this.permissionEngine,
-      this.hookManager,
-      this.requestPermission,
+      this.toolRuntime.permissionEngine,
+      this.toolRuntime.hookManager,
+      this.toolRuntime.requestPermission,
       (task, agentType, files) => this.delegateTask(task, agentType, files),
       (name) => this.switchAgent(name),
       (options) => this.spawnSubagent(options),
@@ -410,42 +292,11 @@ export class ReasonixEngine implements CoreEngine {
     })
 
     // 尝试初始化会话持久化（best-effort，失败则不记录）
-    this.rebindSessionWriter(this.sessionId)
+    this.sessionRuntime.rebindSessionWriter(process.cwd())
     // F0-1: CheckpointEngine 初始化（sessionDir 与 sessionWriter 同目录）
     const sessionDir = resolve(process.cwd(), ".covalo", "sessions")
-    this.checkpointEngine = new CheckpointEngine(sessionDir, this.sessionId)
+    this.checkpointEngine = new CheckpointEngine(sessionDir, this.sessionRuntime.sessionId)
     if (this.logger.isEnabled()) this.logger.info("engine.created", { provider: config.provider, model: config.model })
-  }
-
-  /**
-   * 根据 approvalPolicy 配置权限引擎默认值。
-   * 安全默认：读允许，写/编辑/执行询问。
-   */
-  private configurePermissionDefaults(): void {
-    const toolsConfig = (this.config as unknown as Record<string, unknown>).tools as { approvalPolicy?: string; strictMode?: boolean } | undefined
-    const policy = toolsConfig?.approvalPolicy ?? "on-request"
-    const strictMode = toolsConfig?.strictMode ?? false
-
-    // 设置 strictMode
-    this.permissionEngine.setStrictMode(strictMode)
-
-    // 安全默认：读允许，写/编辑/执行询问
-    this.permissionEngine.setDefaultDecision("read", "allow")
-    this.permissionEngine.setDefaultDecision("write", "ask")
-    this.permissionEngine.setDefaultDecision("edit", "ask")
-    this.permissionEngine.setDefaultDecision("exec", "ask")
-
-    // 明确无审批模式，才放宽写/编辑/执行
-    if (policy === "never") {
-      this.permissionEngine.setDefaultDecision("write", "allow")
-      this.permissionEngine.setDefaultDecision("edit", "allow")
-      this.permissionEngine.setDefaultDecision("exec", "allow")
-    }
-
-    // always：连 read 也走 ask；适合极端审计模式
-    if (policy === "always") {
-      this.permissionEngine.setDefaultDecision("read", "ask")
-    }
   }
 
   static async recover(config: DeepreefConfig, sessionId: string, options?: ReasonixEngineOptions): Promise<ReasonixEngine> {
@@ -465,7 +316,7 @@ export class ReasonixEngine implements CoreEngine {
           engine.injectTaskLedgerContext(engine.taskLedger)
         }
         if (v2.verificationGate) {
-          engine.verificationGateState = { ...v2.verificationGate }
+          engine.governanceRuntime.verificationGateState = { ...v2.verificationGate }
         }
       }
     }
@@ -487,44 +338,30 @@ export class ReasonixEngine implements CoreEngine {
       throw new Error(`Invalid session ID: ${sessionId}`)
     }
     // P1-fix: 切换 session 前 dispose 旧 session 的 BackgroundTaskManager。
-    // 原先 loadSession 不清理旧 session 的 manager，导致旧 session 的后台 shell
-    // 子进程、hard timer、log 写流驻留在 managersBySession Map 中直到进程退出。
-    if (this.sessionId !== sessionId) {
+    if (this.sessionRuntime.sessionId !== sessionId) {
       try {
-        this.toolRuntimeHooks?.disposeBackgroundTaskManagerFor(this.sessionId)
+        this.toolRuntimeHooks?.disposeBackgroundTaskManagerFor(this.sessionRuntime.sessionId)
       } catch {
         // best-effort: 不阻塞 session 切换
       }
     }
-    this.sessionId = sessionId
+    this.sessionRuntime.updateSessionId(sessionId)
     // SPEC-A: session boundary — clear all context zones and submit-local state
-    // FIX-H3: 清空跨 session 的 harness strictness/policy 残留
-    this.sessionStrictness = undefined
-    this.effectivePolicy = null
+    this.governanceRuntime.resetForLoadSession()
+    this.supervisorRuntime.supervisorGuidanceState = createSupervisorGuidanceState()
     this.ctx.log.clear()
     this.ctx.clearTransientState()
     this.taskLedger = undefined
-    this.verificationGateState = { continuationCount: 0 }
-    this.supervisorGuidanceState = createSupervisorGuidanceState()
-    this.pendingInstructionQueue = []
-    this.toolExecutor.setSessionId(sessionId)
+    this.instructionRuntime.clear()
+    this.toolRuntime.setToolSessionId(sessionId)
     this.logger = this.logger.child({ sessionId })
-    this.rebindSessionWriter(sessionId)
+    this.sessionRuntime.rebindSessionWriter(process.cwd())
     // F0-1: 切换 session 时重建 CheckpointEngine，重置 governance 状态
     const sessionDir = resolve(process.cwd(), ".covalo", "sessions")
     this.checkpointEngine = new CheckpointEngine(sessionDir, sessionId)
-    this.branchBudgetTracker.reset()
-    this.modeDecisionEngine.resetSubmittedSignals()
     // TUI-FIX-10: 清除前一 session 的所有 worker
-    this.emitOrchestration?.({ role: "orchestration", orchestration: { kind: "worker_remove", workerId: "*" } })
+    this.supervisorRuntime.emitOrchestration?.({ role: "orchestration", orchestration: { kind: "worker_remove", workerId: "*" } })
     return this._loadSessionMessages(sessionId)
-  }
-
-  private rebindSessionWriter(sessionId: string): void {
-    const sessionPath = resolve(process.cwd(), ".covalo", "sessions", `${sessionId}.jsonl`)
-    const writer = new AsyncSessionWriter(sessionPath)
-    writer.init().catch(() => {})
-    this.sessionWriter = writer
   }
 
   private async _loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
@@ -533,18 +370,18 @@ export class ReasonixEngine implements CoreEngine {
       const nonSystem = messages.filter(m => m.role !== "system")
       this.ctx.log.appendMany(nonSystem)
     }
-    this.resetStats()
+    this.sessionRuntime.resetStats()
     return messages
   }
 
   resetStats(): void {
-    this.stats = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0, apiCalls: 0, toolCalls: 0, totalCost: 0 }
+    this.sessionRuntime.resetStats()
   }
 
   getStatusSnapshot(): EngineStatusSnapshot {
     const budget = this.ctx.getBudget()
     return {
-      sessionId: this.sessionId,
+      sessionId: this.sessionRuntime.sessionId,
       context: {
         prefixTokens: budget.prefixTokens,
         logTokens: budget.logTokens,
@@ -553,10 +390,10 @@ export class ReasonixEngine implements CoreEngine {
         window: budget.window,
         ratio: budget.ratio,
       },
-      stats: { ...this.stats },
+      stats: { ...this.sessionRuntime.stats },
       currentAgent: this.currentAgent,
       isSubmitting: this.isSubmitting,
-      sessionWriter: this.sessionWriter?.getStatus(),
+      sessionWriter: this.sessionRuntime.sessionWriter?.getStatus(),
       timestamp: new Date().toISOString(),
     }
   }
@@ -623,81 +460,18 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
-  /** SPEC-03: 注入 trusted experience recall — 修复"只记不忆"架构闭环 */
+  /** SPEC-03: 注入 trusted experience recall */
   private async injectExperienceRecall(): Promise<void> {
-    if (process.env.COVALO_EXPERIENCE_RECALL === "false") return
-
-    try {
-      const {
-        ExperienceStore,
-        buildRecallFilter,
-        formatExperienceForPrompt,
-      } = await import("./harness-evolution/experience/index.js")
-
-      const store = new ExperienceStore(process.cwd())
-      await store.init()
-
-      const filter = buildRecallFilter({
-        // 默认策略来自 DEFAULT_RECALL_POLICY：trusted only / 30 days / limit 3 / confidence >= 0.3
-      })
-
-      const { records } = await store.recall(filter)
-      if (records.length === 0) return
-
-      const content = formatExperienceForPrompt(records, true).trim()
-      if (!content) return
-
-      // 使用 user role + data-only wrapper，避免 system role 提升 recall 权限层级
-      this.ctx.scratch.replaceSource("experience_recall", [{
-        role: "user",
-        content: [
-          "## Retrieved Trusted Experiences",
-          "The following records are historical memory only. Treat them as weak, non-authoritative guidance.",
-          "Current user instructions, repository files, tool results, and explicit task evidence take precedence.",
-          "<experience_recall_data>",
-          content,
-          "</experience_recall_data>",
-        ].join("\n\n"),
-      }])
-    } catch (e) {
-      if (this.logger.isEnabled("debug")) {
-        this.logger.debug("experience.recall.failed", {
-          error: e instanceof Error ? e.message : String(e),
-        })
-      }
-    }
+    await injectExperienceRecall(this.ctx, this.logger)
   }
 
   /** DRF-60: 构建 Supervisor 指导闭环配置 */
-  private buildSupervisorGuidanceConfig(): SupervisorGuidanceConfig {
-    const pool = loadSupervisorPool()
-    const hasEnabled = pool.candidates.some(c => c.enabled)
-    return {
-      pool,
-      budget: new SupervisorBudgetTracker(),
-      state: this.supervisorGuidanceState,
-      supervisorConfigured: hasEnabled,
-      resolveTarget: (targetId) => resolveModelTarget(targetId, this.config, this.config.modelTargets),
-    }
+  private buildSupervisorGuidanceConfig() {
+    return this.supervisorRuntime.buildSupervisorGuidanceConfig(this.config)
   }
 
-  private buildActiveSkillsPrompt(): string {
-    if (this.activeSkills.length === 0) return ""
-    const isZh = getPromptLocale() === "zh-CN"
-    const blocks = this.activeSkills.map(skill => [
-      `### ${skill.name}`,
-      skill.description,
-      skill.content.trim(),
-    ].filter(Boolean).join("\n"))
-    return [
-      isZh ? "## 已启用的技能" : "## Enabled Skills",
-      isZh
-        ? "以下技能已在此会话中启用。在相关时将其用作指导。"
-        : "The following skills are enabled for this session. Use them as guidance when relevant.",
-      "",
-      blocks.join("\n\n"),
-    ].join("\n")
-  }
+
+
 
   /** 获取上下文管理器实例 */
   getContextManager(): ContextManager {
@@ -743,35 +517,22 @@ export class ReasonixEngine implements CoreEngine {
 
   /** 注册一个工具到引擎 */
   registerTool(tool: AgentTool): void {
-    this.tools.set(tool.name, tool)
+    this.toolRuntime.registerTool(tool)
   }
 
   /** 返回当前工具注册表快照，供具有独立可见工具策略的委派引擎继承。 */
   getRegisteredTools(): AgentTool[] {
-    return [...this.tools.values()]
-  }
-
-  private enqueueDelegatedEvent(event: LoopEvent): void {
-    this.delegatedEvents.push(event)
-    for (const wake of this.delegatedEventWaiters) wake()
-    this.delegatedEventWaiters.clear()
-  }
-
-  private waitForDelegatedEvent(): { promise: Promise<void>; cancel: () => void } {
-    let wake!: () => void
-    const promise = new Promise<void>(resolve => { wake = resolve })
-    this.delegatedEventWaiters.add(wake)
-    return { promise, cancel: () => this.delegatedEventWaiters.delete(wake) }
+    return this.toolRuntime.getRegisteredTools()
   }
 
   /** 标记中断，终止当前正在进行的请求和工具执行 */
   interrupt(): void {
     if (this.logger.isEnabled()) this.logger.info("engine.interrupt", { isSubmitting: this.isSubmitting })
     this._interrupted = true
-    this.pendingInstructionQueue = []
+    this.instructionRuntime.clear()
     this.respondPermission(false)
-    this.questionService.interrupt()
-    for (const child of this.activeChildEngines) child.interrupt()
+    this.supervisorRuntime.interruptQuestions()
+    for (const child of this.supervisorRuntime.activeChildEngines) child.interrupt()
     this.activeAbortController?.abort()
   }
 
@@ -779,12 +540,11 @@ export class ReasonixEngine implements CoreEngine {
   async shutdown(): Promise<void> {
     if (this._shutDown) return
     this._shutDown = true
-    if (this.logger.isEnabled("info")) this.logger.info("engine.shutdown.start", { sessionId: this.sessionId })
+    if (this.logger.isEnabled("info")) this.logger.info("engine.shutdown.start", { sessionId: this.sessionRuntime.sessionId })
 
     try {
       this.interrupt()
     } catch (e) {
-      // ADV-BUG-05: Log interrupt errors
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.interrupt_error", { error: e instanceof Error ? e.message : String(e) })
       }
@@ -793,41 +553,36 @@ export class ReasonixEngine implements CoreEngine {
     try {
       await this.ctx.shutdown()
     } catch (e) {
-      // ADV-BUG-05: Log context shutdown errors
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.context_error", { error: e instanceof Error ? e.message : String(e) })
       }
     }
 
     try {
-      await this.sessionWriter?.drain()
+      await this.sessionRuntime.drainWriter()
     } catch (e) {
-      // ADV-BUG-05: Log session drain errors
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.session_drain_error", { error: e instanceof Error ? e.message : String(e) })
       }
     }
 
-    // P1-fix: dispose BackgroundTaskManager for this session。
-    // 原先生产代码从不调用 dispose，导致后台 shell 子进程、hard timer、
-    // log 写流在进程退出或 session 切换时泄漏。
     try {
-      this.toolRuntimeHooks?.disposeBackgroundTaskManagerFor(this.sessionId)
+      this.toolRuntimeHooks?.disposeBackgroundTaskManagerFor(this.sessionRuntime.sessionId)
     } catch (e) {
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.bg_task_dispose_error", { error: e instanceof Error ? e.message : String(e) })
       }
     }
 
-    // F0-1: shutdown 时最后落盘一次 checkpoint（trigger: final_draft，无论 free/forced 都落盘）
+    // F0-1: shutdown 时最后落盘一次 checkpoint
     try {
       if (this.checkpointEngine) {
         await this.checkpointEngine.save({
           trigger: "final_draft",
-          branchBudget: this.branchBudgetTracker,
+          branchBudget: this.governanceRuntime.branchBudgetTracker,
           lastStopReason: "aborted",
           taskLedger: this.taskLedger?.snapshot(),
-          verificationGate: this.verificationGateState,
+          verificationGate: this.governanceRuntime.verificationGateState,
         })
       }
     } catch (e) {
@@ -836,7 +591,7 @@ export class ReasonixEngine implements CoreEngine {
       }
     }
 
-    if (this.logger.isEnabled("info")) this.logger.info("engine.shutdown.done", { sessionId: this.sessionId })
+    if (this.logger.isEnabled("info")) this.logger.info("engine.shutdown.done", { sessionId: this.sessionRuntime.sessionId })
 
     try {
       await this.logger.flush()
@@ -858,13 +613,12 @@ export class ReasonixEngine implements CoreEngine {
     if (partial.contextWindow !== undefined) {
       this.ctx.updateContextWindow(partial.contextWindow)
     }
-    // Re-resolve client when provider changes
     if (providerChanged) {
       this.client = this.resolveClient()
     }
     const partialToolsConfig = (partial as unknown as Record<string, unknown>).tools as { approvalPolicy?: string; strictMode?: boolean } | undefined
     if (partialToolsConfig?.approvalPolicy !== undefined || partialToolsConfig?.strictMode !== undefined) {
-      this.configurePermissionDefaults()
+      this.toolRuntime.configurePermissionDefaults(this.config as unknown as { tools?: { approvalPolicy?: string; strictMode?: boolean } })
     }
   }
 
@@ -891,24 +645,14 @@ export class ReasonixEngine implements CoreEngine {
   }
 
   /**
-   * 设置会话级 Harness 严格度。
-   *
-   * 生效时机：
-   * - 如果当前没有 submit 正在运行，则下一次 submit 开始时生效。
-   * - 如果当前 submit 正在运行，不会改变本次 loop 的工具集、路由、验证或 checkpoint 策略。
-   *   新严格度会在下一次 submit 开始时重新解析并固化。
-   *
-   * 这是有意设计：避免同一次 loop 中途发生工具集/权限/路由突变。
-   *
    * @deprecated 使用 AgentProfile 中的 harness 配置代替
    */
   setHarnessStrictness(strictness: HarnessStrictness): void {
-    this.sessionStrictness = strictness
+    this.governanceRuntime.setHarnessStrictness(strictness)
   }
 
   /**
    * @deprecated 使用 AgentProfile 中的 thinking 配置代替
-   * 设置推理档位（off / open / high），传递给 DeepSeek thinking API
    */
   private thinkingMode: ThinkingMode = "off"
   setThinkingMode(mode: ThinkingMode): void {
@@ -920,178 +664,29 @@ export class ReasonixEngine implements CoreEngine {
 
   /** ADV-HAR-01: 获取当前有效 Harness 严格度 */
   getHarnessStrictness(): HarnessStrictness {
-    return this.effectivePolicy?.strictness ?? this.sessionStrictness ?? "normal"
+    return this.governanceRuntime.getHarnessStrictness()
   }
 
   /** ADV-HAR-02: 获取当前有效 Harness 策略（只读） */
   getEffectivePolicy(): EffectiveHarnessPolicy | null {
-    return this.effectivePolicy
+    return this.governanceRuntime.getEffectivePolicy()
   }
 
   /**
-   * 获取当前引擎状态的快照，包括消息列表、流式状态、待执行工具等
-   * @param isStreaming 是否正在流式输出
-   * @param streamingMessage 当前已流式输出的内容
-   * @param pendingToolCalls 待执行的工具调用列表
+   * 获取当前引擎状态的快照
    */
   getState(isStreaming = false, streamingMessage = "", pendingToolCalls: Array<{ name: string; args: string }> = []): AgentState {
     return {
-      sessionId: this.sessionId,
+      sessionId: this.sessionRuntime.sessionId,
       messages: [...this.ctx.buildMessages()],
       isStreaming,
       streamingMessage,
       pendingToolCalls,
       currentAgent: this.currentAgent,
-      stats: { ...this.stats },
+      stats: { ...this.sessionRuntime.stats },
     }
   }
 
-  private buildSupervisorLoopModePrompt(workflowPhase?: WorkflowPhase): string {
-    const isZh = getPromptLocale() === "zh-CN"
-    if (workflowPhase === "supervisor_analyse") {
-      return isZh
-        ? `## 循环模式 —— Supervisor 分析
-
-你是规划阶段的 Supervisor。
-
-WorkflowCoordinator 控制执行顺序：
-supervisor_analyse -> worker_do -> worker_report -> supervisor_check
-
-**工具约束（严格遵守）**：
-本阶段仅允许调用以下三个工具：\`get_goal\`、\`update_goal\`、\`list_dir\`。
-以下工具在本阶段**不可用**，调用会被拒绝并浪费轮次：
-- \`read_file\` / \`grep\`：本阶段不能读文件内容。如需了解文件内容，请在计划中标注"由 Worker 检查"。
-- \`bash\` / \`edit\` / \`write\` / \`apply_patch\`：本阶段不能执行或修改。
-- \`AgentTool\` / mailbox / dispatch：本阶段不能委派子任务。
-若某工具不在上面三个允许列表中，**不要调用它**。
-
-你当前的任务：
-- 为 Worker 制定具体计划。
-- 不要自行执行计划。
-- 不要检查实现文件。
-- 不要验证代码。
-- 不要执行 Worker 任务。
-- 使用 get_goal 和 list_dir 做浅层目录了解，**不要重复调用同一工具**。
-- 仅在需要更新结构化目标状态时才调用 update_goal；否则不要调用它。
-- 如果浅层了解不够，在计划中说明假设，让 Worker 去检查细节。
-- 制定计划后停止。协调器会将你的计划传递给 Worker。
-
-返回结构化计划，包含：
-- objective
-- 具体的 Worker 步骤
-- constraints
-- risks
-- expected evidence / verification criteria`
-        : `## Loop Mode — Supervisor Analyse
-
-You are the Supervisor in the planning phase.
-
-The WorkflowCoordinator owns execution order:
-supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
-
-**Tool constraints (strict)**:
-Only these three tools are available in this phase: \`get_goal\`, \`update_goal\`, \`list_dir\`.
-The following tools are NOT available in this phase; calling them will be rejected and waste a turn:
-- \`read_file\` / \`grep\`: do not read file contents in this phase. If you need file contents, mark "Worker to inspect" in the plan.
-- \`bash\` / \`edit\` / \`write\` / \`apply_patch\`: do not execute or modify.
-- \`AgentTool\` / mailbox / dispatch: do not delegate subtasks in this phase.
-If a tool is not in the three-tool allow list above, **do not call it**.
-
-Your current job:
-- Create a concrete plan for the Worker.
-- Do not execute the plan yourself.
-- Do not inspect implementation files.
-- Do not verify code.
-- Do not perform Worker tasks.
-- Use get_goal and list_dir for shallow directory orientation; do NOT call the same tool repeatedly.
-- Only call update_goal when you need to update structured goal state; otherwise do not call it.
-- If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
-- After producing the plan, stop. The coordinator will pass your plan to the Worker.
-
-Return a structured plan with:
-- objective
-- concrete Worker steps
-- constraints
-- risks
-- expected evidence / verification criteria`
-    }
-
-    if (workflowPhase === "supervisor_check") {
-      return isZh
-        ? `## 循环模式 —— Supervisor 审查
-
-你是审查阶段的 Supervisor。
-
-你当前的任务：
-- 审查 Worker 报告。
-- 对照计划和目标验证 Worker 输出。
-- 你可以使用 read_file 和 grep 检查证据。
-- 不要自行执行 Worker 任务。
-- 不要编辑文件。
-- 不要执行实现步骤。
-- 决定以下之一：continue、revise、approve、ask_user 或 blocked。
-
-除非你提供了逐需求的完成审核及具体证据，否则不要批准。`
-        : `## Loop Mode — Supervisor Check
-
-You are the Supervisor in the review phase.
-
-Your current job:
-- Review the Worker report.
-- Verify the Worker output against the plan and goal.
-- You may use read_file and grep to inspect evidence.
-- Do not perform Worker tasks yourself.
-- Do not edit files.
-- Do not run implementation steps.
-- Decide one of: continue, revise, approve, ask_user, or blocked.
-
-Do not approve unless you provide a requirement-by-requirement completion audit with concrete evidence.`
-    }
-
-    if (workflowPhase === "supervisor_intervene") {
-      return isZh
-        ? `## 循环模式 —— Supervisor 干预
-
-你正在给 Worker 提供简要的中途指导。
-
-你当前的任务：
-- 诊断 Worker 的阻塞点。
-- 提供简洁的指导。
-- 不要自行执行 Worker 任务。
-- 不要批准或完成工作流。
-- 不要编辑文件。
-- 除非绝对必要，不使用工具。`
-        : `## Loop Mode — Supervisor Intervention
-
-You are giving brief mid-workflow guidance to the Worker.
-
-Your current job:
-- Diagnose the Worker blocker.
-- Provide concise guidance.
-- Do not perform Worker tasks yourself.
-- Do not approve or complete the workflow.
-- Do not edit files.
-- Use no tools unless strictly necessary.`
-    }
-
-    return isZh
-      ? `## 循环模式 —— Supervisor
-
-你是当前循环目标的 Supervisor。
-
-WorkflowCoordinator 控制执行顺序：
-supervisor_analyse -> worker_do -> worker_report -> supervisor_check
-
-遵循当前工作流阶段。不要自行执行 Worker 任务。`
-      : `## Loop Mode — Supervisor
-
-You are the Supervisor for the active loop goal.
-
-The WorkflowCoordinator owns execution order:
-supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
-
-Follow the current workflow phase. Do not perform Worker tasks yourself.`
-  }
 
   async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor", mode?: WorkflowMode, workflowPhase?: WorkflowPhase): AsyncGenerator<LoopEvent> {
     // C1: Wait for context policy to load before proceeding
@@ -1102,7 +697,7 @@ Follow the current workflow phase. Do not perform Worker tasks yourself.`
     const submitId = diagnosticsEnabled ? randomUUID() : undefined
     const submitLogger = submitId ? this.logger.child({ submitId }) : this.logger
     this._interrupted = false
-    this.delegatedEvents = []
+    this.supervisorRuntime.delegatedEvents = []
     this.isSubmitting = true
     const abortController = new AbortController()
     this.activeAbortController = abortController
@@ -1126,7 +721,7 @@ Follow the current workflow phase. Do not perform Worker tasks yourself.`
     // SFR-20: 分层组合系统提示，不再用 ?? 互斥覆盖
     const baseLayer = this.baseSystemPrompt || this.ctx.prefix.messages[0]?.content || ""
     const roleLayer = ac.systemPrompt || ""
-    const activeSkillsPrompt = this.buildActiveSkillsPrompt()
+    const activeSkillsPrompt = buildActiveSkillsPrompt(this.activeSkills)
     const promptLocale = getPromptLocale()
     const isZh = promptLocale === "zh-CN"
     const modeLayer = role === "supervisor" && mode === "subagent"
@@ -1142,7 +737,7 @@ Proactively call AgentTool whenever the task requires codebase exploration, impl
 Do not wait for the user to explicitly ask you to delegate. Keep only planning, synthesis, review, and user communication for yourself.
 Give each Worker a complete, self-contained task with context, constraints, relevant files, and expected output.`
       : role === "supervisor" && mode === "loop"
-        ? this.buildSupervisorLoopModePrompt(workflowPhase)
+        ? buildSupervisorLoopModePrompt(workflowPhase)
         : role === "worker" && mode === "loop"
           ? isZh
             ? `## 循环模式 —— Worker
@@ -1176,39 +771,39 @@ Do not change goal status.`
     // ADV-HAR-P0: 解析 modelProfile 用于推断默认严格度
     const modelProfile = resolveModelProfile(modelName, isLocal, 0, undefined)
     const { strictness, source } = resolveHarnessStrictness({
-      sessionStrictness: this.sessionStrictness,
+      sessionStrictness: this.governanceRuntime.sessionStrictness,
       projectConfig,
       modelName,
       modelProfile,
     })
-    this.effectivePolicy = resolveEffectiveHarnessPolicy(strictness, source)
+    this.governanceRuntime.effectivePolicy = resolveEffectiveHarnessPolicy(strictness, source)
     // ADV-HAR-03: 根据 effectivePolicy.shellPolicy 重新注册 bash 工具
-    if (this.effectivePolicy.shellPolicy === "dual-track" || this.effectivePolicy.shellPolicy === "dual-track-conservative") {
+    if (this.governanceRuntime.effectivePolicy.shellPolicy === "dual-track" || this.governanceRuntime.effectivePolicy.shellPolicy === "dual-track-conservative") {
       if (this.toolRuntimeHooks) {
-        this.tools.set("bash", this.toolRuntimeHooks.createBashTool({
+        this.toolRuntime.tools.set("bash", this.toolRuntimeHooks.createBashTool({
           dualTrack: true,
-          conservative: this.effectivePolicy.shellPolicy === "dual-track-conservative",
+          conservative: this.governanceRuntime.effectivePolicy.shellPolicy === "dual-track-conservative",
         }))
       }
     }
 
     // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率
-    this.checkpointEngine.setCheckpointPolicy(this.effectivePolicy.checkpoint)
+    this.checkpointEngine.setCheckpointPolicy(this.governanceRuntime.effectivePolicy.checkpoint)
 
     // ADV-HAR-05: 根据 effectivePolicy.readBeforeWrite 配置 ReadTracker
-    if (this.effectivePolicy.readBeforeWrite === "block") {
-      this.toolExecutor.setReadTracker(new ReadTracker({ strict: true }))
-    } else if (this.effectivePolicy.readBeforeWrite === "warn") {
-      this.toolExecutor.setReadTracker(new ReadTracker({ strict: false }))
+    if (this.governanceRuntime.effectivePolicy.readBeforeWrite === "block") {
+      this.toolRuntime.toolExecutor.setReadTracker(new ReadTracker({ strict: true }))
+    } else if (this.governanceRuntime.effectivePolicy.readBeforeWrite === "warn") {
+      this.toolRuntime.toolExecutor.setReadTracker(new ReadTracker({ strict: false }))
     } else {
-      this.toolExecutor.setReadTracker(undefined)
+      this.toolRuntime.toolExecutor.setReadTracker(undefined)
     }
 
     // F0-1: 根据 effectivePolicy 配置 governance 三件套
     // branchBudget: "enforce" → 启用 + 硬拦截；"recover" → 启用 + 仅记录；"observe" → 禁用
-    const branchBudgetMode = this.effectivePolicy.branchBudget
-    this.branchBudgetTracker.setEnabled(branchBudgetMode !== "observe")
-    this.branchBudgetTracker.bindWorkspaceRoot(process.cwd())
+    const branchBudgetMode = this.governanceRuntime.effectivePolicy.branchBudget
+    this.governanceRuntime.branchBudgetTracker.setEnabled(branchBudgetMode !== "observe")
+    this.governanceRuntime.branchBudgetTracker.bindWorkspaceRoot(process.cwd())
     // checkpoint: "frequent" → 任何 trigger 都落盘；"safe-point" → safe point 落盘；"minimal" → 仅 tool_failed/final_draft
     // 由 CheckpointEngine.shouldPersistOnTrigger 内部根据 forcedPolicyActive 判定，这里只负责 loadV2 恢复
     // executionMode: "forced" → 强制 forced；"adaptive" → 自适应决策；"free" → 强制 free
@@ -1221,20 +816,20 @@ Do not change goal status.`
     // free/forced 模式下 loop.evaluateExecutionMode() 不调用 evaluate()，submitted signal
     // 不会被消费，会残留到下一次 submit 污染 mode decision。BranchBudget 快照恢复与 mode
     // signal 解耦——快照恢复对硬拦截/enforce 仍有意义，但 mode signal 只在 adaptive 下提交。
-    const isAdaptiveMode = this.effectivePolicy.executionMode === "adaptive"
+    const isAdaptiveMode = this.governanceRuntime.effectivePolicy.executionMode === "adaptive"
     try {
       const v2 = await this.checkpointEngine.loadV2()
       if (v2) {
-        this.branchBudgetTracker.applySnapshot(v2.branchBudget)
+        this.governanceRuntime.branchBudgetTracker.applySnapshot(v2.branchBudget)
         if (isAdaptiveMode) {
-          this.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
+          this.governanceRuntime.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
         } else {
           // 非 adaptive 模式下，pending recovery signals 直接标记为已消费，
           // 避免 engine 层恢复 checkpoint 后 signal 残留。
           this.checkpointEngine.markRecoverySignalsConsumed(() => true)
         }
         if (this.logger.isEnabled("info")) {
-          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionId, executionMode: this.effectivePolicy.executionMode })
+          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionRuntime.sessionId, executionMode: this.governanceRuntime.effectivePolicy.executionMode })
         }
       }
     } catch (e) {
@@ -1243,8 +838,8 @@ Do not change goal status.`
       }
     }
 
-    this.verificationGateState = { continuationCount: 0 }
-    this.supervisorGuidanceState = createSupervisorGuidanceState()
+    this.governanceRuntime.verificationGateState = { continuationCount: 0 }
+    this.supervisorRuntime.supervisorGuidanceState = createSupervisorGuidanceState()
 
     // SPEC-03: 注入 trusted experience recall（只记不忆修复）
     await this.injectExperienceRecall()
@@ -1274,7 +869,7 @@ Do not change goal status.`
     // P1-fix (A): buildMessages() 在外层 try 内、guard 之前持久化。
     // 确保即使 guard block 也能记录用户输入和当时上下文，且 buildMessages
     // 抛错时 finally 能清理。原先此行在 try 之前，抛错会泄漏 isSubmitting。
-    this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
+    this.sessionRuntime.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
     if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, role: role ?? "unspecified", mode: mode ?? "unspecified", inputLength: userInput.length })
 
     // TUI-FIX-10: emit loop_transition at submit start
@@ -1400,14 +995,14 @@ Do not change goal status.`
       // 这里做结构守卫，避免把任意带 tools 字段的对象误当 CovaloConfig。
       const maybeCovaloConfig = isCovaloConfigLike(this.config) ? (this.config as unknown as CovaloConfig) : undefined
       const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
-        registeredTools: this.tools,
+        registeredTools: this.toolRuntime.tools,
         role: effectiveRole,
         mode: effectiveMode,
         // FIX-CUSTOM-TOOLS: 合并 ac.toolNames 与 registerTool() 注册的自定义工具。
         // 否则 resolveEffectiveTools 的 agentToolNames 白名单会过滤掉自定义工具，
         // 导致 H1 effectiveAllowedToolNames 限制下自定义工具无法执行。
         agentToolNames: ac.toolNames
-          ? [...new Set([...ac.toolNames, ...this.tools.keys()])]
+          ? [...new Set([...ac.toolNames, ...this.toolRuntime.tools.keys()])]
           : ac.toolNames,
         workflowPhase,
         config: maybeCovaloConfig,
@@ -1424,7 +1019,7 @@ Do not change goal status.`
           role: effectiveRole,
           mode: effectiveMode,
           workflowPhase,
-          registeredCount: this.tools.size,
+          registeredCount: this.toolRuntime.tools.size,
           effectiveCount: toolSpecs.length,
           filteredCount,
           reason: filteredReason ?? "unknown",
@@ -1439,12 +1034,12 @@ Do not change goal status.`
         this.prefixCacheKey = cacheKey
       }
 
-      const phaseMaxTurns = resolvePhaseMaxTurns(role, mode, workflowPhase, this.effectivePolicy?.maxTurns)
+      const phaseMaxTurns = resolvePhaseMaxTurns(role, mode, workflowPhase, this.governanceRuntime.effectivePolicy?.maxTurns)
 
       const loopOpts: LoopOptions = {
         ctx: this.ctx,
         client: this.client,
-        toolExecutor: this.toolExecutor,
+        toolExecutor: this.toolRuntime.toolExecutor,
         toolSpecs,
         config: {
           apiKey: this.config.apiKey,
@@ -1455,49 +1050,45 @@ Do not change goal status.`
           provider: this.config.provider,
         },
         signal: abortController.signal,
-        sessionWriter: this.sessionWriter,
-        stats: this.stats,
+        sessionWriter: this.sessionRuntime.sessionWriter,
+        stats: this.sessionRuntime.stats,
         isInterrupted: () => this._interrupted,
         thinkingMode: this.thinkingMode,
         appendToolResult: (tc, result) => this.appendToolResult(tc, result),
-        takePendingInstruction: () => {
-          const content = this.pendingInstructionQueue.shift()
-          if (!content) return null
-          return { content, remaining: this.pendingInstructionQueue.length }
-        },
+        takePendingInstruction: () => this.instructionRuntime.takeOne(),
         logger: submitLogger,
         submitId,
         taskLedger: this.taskLedger,
         // ADV-HAR-02: 使用 effectivePolicy 而不是 harnessProfile 的字段
-        effectivePolicy: this.effectivePolicy ?? undefined,
+        effectivePolicy: this.governanceRuntime.effectivePolicy ?? undefined,
         maxTurns: phaseMaxTurns,
         requireVerificationBeforeFinal:
-          this.effectivePolicy?.verification === "block"
-          || this.effectivePolicy?.verification === "require-or-waive",
-        verificationGateState: this.verificationGateState,
+          this.governanceRuntime.effectivePolicy?.verification === "block"
+          || this.governanceRuntime.effectivePolicy?.verification === "require-or-waive",
+        verificationGateState: this.governanceRuntime.verificationGateState,
         refreshLedgerContext: () => {
           this.injectTaskLedgerContext(this.taskLedger)
         },
         // ADV-HAR-06: 根据 effectivePolicy.earlyStop 配置 EarlyStopDetector
         earlyStop: new EarlyStopDetector({
-          repetitionThreshold: this.effectivePolicy?.earlyStop === "aggressive" ? 2
-            : this.effectivePolicy?.earlyStop === "critical-only" ? 5
+          repetitionThreshold: this.governanceRuntime.effectivePolicy?.earlyStop === "aggressive" ? 2
+            : this.governanceRuntime.effectivePolicy?.earlyStop === "critical-only" ? 5
             : 3,
         }),
         // ADV-HAR-07: 传递 toolRouting 策略供 loop 使用
-        toolRouting: this.effectivePolicy?.toolRouting,
+        toolRouting: this.governanceRuntime.effectivePolicy?.toolRouting,
         // ADV-HAR-08: 传递 verification 策略供 loop 使用
-        verificationPolicy: this.effectivePolicy?.verification,
+        verificationPolicy: this.governanceRuntime.effectivePolicy?.verification,
         // F0-1: 传入 governance/checkpoint 三件套
-        branchBudgetTracker: this.branchBudgetTracker,
+        branchBudgetTracker: this.governanceRuntime.branchBudgetTracker,
         checkpointEngine: this.checkpointEngine,
-        modeDecisionEngine: this.modeDecisionEngine,
+        modeDecisionEngine: this.governanceRuntime.modeDecisionEngine,
         workspaceRoot: process.cwd(),
         allowedToolNames: effectiveMode === "loop"
           ? new Set(toolSpecs.map(spec => spec.function.name))
           : undefined,
         customToolNames,
-        supervisorGuidance: this.effectivePolicy?.supervisorPolicy !== "off"
+        supervisorGuidance: this.governanceRuntime.effectivePolicy?.supervisorPolicy !== "off"
           ? this.buildSupervisorGuidanceConfig()
           : undefined,
         buildSupervisorExtras: () => {
@@ -1516,10 +1107,10 @@ Do not change goal status.`
       const loopIterator = runLoop(loopOpts)[Symbol.asyncIterator]()
       let nextLoopEvent = loopIterator.next()
       while (true) {
-        while (this.delegatedEvents.length > 0) {
-          yield this.delegatedEvents.shift()!
+        while (this.supervisorRuntime.delegatedEvents.length > 0) {
+          yield this.supervisorRuntime.delegatedEvents.shift()!
         }
-        const delegatedWake = this.waitForDelegatedEvent()
+        const delegatedWake = this.supervisorRuntime.waitForDelegatedEvent()
         const next = await Promise.race([
           nextLoopEvent.then(result => ({ kind: "loop" as const, result })),
           delegatedWake.promise.then(() => ({ kind: "delegated" as const })),
@@ -1533,8 +1124,8 @@ Do not change goal status.`
         void this.hookManager.runOnLoopEvent(event as unknown as Record<string, unknown>).catch(() => {})
         nextLoopEvent = loopIterator.next()
       }
-      while (this.delegatedEvents.length > 0) {
-        yield this.delegatedEvents.shift()!
+      while (this.supervisorRuntime.delegatedEvents.length > 0) {
+        yield this.supervisorRuntime.delegatedEvents.shift()!
       }
 
       // Post-loop packet lifecycle: create review/incident/recovery packets based on outcome
@@ -1641,13 +1232,13 @@ Do not change goal status.`
         metadata: { source: "submit", submitId },
       }
       yield errEvt
-      this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: errEvt })
+      this.sessionRuntime.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: errEvt })
       const doneEvt: LoopEvent = {
         role: "done",
         metadata: { reason: "submit_error" } as Record<string, unknown>,
       }
       yield doneEvt
-      this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: doneEvt })
+      this.sessionRuntime.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: doneEvt })
     } finally {
       // Packet lifecycle: emit completed phase
       // P1-fix: submit 失败时标记为 Failed，不再误报 Accepted
@@ -1697,7 +1288,7 @@ Do not change goal status.`
 
   /** 将工具调用的结果追加到对话上下文中 */
   private appendToolResult(tc: ToolCall, result: ToolResult): void {
-    this.stats.toolCalls++
+    this.sessionRuntime.stats.toolCalls++
     this.ctx.log.append({
       role: "tool",
       tool_call_id: tc.id,
@@ -1722,11 +1313,11 @@ Do not change goal status.`
   }
 
   async spawnSubagent(options: SubagentRunOptions): Promise<SubagentRunResult> {
-    const def = this.subagentRegistry.resolve(options.subagentType ?? "general-purpose")
+    const def = this.supervisorRuntime.subagentRegistry.resolve(options.subagentType ?? "general-purpose")
     const workerId = `worker_${randomUUID().slice(0, 8)}`
     const workerStartedAt = Date.now()
     const emitWorkerEvent = (event: LoopEvent): void => {
-      this.enqueueDelegatedEvent(event)
+      this.supervisorRuntime.enqueueDelegatedEvent(event)
     }
 
     // TUI-FIX-10: emit worker_upsert (starting)
@@ -1753,8 +1344,8 @@ Do not change goal status.`
       : null
     const childConfig = resolvedTarget ? targetToConfig(resolvedTarget) : this.config
     const childClient = resolvedTarget
-      ? (this.childClientFactory
-          ? this.childClientFactory(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name }))
+      ? (this.supervisorRuntime.childClientFactory
+          ? this.supervisorRuntime.childClientFactory(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name }))
           : createClientForTarget(resolvedTarget, this.logger.child({ delegate: true, subagentType: def.name })))
       : this.client
 
@@ -1766,13 +1357,13 @@ Do not change goal status.`
       this.logger.child({ delegate: true, subagentType: def.name }),
       this.toolRuntimeHooks ? { toolRuntimeHooks: this.toolRuntimeHooks } : undefined,
     )
-    this.activeChildEngines.add(child)
+    this.supervisorRuntime.activeChildEngines.add(child)
 
     // SPEC-C: 子引擎继承父引擎 contextPolicy
     await child.setContextPolicy(this.getContextPolicy())
 
     try {
-      for (const tool of this.tools.values()) {
+      for (const tool of this.toolRuntime.tools.values()) {
         if (tool.name === "AgentTool") continue
         if (def.disallowedTools?.includes(tool.name)) continue
         if (def.tools && def.tools[0] !== "*" && !def.tools.includes(tool.name)) continue
@@ -1800,7 +1391,7 @@ Do not change goal status.`
 
       const agentCfg = agentConfigFor("build", {
         systemPrompt: getSubagentSystemPrompt(def),
-        toolNames: this.subagentRegistry.getEffectiveTools(def) ?? undefined,
+        toolNames: this.supervisorRuntime.subagentRegistry.getEffectiveTools(def) ?? undefined,
         model: typeof options.model === "string" && options.model !== "inherit" ? options.model : undefined,
       })
 
@@ -1827,7 +1418,7 @@ Do not change goal status.`
       })
 
       for await (const event of child.submit(options.prompt, agentCfg)) {
-        this.enqueueDelegatedEvent({
+        this.supervisorRuntime.enqueueDelegatedEvent({
           ...event,
           metadata: {
             ...event.metadata,
@@ -1944,7 +1535,7 @@ Do not change goal status.`
         warnings,
       }
     } finally {
-      this.activeChildEngines.delete(child)
+      this.supervisorRuntime.activeChildEngines.delete(child)
       // Keep worker visible for a while so React can render final state
       // worker_remove will be emitted on next submit or session switch
       await child.shutdown()
