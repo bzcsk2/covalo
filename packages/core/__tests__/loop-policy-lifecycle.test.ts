@@ -1320,4 +1320,92 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(supervisorGuidance.state.recentTools).toEqual([])
     expect(supervisorGuidance.state.recentFailures).toEqual([])
   })
+
+  it("native repeated tool failures yield warning and persist compact session event", async () => {
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "bash", arguments: '{"command":"npm test"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc2", name: "bash", arguments: '{"command":"npm test"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc3", name: "bash", arguments: '{"command":"npm test"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "same failure", isError: true, metadata: { error: "failed" } })
+          yield { role: "error", content: "same failure", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id, metadata: { error: "failed" } } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+    const sessionEvents: any[] = []
+    const sessionWriter = {
+      enqueue(entry: unknown) {
+        sessionEvents.push(entry)
+      },
+    }
+
+    const events = await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "bash", description: "sh", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      sessionWriter: sessionWriter as any,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      maxTurns: 5,
+    }))
+
+    const warnings = events.filter(e => e.role === "warning" && e.content?.startsWith("Repeated tool failure"))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].content).toContain('"bash" failed 3 times')
+    expect(sessionEvents.some(e => (e as any).payload?.content === "repeated_failure_blocked: bash")).toBe(true)
+  })
+
+  it("salvage repeated tool failures do not yield repeated-failure warning", async () => {
+    const client = makeClient([
+      [
+        { type: "text_delta", delta: '<tool_call><function=read_file><parameter=path>/tmp/x</parameter></function></tool_call>' },
+        { type: "done", finishReason: "stop" },
+      ],
+      [
+        { type: "text_delta", delta: '<tool_call><function=read_file><parameter=path>/tmp/x</parameter></function></tool_call>' },
+        { type: "done", finishReason: "stop" },
+      ],
+      [
+        { type: "text_delta", delta: '<tool_call><function=read_file><parameter=path>/tmp/x</parameter></function></tool_call>' },
+        { type: "done", finishReason: "stop" },
+      ],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "same failure", isError: true, metadata: { error: "failed" } })
+          yield { role: "error", content: "same failure", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id, metadata: { error: "failed" } } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    const events = await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      effectivePolicy: makePolicy("strict"),
+      maxTurns: 5,
+    }))
+
+    expect(events.some(e => e.role === "warning" && e.content?.startsWith("Repeated tool failure"))).toBe(false)
+  })
 })

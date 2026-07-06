@@ -18,6 +18,17 @@ export interface ToolResultInfo {
   parsedArgs?: Record<string, unknown>
 }
 
+export interface LoopPolicyEventEmission {
+  event: LoopEvent
+  sessionEvent?: LoopEvent
+}
+
+export type LoopPolicyEventResult =
+  | void
+  | LoopEvent
+  | LoopPolicyEventEmission
+  | readonly (LoopEvent | LoopPolicyEventEmission)[]
+
 export interface LoopPolicyContext {
   turnCount: number
   logger: RuntimeLogger
@@ -49,7 +60,7 @@ export interface LoopPolicy {
   /** Called before each tool batch execution, with the tool calls to execute. */
   beforeToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<void> | void
   /** Called after each tool/error event yielded from the tool executor. */
-  afterToolResult?(ctx: LoopPolicyContext, event: LoopEvent, info: ToolResultInfo): Promise<void> | void
+  afterToolResult?(ctx: LoopPolicyContext, event: LoopEvent, info: ToolResultInfo): Promise<LoopPolicyEventResult> | LoopPolicyEventResult
   /** Called after the entire tool batch completes (all tools settled), before safe-points. */
   afterToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<void> | void
   /** Called before the final done decision, while there is still time to intercept. */
@@ -90,6 +101,35 @@ export async function runPolicyHook<K extends PolicyHook>(
       // Individual hook errors must not break the pipeline
     }
   }
+}
+
+function normalizePolicyEvents(result: LoopPolicyEventResult): LoopPolicyEventEmission[] {
+  if (!result) return []
+  const items = Array.isArray(result) ? result : [result]
+  return items.map((item) => {
+    if ("event" in item) return item
+    return { event: item }
+  })
+}
+
+export async function runPolicyHookEvents<K extends PolicyHook>(
+  policies: LoopPolicy[],
+  hook: K,
+  ctx: LoopPolicyContext,
+  ...args: HookArgs<K>
+): Promise<LoopPolicyEventEmission[]> {
+  const events: LoopPolicyEventEmission[] = []
+  for (const policy of policies) {
+    const fn = policy[hook]
+    if (!fn) continue
+    try {
+      const result = await (fn as (...a: any[]) => Promise<LoopPolicyEventResult> | LoopPolicyEventResult)(ctx, ...args)
+      events.push(...normalizePolicyEvents(result))
+    } catch {
+      // Individual hook errors must not break the pipeline
+    }
+  }
+  return events
 }
 
 export function createPoliciesFromLoopOptions(_opts: unknown): LoopPolicy[] {

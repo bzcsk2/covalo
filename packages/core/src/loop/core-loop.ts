@@ -5,7 +5,7 @@ import type { ContextManager } from "../context/manager.js"
 import type { StreamingToolExecutor } from "../streaming-executor.js"
 import type { AsyncSessionWriter } from "../session.js"
 import type { FoldDecision } from "../context/token-estimator.js"
-import { runPolicyHook } from "./policy.js"
+import { runPolicyHook, runPolicyHookEvents } from "./policy.js"
 import type { ThinkingMode } from "../provider-thinking.js"
 import { createDeepSeekCapabilities } from "../provider-thinking.js"
 import { calculateCost } from "../pricing.js"
@@ -31,6 +31,7 @@ import { resolveLoopToolRouting } from "./policies/tool-routing-policy.js"
 import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
+import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -160,6 +161,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
       requireVerificationBeforeFinal,
     }),
     createSupervisorEvidenceLoopPolicy({ supervisorGuidance }),
+    createRepeatedFailureLoopPolicy({ repeatedFailures }),
   ]
   // F0-1: enforced 模式下初始化时即开启 forced policy
   if (currentExecutionMode === "forced") {
@@ -499,43 +501,11 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                   ? findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
                   : undefined
                 const nativeParsedArgs = matchedTc ? parseToolCallArgs(matchedTc.function.arguments, matchedTc.function.name) : undefined
-                await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc, parsedArgs: nativeParsedArgs?.ok ? nativeParsedArgs.args : undefined })
-                if (matchedTc) {
-                    const tc = matchedTc
-                    const toolName = toolEvent.toolName!
-                    const argsResult = nativeParsedArgs
-                    if (argsResult?.ok) {
-                      const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
-                      // S2-1: 重复失败签名追踪
-                      // 同 {toolName, args, errorContent} 连续 3 次才报告 blocked
-                      // 不同错误或修复后的新错误不算重复
-                      if (isErr) {
-                        const failure = repeatedFailures.record(
-                          toolName,
-                          argsResult.args,
-                          toolEvent.content ?? "",
-                        )
-                        if (failure.blocked) {
-                          yield {
-                            role: "warning",
-                            content: `Repeated tool failure: "${toolName}" failed ${failure.count} times with identical arguments and error. Stop retrying; re-read context, adjust the plan, or report the blocker.`,
-                            severity: "warning" as const,
-                          }
-                          sessionWriter?.enqueue({
-                            ts: Date.now(),
-                            type: "event",
-                            payload: {
-                              role: "warning",
-                              content: `repeated_failure_blocked: ${toolName}`,
-                            },
-                          })
-                        }
-                      } else {
-                        // 成功调用：清除该 (toolName, args) 下所有失败签名的计数
-                        repeatedFailures.clear(toolName, argsResult.args)
-                      }
-                    }
-                  }
+                const policyEvents = await runPolicyHookEvents(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc, parsedArgs: nativeParsedArgs?.ok ? nativeParsedArgs.args : undefined })
+                for (const emission of policyEvents) {
+                  yield emission.event
+                  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
+                }
                 // DRF-20: 早停信号检测
                 if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
                   const toolSignal = earlyStop.recordReadTool(toolEvent.toolName)
@@ -625,7 +595,11 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                       ? findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
                       : undefined
                     const salvageParsedArgs = salvageMatchedTc ? parseToolCallArgs(salvageMatchedTc.function.arguments, salvageMatchedTc.function.name) : undefined
-                    await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc, parsedArgs: salvageParsedArgs?.ok ? salvageParsedArgs.args : undefined })
+                    const policyEvents = await runPolicyHookEvents(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc, parsedArgs: salvageParsedArgs?.ok ? salvageParsedArgs.args : undefined })
+                    for (const emission of policyEvents) {
+                      yield emission.event
+                      sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
+                    }
                     if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
                       const toolSignal = earlyStop.recordReadTool(toolEvent.toolName)
                       if (toolSignal) yield* emitEarlyStopSignal(toolSignal, ctx, sessionWriter, supervisorGuidance?.state)
