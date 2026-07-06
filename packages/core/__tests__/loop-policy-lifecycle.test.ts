@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import type { RuntimeLogger } from "../src/runtime-logger.js"
-import type { LoopPolicy, LoopPolicyContext, ToolBatchInfo } from "../src/loop/policy.js"
+import type { LoopPolicy, LoopPolicyContext, ToolBatchInfo, ToolResultInfo } from "../src/loop/policy.js"
 import type { ChatMessage, ToolCall, ToolSpec } from "../src/types.js"
 import type { DeepSeekStreamEvent, DeepSeekClientOptions } from "../src/client.js"
 import type { LoopEvent, SessionStats, ToolResult, ChatClient, StreamingToolExecutor } from "../src/interface.js"
@@ -371,7 +371,7 @@ describeOrSkip("loop policy lifecycle", () => {
       beforeToolBatch(_ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], _info: ToolBatchInfo) {
         calls.push({ hook: "beforeToolBatch", toolName: toolCalls[0]?.function.name })
       },
-      afterToolResult(_ctx: LoopPolicyContext, event: LoopEvent) {
+      afterToolResult(_ctx: LoopPolicyContext, event: LoopEvent, _info: ToolResultInfo) {
         calls.push({ hook: "afterToolResult", toolName: (event as any).toolName })
       },
     }
@@ -472,14 +472,14 @@ describeOrSkip("loop policy lifecycle", () => {
   })
 
   it("afterToolBatch fires after tool batch completes, maintaining beforeToolBatch -> afterToolResult -> afterToolBatch order", async () => {
-    const order: { hook: string; toolName?: string; source?: string }[] = []
+    const order: { hook: string; toolName?: string; source?: string; matchedToolName?: string }[] = []
     const policy: LoopPolicy = {
       name: "order-checker",
       beforeToolBatch(_ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo) {
         order.push({ hook: "beforeToolBatch", toolName: toolCalls[0]?.function.name, source: info.source })
       },
-      afterToolResult(_ctx: LoopPolicyContext, event: LoopEvent) {
-        order.push({ hook: "afterToolResult", toolName: (event as any).toolName })
+      afterToolResult(_ctx: LoopPolicyContext, event: LoopEvent, info: ToolResultInfo) {
+        order.push({ hook: "afterToolResult", toolName: (event as any).toolName, source: info.source, matchedToolName: info.toolCall?.function.name })
       },
       afterToolBatch(_ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo) {
         order.push({ hook: "afterToolBatch", toolName: toolCalls[0]?.function.name, source: info.source })
@@ -520,7 +520,11 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(order[0].hook).toBe("beforeToolBatch")
     expect(order[0].toolName).toBe("read_file")
     expect(order[1].hook).toBe("afterToolResult")
+    expect(order[1].source).toBe("native")
+    expect(order[1].matchedToolName).toBe("read_file")
     expect(order[2].hook).toBe("afterToolResult")
+    expect(order[2].source).toBe("native")
+    expect(order[2].matchedToolName).toBe("grep")
     expect(order[3].hook).toBe("afterToolBatch")
     expect(order[3].toolName).toBe("read_file")
     const resultCount = order.filter(o => o.hook === "afterToolResult").length
@@ -531,11 +535,14 @@ describeOrSkip("loop policy lifecycle", () => {
   })
 
   it("afterToolBatch fires with source='salvage' when text-savaged tool batch completes", async () => {
-    const calls: { hook: string; source?: string }[] = []
+    const calls: { hook: string; source?: string; matchedToolName?: string }[] = []
     const policy: LoopPolicy = {
       name: "salvage-observer",
       beforeToolBatch(_ctx: LoopPolicyContext, _tc: readonly ToolCall[], info: ToolBatchInfo) {
         calls.push({ hook: "beforeToolBatch", source: info.source })
+      },
+      afterToolResult(_ctx: LoopPolicyContext, _event: LoopEvent, info: ToolResultInfo) {
+        calls.push({ hook: "afterToolResult", source: info.source, matchedToolName: info.toolCall?.function.name })
       },
       afterToolBatch(_ctx: LoopPolicyContext, _tc: readonly ToolCall[], info: ToolBatchInfo) {
         calls.push({ hook: "afterToolBatch", source: info.source })
@@ -572,11 +579,14 @@ describeOrSkip("loop policy lifecycle", () => {
       policies: [policy],
     }))
 
-    expect(calls.length).toBe(2)
+    expect(calls.length).toBe(3)
     expect(calls[0].hook).toBe("beforeToolBatch")
     expect(calls[0].source).toBe("salvage")
-    expect(calls[1].hook).toBe("afterToolBatch")
+    expect(calls[1].hook).toBe("afterToolResult")
     expect(calls[1].source).toBe("salvage")
+    expect(calls[1].matchedToolName).toBe("read_file")
+    expect(calls[2].hook).toBe("afterToolBatch")
+    expect(calls[2].source).toBe("salvage")
   })
 
   it("context build error triggers onError", async () => {

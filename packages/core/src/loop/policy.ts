@@ -11,6 +11,12 @@ export interface ToolBatchInfo {
   source: ToolBatchSource
 }
 
+export interface ToolResultInfo {
+  source: ToolBatchSource
+  toolCalls: readonly ToolCall[]
+  toolCall?: ToolCall
+}
+
 export interface LoopPolicyContext {
   turnCount: number
   logger: RuntimeLogger
@@ -42,7 +48,7 @@ export interface LoopPolicy {
   /** Called before each tool batch execution, with the tool calls to execute. */
   beforeToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<void> | void
   /** Called after each tool/error event yielded from the tool executor. */
-  afterToolResult?(ctx: LoopPolicyContext, event: LoopEvent): Promise<void> | void
+  afterToolResult?(ctx: LoopPolicyContext, event: LoopEvent, info: ToolResultInfo): Promise<void> | void
   /** Called after the entire tool batch completes (all tools settled), before safe-points. */
   afterToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<void> | void
   /** Called before the final done decision, while there is still time to intercept. */
@@ -62,7 +68,7 @@ type PolicyHook = Exclude<keyof LoopPolicy, "name">
 type HookArgs<K extends PolicyHook> =
   K extends "afterModelEvent" ? [event: unknown] :
   K extends "beforeToolBatch" ? [toolCalls: readonly ToolCall[], info: ToolBatchInfo] :
-  K extends "afterToolResult" ? [event: LoopEvent] :
+  K extends "afterToolResult" ? [event: LoopEvent, info: ToolResultInfo] :
   K extends "afterToolBatch" ? [toolCalls: readonly ToolCall[], info: ToolBatchInfo] :
   K extends "afterStreamError" ? [event: LoopEvent] :
   K extends "onError" ? [error: unknown] :

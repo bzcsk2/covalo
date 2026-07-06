@@ -36,7 +36,7 @@ import type { EffectiveHarnessPolicy } from "../harness/index.js"
 import { parseSelectedCategory } from "../tool-routing/two-stage-router.js"
 import type { ToolCategory } from "../tool-routing/types.js"
 import { resolveLoopToolRouting } from "./policies/tool-routing-policy.js"
-import { checkBranchBudgetBlocks, recordBranchBudgetResult } from "./policies/branch-budget-policy.js"
+import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -77,7 +77,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     effectivePolicy,
     policies: _policies,
   } = opts
-  const policies: LoopPolicy[] = _policies ?? []
   let turnCount = 0
   const policyCtx: LoopPolicyContext = {
     get turnCount() { return turnCount },
@@ -157,6 +156,10 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   if (workspaceRoot) {
     branchBudgetTracker?.bindWorkspaceRoot(workspaceRoot)
   }
+  const policies: LoopPolicy[] = [
+    ...(_policies ?? []),
+    createBranchBudgetLoopPolicy({ branchBudgetTracker, runtimeState }),
+  ]
   // F0-1: enforced 模式下初始化时即开启 forced policy
   if (currentExecutionMode === "forced") {
     checkpointEngine?.setForcedPolicy(true)
@@ -179,9 +182,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
    */
   const checkBranchBudgetBlocksFn = (toolCalls: ToolCall[]): Map<string, string> =>
     checkBranchBudgetBlocks({ branchBudgetTracker, toolCalls, workspaceRoot })
-
-  const recordBranchBudgetFn = (toolName: string, args: Record<string, unknown>, result: ToolResult): void =>
-    recordBranchBudgetResult({ branchBudgetTracker, toolName, args, result, runtimeState })
 
   /** DRF-40: 记录工具结果到 TaskLedger */
   const recordLedgerTool = (toolName: string, args: Record<string, unknown>, result: ToolResult): void => {
@@ -511,25 +511,19 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                 if (toolEvent.role !== 'tool_progress') {
                   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
                 }
-                await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent)
-                // F0-1/B3: BranchBudget 记录不依赖 TaskLedger — 普通任务（无 ledger）
-                // 也需要累加 file edit / command retry / error 计数，否则 shouldBranchRecover()
-                // 永远没有数据来源，governance 在普通任务中失效。
-                if ((toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
-                  const tc = findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex)
-                  if (tc) {
+                const matchedTc = (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName
+                  ? findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
+                  : undefined
+                await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc })
+                if (matchedTc) {
+                    const tc = matchedTc
+                    const toolName = toolEvent.toolName!
                     const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
                     if (argsResult.ok) {
                       const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
-                      // F0-1: 同步累加 BranchBudget 计数（file edit / command retry / error）
-                      recordBranchBudgetFn(toolEvent.toolName, argsResult.args, {
-                        isError: isErr,
-                        content: toolEvent.content ?? "",
-                        metadata: toolEvent.metadata,
-                      })
                       // DRF-40: 记录工具结果到 TaskLedger（仅在 ledger 存在时）
                       if (taskLedger) {
-                        recordLedgerTool(toolEvent.toolName, argsResult.args, {
+                        recordLedgerTool(toolName, argsResult.args, {
                           isError: isErr,
                           content: toolEvent.content ?? "",
                           metadata: toolEvent.metadata,
@@ -538,7 +532,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                       if (supervisorGuidance) {
                         recordSupervisorToolEvidence(
                           supervisorGuidance.state,
-                          toolEvent.toolName,
+                          toolName,
                           !isErr,
                           (toolEvent.content ?? "").slice(0, 200),
                         )
@@ -550,7 +544,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                               : "err"
                           recordSupervisorFailureEvidence(
                             supervisorGuidance.state,
-                            `${toolEvent.toolName}:${sigKey}`,
+                            `${toolName}:${sigKey}`,
                             toolEvent.content,
                           )
                         }
@@ -560,14 +554,14 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                       // 不同错误或修复后的新错误不算重复
                       if (isErr) {
                         const failure = repeatedFailures.record(
-                          toolEvent.toolName,
+                          toolName,
                           argsResult.args,
                           toolEvent.content ?? "",
                         )
                         if (failure.blocked) {
                           yield {
                             role: "warning",
-                            content: `Repeated tool failure: "${toolEvent.toolName}" failed ${failure.count} times with identical arguments and error. Stop retrying; re-read context, adjust the plan, or report the blocker.`,
+                            content: `Repeated tool failure: "${toolName}" failed ${failure.count} times with identical arguments and error. Stop retrying; re-read context, adjust the plan, or report the blocker.`,
                             severity: "warning" as const,
                           }
                           sessionWriter?.enqueue({
@@ -575,17 +569,16 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                             type: "event",
                             payload: {
                               role: "warning",
-                              content: `repeated_failure_blocked: ${toolEvent.toolName}`,
+                              content: `repeated_failure_blocked: ${toolName}`,
                             },
                           })
                         }
                       } else {
                         // 成功调用：清除该 (toolName, args) 下所有失败签名的计数
-                        repeatedFailures.clear(toolEvent.toolName, argsResult.args)
+                        repeatedFailures.clear(toolName, argsResult.args)
                       }
                     }
                   }
-                }
                 // DRF-20: 早停信号检测
                 if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
                   const toolSignal = earlyStop.recordReadTool(toolEvent.toolName)
@@ -671,7 +664,10 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                     if (toolEvent.role !== "tool_progress") {
                       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
                     }
-                    await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent)
+                    const salvageMatchedTc = (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName
+                      ? findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
+                      : undefined
+                    await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc })
                     if (taskLedger && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
                       const tc = findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex)
                       if (tc) {
