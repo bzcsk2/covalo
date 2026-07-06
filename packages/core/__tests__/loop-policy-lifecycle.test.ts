@@ -8,8 +8,9 @@ import type { EffectiveHarnessPolicy } from "../src/model-profile/types.js"
 import type { ContextManager } from "../src/context/manager.js"
 import type { BranchBudgetTracker } from "../src/governance/branch-budget.js"
 import type { ModeDecisionEngine } from "../src/governance/mode-decision.js"
-import type { TaskLedgerTracker } from "../src/task-ledger.js"
+import { TaskLedgerTracker } from "../src/task-ledger.js"
 import { createCheckpointLoopPolicy } from "../src/loop/policies/checkpoint-policy.js"
+import { createTaskLedgerLoopPolicy } from "../src/loop/policies/task-ledger-policy.js"
 
 type RunCoreLoopFn = typeof import("../src/loop/core-loop.js").runCoreLoop
 let runCoreLoop: RunCoreLoopFn
@@ -973,5 +974,225 @@ describeOrSkip("loop policy lifecycle", () => {
 
     expect(parsedArgsList.length).toBeGreaterThan(0)
     expect(parsedArgsList[0]).toBeUndefined()
+  })
+
+  it("native write tool result makes taskLedger.verificationPending true", async () => {
+    const tracker = new TaskLedgerTracker("fix bug")
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: '{"path":"src/a.ts"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "write_file", description: "w", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      taskLedger: tracker,
+      requireVerificationBeforeFinal: true,
+      verificationGateState: { continuationCount: 0 },
+    }))
+
+    expect(tracker.verificationPending).toBe(true)
+    expect(tracker.changedFiles).toContain("src/a.ts")
+  })
+
+  it("native bash verification command clears taskLedger.verificationPending", async () => {
+    const tracker = new TaskLedgerTracker("fix bug")
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: '{"path":"src/a.ts"}' }, { type: "tool_call_end", toolCallIndex: 1, id: "tc2", name: "bash", arguments: '{"command":"npm test"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [
+        { type: "function", function: { name: "write_file", description: "w", parameters: {} } },
+        { type: "function", function: { name: "bash", description: "sh", parameters: {} } },
+      ],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      taskLedger: tracker,
+      requireVerificationBeforeFinal: true,
+      verificationGateState: { continuationCount: 0 },
+    }))
+
+    expect(tracker.verificationPending).toBe(false)
+  })
+
+  it("salvage write tool result still records to TaskLedger", async () => {
+    const tracker = new TaskLedgerTracker("fix bug")
+
+    const client = makeClient([[
+      { type: "text_delta", delta: '<tool_call><function=write_file><parameter=path>/tmp/x</parameter></function></tool_call>' },
+      { type: "done", finishReason: "stop" },
+    ]])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "write_file", description: "w", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      effectivePolicy: makePolicy("strict"),
+      taskLedger: tracker,
+      requireVerificationBeforeFinal: true,
+      verificationGateState: { continuationCount: 0 },
+    }))
+
+    expect(tracker.verificationPending).toBe(true)
+    expect(tracker.changedFiles.some(f => f.includes("/tmp/x"))).toBe(true)
+  })
+
+  it("parse failure does not record to TaskLedger", async () => {
+    const tracker = new TaskLedgerTracker("fix bug")
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: '{invalid}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "write_file", description: "w", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      taskLedger: tracker,
+      requireVerificationBeforeFinal: true,
+      verificationGateState: { continuationCount: 0 },
+    }))
+
+    expect(tracker.verificationPending).toBe(false)
+    expect(tracker.changedFiles).toEqual([])
+  })
+
+  it("verificationGateState.continuationCount resets when verification resolves", async () => {
+    const tracker = new TaskLedgerTracker("fix bug")
+    const gateState = { continuationCount: 5 }
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: '{"path":"src/a.ts"}' }, { type: "tool_call_end", toolCallIndex: 1, id: "tc2", name: "bash", arguments: '{"command":"npm test"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [
+        { type: "function", function: { name: "write_file", description: "w", parameters: {} } },
+        { type: "function", function: { name: "bash", description: "sh", parameters: {} } },
+      ],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      taskLedger: tracker,
+      requireVerificationBeforeFinal: true,
+      verificationGateState: gateState,
+    }))
+
+    // After write_file → pending=true, still blocking → continuationCount stays 5
+    // After bash success → pending=false, unblocked → continuationCount resets to 0
+    expect(gateState.continuationCount).toBe(0)
+  })
+
+  it("task-ledger policy refreshes context and keeps gate counter while still blocking", async () => {
+    const tracker = new TaskLedgerTracker("fix bug")
+    const gateState = { continuationCount: 5 }
+    const refreshLedgerContext = vi.fn()
+    const policy = createTaskLedgerLoopPolicy({
+      taskLedger: tracker,
+      refreshLedgerContext,
+      verificationGateState: gateState,
+      requireVerificationBeforeFinal: true,
+    })
+
+    policy.afterToolResult?.({} as LoopPolicyContext, {
+      role: "tool",
+      content: "ok",
+      toolName: "write_file",
+    } as LoopEvent, {
+      source: "native",
+      toolCalls: [],
+      parsedArgs: { path: "src/a.ts" },
+    })
+
+    expect(tracker.verificationPending).toBe(true)
+    expect(tracker.changedFiles).toContain("src/a.ts")
+    expect(refreshLedgerContext).toHaveBeenCalledTimes(1)
+    expect(gateState.continuationCount).toBe(5)
   })
 })

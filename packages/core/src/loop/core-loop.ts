@@ -1,5 +1,5 @@
 import type { ToolCall, ChatMessage } from "../types.js"
-import type { LoopEvent, SessionStats, ToolResult, ChatClient } from "../interface.js"
+import type { LoopEvent, SessionStats, ChatClient } from "../interface.js"
 import { isToolUseFinishReason } from "../finish-reason.js"
 import type { ContextManager } from "../context/manager.js"
 import type { StreamingToolExecutor } from "../streaming-executor.js"
@@ -20,10 +20,6 @@ import { EarlyStopDetector } from "../early-stop.js"
 import type { StopSignal } from "../early-stop.js"
 import { salvageTextToolCallsInResponse, TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
 import type { TaskLedgerTracker } from "../task-ledger.js"
-import {
-  maybeResetVerificationGateCounter,
-  type VerificationGateState,
-} from "../governance/verification-gate.js"
 import { runVerificationGate } from "./policies/verification-gate-policy.js"
 import { parseToolCallArgs } from "../executor-helpers.js"
 import type { SupervisorGuidanceConfig } from "../supervisor/guided-loop.js"
@@ -37,6 +33,7 @@ import { parseSelectedCategory } from "../tool-routing/two-stage-router.js"
 import type { ToolCategory } from "../tool-routing/types.js"
 import { resolveLoopToolRouting } from "./policies/tool-routing-policy.js"
 import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
+import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -159,6 +156,12 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   const policies: LoopPolicy[] = [
     ...(_policies ?? []),
     createBranchBudgetLoopPolicy({ branchBudgetTracker, runtimeState }),
+    createTaskLedgerLoopPolicy({
+      taskLedger,
+      refreshLedgerContext,
+      verificationGateState,
+      requireVerificationBeforeFinal,
+    }),
   ]
   // F0-1: enforced 模式下初始化时即开启 forced policy
   if (currentExecutionMode === "forced") {
@@ -182,23 +185,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
    */
   const checkBranchBudgetBlocksFn = (toolCalls: ToolCall[]): Map<string, string> =>
     checkBranchBudgetBlocks({ branchBudgetTracker, toolCalls, workspaceRoot })
-
-  /** DRF-40: 记录工具结果到 TaskLedger */
-  const recordLedgerTool = (toolName: string, args: Record<string, unknown>, result: ToolResult): void => {
-    if (!taskLedger) return
-    const pendingBefore = taskLedger.verificationPending
-    taskLedger.recordToolResult(toolName, args, result)
-    refreshLedgerContext?.()
-    if (verificationGateState) {
-      const blockingAfter = taskLedger.verificationPending && taskLedger.changedFiles.length > 0
-      maybeResetVerificationGateCounter(
-        verificationGateState,
-        pendingBefore,
-        taskLedger.verificationPending,
-        blockingAfter && requireVerificationBeforeFinal,
-      )
-    }
-  }
 
   /** DRF-60: 在安全点请求 Supervisor 指导并注入 scratch */
   const trySupervisorGuidance = () => runSupervisorGuidanceSafePoint({
@@ -522,14 +508,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                     const argsResult = nativeParsedArgs
                     if (argsResult?.ok) {
                       const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
-                      // DRF-40: 记录工具结果到 TaskLedger（仅在 ledger 存在时）
-                      if (taskLedger) {
-                        recordLedgerTool(toolName, argsResult.args, {
-                          isError: isErr,
-                          content: toolEvent.content ?? "",
-                          metadata: toolEvent.metadata,
-                        })
-                      }
                       if (supervisorGuidance) {
                         recordSupervisorToolEvidence(
                           supervisorGuidance.state,
@@ -670,16 +648,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                       : undefined
                     const salvageParsedArgs = salvageMatchedTc ? parseToolCallArgs(salvageMatchedTc.function.arguments, salvageMatchedTc.function.name) : undefined
                     await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc, parsedArgs: salvageParsedArgs?.ok ? salvageParsedArgs.args : undefined })
-                    if (taskLedger && salvageMatchedTc) {
-                      const argsResult = salvageParsedArgs
-                      if (argsResult?.ok) {
-                        recordLedgerTool(toolEvent.toolName!, argsResult.args, {
-                          isError: toolEvent.role === "error" || !!toolEvent.metadata?.error,
-                          content: toolEvent.content ?? "",
-                          metadata: toolEvent.metadata,
-                        })
-                      }
-                    }
                     if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
                       const toolSignal = earlyStop.recordReadTool(toolEvent.toolName)
                       if (toolSignal) yield* emitEarlyStopSignal(toolSignal, ctx, sessionWriter, supervisorGuidance?.state)
