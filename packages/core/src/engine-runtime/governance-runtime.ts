@@ -31,7 +31,4 @@ export class EngineGovernanceRuntime {
     this.verificationGateState = { continuationCount: 0 }
   }
 
-  resetForSubmit(): void {
-    this.verificationGateState = { continuationCount: 0 }
-  }
 }

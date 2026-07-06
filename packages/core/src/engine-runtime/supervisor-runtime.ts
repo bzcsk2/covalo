@@ -75,10 +75,6 @@ export class EngineSupervisorRuntime {
     this.questionService.interrupt()
   }
 
-  clearDelegatedEvents(): void {
-    this.delegatedEvents = []
-  }
-
   buildSupervisorGuidanceConfig(config: DeepreefConfig): SupervisorGuidanceConfig {
     const pool = loadSupervisorPool()
     const hasEnabled = pool.candidates.some(c => c.enabled)
