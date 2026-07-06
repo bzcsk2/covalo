@@ -31,7 +31,7 @@ import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policie
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
-import { emitEarlyStopSignal } from "./policies/early-stop-policy.js"
+import { createEarlyStopRepetitionLoopPolicy, emitEarlyStopSignal } from "./policies/early-stop-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -42,7 +42,7 @@ import {
 import { evaluateLoopExecutionMode } from "./policies/execution-mode-policy.js"
 import type { HarnessMode } from "../model-profile/types.js"
 import type { AgentRole } from "../agent-profile/types.js"
-import type { LoopPolicy } from "./policy.js"
+import type { LoopPolicy, LoopPolicyEventEmission } from "./policy.js"
 import type { LoopOptions } from "../loop.js"
 import type { LoopPolicyContext } from "./policy.js"
 
@@ -162,6 +162,11 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     }),
     createSupervisorEvidenceLoopPolicy({ supervisorGuidance }),
     createRepeatedFailureLoopPolicy({ repeatedFailures }),
+    createEarlyStopRepetitionLoopPolicy({
+      earlyStop,
+      sessionWriter,
+      supervisorState: supervisorGuidance?.state,
+    }),
   ]
   // F0-1: enforced 模式下初始化时即开启 forced policy
   if (currentExecutionMode === "forced") {
@@ -185,6 +190,15 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
    */
   const checkBranchBudgetBlocksFn = (toolCalls: ToolCall[]): Map<string, string> =>
     checkBranchBudgetBlocks({ branchBudgetTracker, toolCalls, workspaceRoot })
+
+  const emitPolicyEvents = function* (emissions: LoopPolicyEventEmission[]): Generator<LoopEvent> {
+    for (const emission of emissions) {
+      yield emission.event
+    }
+    for (const emission of emissions) {
+      sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
+    }
+  }
 
   /** DRF-60: 在安全点请求 Supervisor 指导并注入 scratch */
   const trySupervisorGuidance = () => runSupervisorGuidanceSafePoint({
@@ -310,8 +324,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
         return
       }
 
-      await runPolicyHook(policies, "afterModelEvent", policyCtx, event)
-
       switch (event.type) {
         case "text_delta": {
           fullContent += event.delta
@@ -320,26 +332,24 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
             yield { role: "assistant_delta", content: visibleDelta }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "assistant_delta", content: visibleDelta } })
           }
-          if (earlyStop) {
-            const repSignal = earlyStop.checkRepetition(fullContent)
-            if (repSignal) {
-              yield* emitEarlyStopSignal(repSignal, ctx, sessionWriter, supervisorGuidance?.state)
-            }
-          }
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           break
         }
 
         case "status":
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           yield { role: "status", content: event.content, metadata: event.metadata }
           break
 
         case "reasoning_delta":
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           fullReasoning += event.delta
           yield { role: "reasoning_delta", content: event.delta }
           sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "reasoning_delta", content: event.delta } })
           break
 
         case "tool_call_end": {
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           const normalizedId = toolCallIdNormalizer.normalize(event.id, event.name)
           const tc: ToolCall = {
             id: normalizedId,
@@ -353,6 +363,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
         }
 
         case "usage":
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           stats.promptTokens += event.usage.promptTokens
           stats.completionTokens += event.usage.completionTokens
           stats.cacheHitTokens += event.usage.cacheHitTokens ?? 0
@@ -363,6 +374,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
           break
 
         case "done": {
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           stats.apiCalls++  // 每轮只计数一次，避免 usage 重复事件导致偏高
           const reason = event.finishReason ?? "stop"
           const isToolUse = isToolUseFinishReason(reason)
@@ -672,6 +684,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
         }
 
         case "error":
+          yield* emitPolicyEvents(await runPolicyHookEvents(policies, "afterModelEvent", policyCtx, event, { fullContent }))
           streamError = { role: "error", content: event.message, severity: "error" as const, metadata: { ...(event.status ? { status: event.status } : {}), responseBody: event.body } }
           await runPolicyHook(policies, "onError", policyCtx, event)
           yield streamError

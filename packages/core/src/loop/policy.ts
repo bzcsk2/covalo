@@ -18,6 +18,10 @@ export interface ToolResultInfo {
   parsedArgs?: Record<string, unknown>
 }
 
+export interface ModelEventInfo {
+  fullContent: string
+}
+
 export interface LoopPolicyEventEmission {
   event: LoopEvent
   sessionEvent?: LoopEvent
@@ -56,7 +60,7 @@ export interface LoopPolicy {
   /** Called before the model API call, after messages are built. */
   beforeModelCall?(ctx: LoopPolicyContext): Promise<void> | void
   /** Called for each event received from the model stream. */
-  afterModelEvent?(ctx: LoopPolicyContext, event: unknown): Promise<void> | void
+  afterModelEvent?(ctx: LoopPolicyContext, event: unknown, info: ModelEventInfo): Promise<LoopPolicyEventResult> | LoopPolicyEventResult
   /** Called before each tool batch execution, with the tool calls to execute. */
   beforeToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<void> | void
   /** Called after each tool/error event yielded from the tool executor. */
@@ -78,7 +82,7 @@ export interface LoopPolicy {
 type PolicyHook = Exclude<keyof LoopPolicy, "name">
 
 type HookArgs<K extends PolicyHook> =
-  K extends "afterModelEvent" ? [event: unknown] :
+  K extends "afterModelEvent" ? [event: unknown, info: ModelEventInfo] :
   K extends "beforeToolBatch" ? [toolCalls: readonly ToolCall[], info: ToolBatchInfo] :
   K extends "afterToolResult" ? [event: LoopEvent, info: ToolResultInfo] :
   K extends "afterToolBatch" ? [toolCalls: readonly ToolCall[], info: ToolBatchInfo] :

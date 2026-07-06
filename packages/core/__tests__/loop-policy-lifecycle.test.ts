@@ -9,6 +9,7 @@ import type { ContextManager } from "../src/context/manager.js"
 import type { BranchBudgetTracker } from "../src/governance/branch-budget.js"
 import type { ModeDecisionEngine } from "../src/governance/mode-decision.js"
 import { TaskLedgerTracker } from "../src/task-ledger.js"
+import { EarlyStopDetector } from "../src/early-stop.js"
 import { createCheckpointLoopPolicy } from "../src/loop/policies/checkpoint-policy.js"
 import { createTaskLedgerLoopPolicy } from "../src/loop/policies/task-ledger-policy.js"
 import { emitEarlyStopSignal } from "../src/loop/policies/early-stop-policy.js"
@@ -1449,5 +1450,43 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(sessionEvents[0]).toMatchObject({ type: "messages", payload: [{ role: "user", content: "correction" }] })
     expect(sessionEvents[1]).toMatchObject({ type: "event", payload: events[0] })
     expect(sessionEvents[2]).toMatchObject({ type: "event", payload: events[1] })
+  })
+
+  it("early-stop repetition policy emits correction after text delta updates full content", async () => {
+    const appended: Array<{ role: string; content: string }> = []
+    const ctx = mockContextManager({
+      buildMessages: () => [{ role: "user", content: "correction" }],
+      log: { append: (msg: any) => appended.push(msg), get: () => [], clear: () => {} } as any,
+    })
+    const sessionEvents: any[] = []
+    const sessionWriter = {
+      enqueue(entry: unknown) {
+        sessionEvents.push(entry)
+      },
+    }
+    const earlyStop = new EarlyStopDetector({ repetitionThreshold: 3, repetitionWindowChars: 200 })
+    const repeated = "THE QUICK BROWN FOX ".repeat(50)
+    const client = makeClient([[{ type: "text_delta", delta: repeated }, { type: "done", finishReason: "stop" }]])
+
+    const events = await collectEvents(runCoreLoop({
+      ctx,
+      client,
+      toolExecutor: makeEmptyExecutor(),
+      toolSpecs: [],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      sessionWriter: sessionWriter as any,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      earlyStop,
+    }))
+
+    expect(events.filter(e => e.role === "status" && e.content === "early_stop" && e.metadata?.reason === "repetition_loop")).toHaveLength(1)
+    expect(events.filter(e => e.role === "orchestration" && e.orchestration?.kind === "runtime_signal")).toHaveLength(1)
+    expect(appended.some(msg => msg.content.includes("repeating"))).toBe(true)
+    expect(sessionEvents.some(e => (e as any).type === "messages")).toBe(true)
+    expect(sessionEvents.some(e => (e as any).payload?.content === "early_stop")).toBe(true)
   })
 })
