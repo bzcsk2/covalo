@@ -69,7 +69,6 @@
       "version": "0.1.0",
       "dependencies": {
         "@covalo/security": "workspace:*",
-        "@covalo/tools": "workspace:*",
         "smol-toml": "^1.7.0",
         "zod": "4.4.3",
       },

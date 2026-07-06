@@ -1764,6 +1764,7 @@ Do not change goal status.`
       undefined,
       childClient,
       this.logger.child({ delegate: true, subagentType: def.name }),
+      this.toolRuntimeHooks ? { toolRuntimeHooks: this.toolRuntimeHooks } : undefined,
     )
     this.activeChildEngines.add(child)
 
