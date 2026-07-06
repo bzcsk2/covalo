@@ -11,6 +11,7 @@ import type { ModeDecisionEngine } from "../src/governance/mode-decision.js"
 import { TaskLedgerTracker } from "../src/task-ledger.js"
 import { createCheckpointLoopPolicy } from "../src/loop/policies/checkpoint-policy.js"
 import { createTaskLedgerLoopPolicy } from "../src/loop/policies/task-ledger-policy.js"
+import { emitEarlyStopSignal } from "../src/loop/policies/early-stop-policy.js"
 import { SupervisorBudgetTracker } from "../src/supervisor/budget.js"
 import { createSupervisorGuidanceState } from "../src/supervisor/guided-loop.js"
 import type { SupervisorGuidanceConfig } from "../src/supervisor/guided-loop.js"
@@ -1407,5 +1408,46 @@ describeOrSkip("loop policy lifecycle", () => {
     }))
 
     expect(events.some(e => e.role === "warning" && e.content?.startsWith("Repeated tool failure"))).toBe(false)
+  })
+
+  it("emitEarlyStopSignal injects correction, yields status/runtime signal, and persists events", () => {
+    const appended: Array<{ role: string; content: string }> = []
+    const ctx = mockContextManager({
+      buildMessages: () => [{ role: "user", content: "correction" }],
+      log: { append: (msg: any) => appended.push(msg), get: () => [], clear: () => {} } as any,
+    })
+    const sessionEvents: any[] = []
+    const sessionWriter = {
+      enqueue(entry: unknown) {
+        sessionEvents.push(entry)
+      },
+    }
+    const supervisorState = createSupervisorGuidanceState()
+
+    const events = [...emitEarlyStopSignal({
+      reason: "read_loop",
+      message: "too many reads",
+      action: "inject_correction",
+      injection: "[SYSTEM] stop reading",
+    }, ctx, sessionWriter as any, supervisorState)]
+
+    expect(appended).toEqual([{ role: "user", content: "[SYSTEM] stop reading" }])
+    expect(supervisorState.lastStopSignalReason).toBe("read_loop")
+    expect(events[0]).toMatchObject({
+      role: "status",
+      content: "early_stop",
+      severity: "warning",
+      metadata: { reason: "read_loop", message: "too many reads", action: "inject_correction" },
+    })
+    expect(events[1]).toMatchObject({
+      role: "orchestration",
+      orchestration: {
+        kind: "runtime_signal",
+        signal: { kind: "verification-failed", message: "too many reads" },
+      },
+    })
+    expect(sessionEvents[0]).toMatchObject({ type: "messages", payload: [{ role: "user", content: "correction" }] })
+    expect(sessionEvents[1]).toMatchObject({ type: "event", payload: events[0] })
+    expect(sessionEvents[2]).toMatchObject({ type: "event", payload: events[1] })
   })
 })

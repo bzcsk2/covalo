@@ -17,7 +17,6 @@ import {
   injectPendingInstruction,
 } from "../loop-helpers.js"
 import { EarlyStopDetector } from "../early-stop.js"
-import type { StopSignal } from "../early-stop.js"
 import { salvageTextToolCallsInResponse, TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
 import type { TaskLedgerTracker } from "../task-ledger.js"
 import { runVerificationGate } from "./policies/verification-gate-policy.js"
@@ -32,6 +31,7 @@ import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policie
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
+import { emitEarlyStopSignal } from "./policies/early-stop-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -735,42 +735,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   if (diagnosticsEnabled) logger.warn("loop.max_turns", { maxTurns })
   yield { role: "warning", content: `Reached maximum tool loop count (${maxTurns}).`, severity: "warning" as const }
   yield await emitDone("maxTurns")
-}
-
-/** 注入早停纠正信号到上下文 */
-function* emitEarlyStopSignal(
-  signal: StopSignal,
-  ctx: ContextManager,
-  sessionWriter?: AsyncSessionWriter,
-  supervisorState?: SupervisorGuidanceConfig["state"],
-): Generator<LoopEvent> {
-  if (supervisorState) {
-    supervisorState.lastStopSignalReason = signal.reason
-  }
-  const evt: LoopEvent = {
-    role: "status",
-    content: "early_stop",
-    severity: "warning",
-    metadata: { reason: signal.reason, message: signal.message, action: signal.action },
-  }
-  // TUI-FIX-10: emit runtime_signal orchestration event
-  const signalKind = signal.reason === "repetition" ? "no-progress"
-    : signal.reason === "read-loop" ? "no-progress"
-    : signal.reason === "patch-spiral" ? "repeated-error"
-    : "verification-failed"
-  const orchEvent: LoopEvent = {
-    role: "orchestration",
-    orchestration: {
-      kind: "runtime_signal",
-      signal: { kind: signalKind, message: signal.message },
-    },
-  }
-  ctx.log.append({ role: "user", content: signal.injection })
-  sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-  yield evt
-  yield orchEvent
-  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: evt })
-  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: orchEvent })
 }
 
 /** Find tool call by id (preferred), then index, then name (fallback). */
