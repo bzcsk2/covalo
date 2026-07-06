@@ -11,7 +11,7 @@ import { Mailbox } from "@covalo/core/agent-comm/mailbox.js"
 import { AgentScoreStore } from "@covalo/core/scoring/index.js"
 import { createGoalTools } from "@covalo/core/goal/tools.js"
 import { createMailboxTools } from "@covalo/core/agent-comm/tools.js"
-import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend, createAgentToolTool, createAskUserQuestionTool, createReadFileTool, createGrepTool, createListDirTool, createTodoWriteTool } from "@covalo/tools"
+import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend, createAgentToolTool, createAskUserQuestionTool, createReadFileTool, createGrepTool, createListDirTool, createTodoWriteTool, disposeBackgroundTaskManagerFor, createBashTool } from "@covalo/tools"
 import { LspClientPool } from "@covalo/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@covalo/mcp"
 import { PluginRuntime, pluginToolsToAgentTools } from "@covalo/plugin"
@@ -61,9 +61,10 @@ async function main(): Promise<void> {
     errorOutput.write(`[covalo] MCP config load failed: ${error instanceof Error ? error.message : String(error)}\n`)
   })
 
+  const toolRuntimeHooks = { disposeBackgroundTaskManagerFor, createBashTool }
   const engine = sessionId
-    ? await ReasonixEngine.recover(config, sessionId)
-    : new ReasonixEngine(config, clearReadTracker)
+    ? await ReasonixEngine.recover(config, sessionId, { toolRuntimeHooks })
+    : new ReasonixEngine(config, clearReadTracker, undefined, undefined, undefined, { toolRuntimeHooks })
   SessionLoader.cleanup().catch(() => {})
   const platform = normalizePlatform()
   const shellBackend = await resolveShellBackend(platform)
@@ -198,7 +199,7 @@ async function main(): Promise<void> {
           contextWindow: getModelContextWindow(supervisorRoleCfg.provider, supervisorRoleCfg.model),
         }
       : config
-    const supervisorEngine = new ReasonixEngine(supervisorConfig, clearReadTracker)
+    const supervisorEngine = new ReasonixEngine(supervisorConfig, clearReadTracker, undefined, undefined, undefined, { toolRuntimeHooks })
     supervisorEngine.setSystemPrompt(rebuildBaseSystemPrompt())
     // SFR-40: 应用 Supervisor Profile 的 thinking 模式（与 Worker 独立）
     supervisorEngine.setThinkingMode(supervisorProfile.thinking)

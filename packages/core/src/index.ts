@@ -51,6 +51,7 @@ export {
   ReasonixEngine,
 } from "./engine.js"
 export type { ContextPolicyStatus } from "./engine.js"
+export type { ToolRuntimeHooks, ReasonixEngineOptions, DisposeBgTaskFn, CreateBashToolFn } from "./tool-runtime-hooks.js"
 export type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
 export type { ContextPolicy, ContextPolicyMode } from "./context/policy.js"
 export { DEFAULT_CONTEXT_POLICY, validateContextPolicy, mergeContextPolicy } from "./context/policy.js"

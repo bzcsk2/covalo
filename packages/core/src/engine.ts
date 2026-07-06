@@ -25,6 +25,7 @@ import type { SubagentRunOptions, SubagentRunResult, SubagentDefinition } from "
 import type { ThinkingMode } from "./provider-thinking.js"
 import { createRuntimeLoggerFromEnv, type RuntimeLogger } from "./runtime-logger.js"
 import type { ResultPersistenceConfig } from "./result-persistence.js"
+import type { ToolRuntimeHooks, ReasonixEngineOptions } from "./tool-runtime-hooks.js"
 
 import type { EngineStatusSnapshot } from "./status.js"
 import type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
@@ -146,6 +147,8 @@ export class ReasonixEngine implements CoreEngine {
   }
   /** 可选：新引擎初始化时调用的清理钩子（如清除全局 stale-read tracker） */
   private onStart?: () => void
+  /** 可选：工具运行时钩子（由 CLI 层注入，解耦 core 对 tools 的编译时依赖） */
+  private toolRuntimeHooks?: ToolRuntimeHooks
 
   /** 权限引擎：三级判定（Deny → Allow → Ask） */
   permissionEngine: PermissionEngine
@@ -352,8 +355,9 @@ export class ReasonixEngine implements CoreEngine {
     return { status: "queued", queueLength: this.pendingInstructionQueue.length }
   }
 
-  constructor(config: DeepreefConfig, onStart?: () => void, sessionId?: string, customClient?: ChatClient, runtimeLogger?: RuntimeLogger) {
+  constructor(config: DeepreefConfig, onStart?: () => void, sessionId?: string, customClient?: ChatClient, runtimeLogger?: RuntimeLogger, options?: ReasonixEngineOptions) {
     this.config = config
+    this.toolRuntimeHooks = options?.toolRuntimeHooks
     this.ctx = new ContextManager(config.maxContextRounds, config.contextWindow)
     this.sessionId = sessionId ?? randomUUID()
     this.logger = runtimeLogger ?? createRuntimeLoggerFromEnv({ sessionId: this.sessionId })
@@ -444,11 +448,11 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
-  static async recover(config: DeepreefConfig, sessionId: string): Promise<ReasonixEngine> {
+  static async recover(config: DeepreefConfig, sessionId: string, options?: ReasonixEngineOptions): Promise<ReasonixEngine> {
     if (!SessionLoader.validateSessionId(sessionId)) {
       throw new Error(`Invalid session ID for recover: ${sessionId}`)
     }
-    const engine = new ReasonixEngine(config, undefined, sessionId)
+    const engine = new ReasonixEngine(config, undefined, sessionId, undefined, undefined, options)
     await engine._loadSessionMessages(sessionId)
 
     // SPEC-I: restore taskLedger and verificationGate from checkpoint
@@ -487,8 +491,7 @@ export class ReasonixEngine implements CoreEngine {
     // 子进程、hard timer、log 写流驻留在 managersBySession Map 中直到进程退出。
     if (this.sessionId !== sessionId) {
       try {
-        const { disposeBackgroundTaskManagerFor } = await import("@covalo/tools")
-        disposeBackgroundTaskManagerFor(this.sessionId)
+        this.toolRuntimeHooks?.disposeBackgroundTaskManagerFor(this.sessionId)
       } catch {
         // best-effort: 不阻塞 session 切换
       }
@@ -809,8 +812,7 @@ export class ReasonixEngine implements CoreEngine {
     // 原先生产代码从不调用 dispose，导致后台 shell 子进程、hard timer、
     // log 写流在进程退出或 session 切换时泄漏。
     try {
-      const { disposeBackgroundTaskManagerFor } = await import("@covalo/tools")
-      disposeBackgroundTaskManagerFor(this.sessionId)
+      this.toolRuntimeHooks?.disposeBackgroundTaskManagerFor(this.sessionId)
     } catch (e) {
       if (this.logger.isEnabled("warn")) {
         this.logger.warn("engine.shutdown.bg_task_dispose_error", { error: e instanceof Error ? e.message : String(e) })
@@ -1182,11 +1184,12 @@ Do not change goal status.`
     this.effectivePolicy = resolveEffectiveHarnessPolicy(strictness, source)
     // ADV-HAR-03: 根据 effectivePolicy.shellPolicy 重新注册 bash 工具
     if (this.effectivePolicy.shellPolicy === "dual-track" || this.effectivePolicy.shellPolicy === "dual-track-conservative") {
-      const { createBashTool } = await import("@covalo/tools")
-      this.tools.set("bash", createBashTool({
-        dualTrack: true,
-        conservative: this.effectivePolicy.shellPolicy === "dual-track-conservative",
-      }))
+      if (this.toolRuntimeHooks) {
+        this.tools.set("bash", this.toolRuntimeHooks.createBashTool({
+          dualTrack: true,
+          conservative: this.effectivePolicy.shellPolicy === "dual-track-conservative",
+        }))
+      }
     }
 
     // FIX-H5: 根据 effectivePolicy.checkpoint 设置 checkpoint 落盘频率
