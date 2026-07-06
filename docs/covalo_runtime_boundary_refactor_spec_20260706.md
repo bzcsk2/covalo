@@ -1045,3 +1045,439 @@ git checkout -b refactor/protocol-boundary
 - 不改 prompt
 
 这是最稳的一刀。它不会改变用户体验，但会立刻打断最危险的类型层耦合，为后续 runtime decoupling 铺路。
+
+---
+
+## 14. 2026-07-07 本地进度与剩余工作 SPEC
+
+本节是对前文原始规划的续写。当前本地分支为：
+
+```text
+refactor/protocol-boundary
+```
+
+截至 `PR-29: Move early-stop repetition into LoopPolicy`，已完成：
+
+- `@covalo/protocol` 已建立，`core/tools/plugin/mcp` 的稳定协议类型边界已打通。
+- `core -> tools` 的运行时循环依赖已移除。
+- CLI bootstrap 已拆分为 runtime factory + pipe/tui modes。
+- `ReasonixEngine` 已拆出 session/tool/supervisor/governance/instruction runtime services。
+- `runLoop` 已拆为 `loop.ts` 兼容包装 + `core-loop.ts` 编排主体。
+- `LoopPolicy` lifecycle 已建立，当前 hook anchors 包括：
+
+```text
+beforeTurn
+beforeModelCall
+afterModelEvent
+beforeToolBatch
+afterToolResult
+afterToolBatch
+beforeFinal
+beforeFinalDraft
+afterDone
+afterStreamError
+onError
+```
+
+- checkpoint 的 `step_completed` / `final_draft` / `tool_failed` 已迁入 policy pipeline。
+- BranchBudget 结果记录已迁入 policy，硬拦截仍留在 core-loop。
+- TaskLedger tool-result 记录已迁入 policy，plan ingestion 仍留在 core-loop。
+- Supervisor evidence 记录已迁入 policy。
+- repeated failure warning 已迁入 policy。
+- early-stop repetition 检测已迁入 policy；read-loop/write tracking/greeting regression 仍留在 core-loop。
+
+当前 `packages/core/src/loop/core-loop.ts` 约 771 行。目标不是追求任意行数下降，而是让它只保留：
+
+```text
+stream iteration
+assistant/tool message append ordering
+tool batch orchestration
+policy hook invocation
+done/error control flow
+```
+
+以下 PR 是明天继续执行的剩余工作。原则仍然是：每个 PR 只迁一个行为边界，行为不变，测试补齐。
+
+### PR-30：EarlyStop Tool Tracking Policy
+
+目标：把工具结果阶段的 early-stop read-loop/write tracking 从 `core-loop.ts` 迁入 policy。
+
+迁移范围：
+
+- 新增或扩展 `packages/core/src/loop/policies/early-stop-policy.ts`
+- 新增 `createEarlyStopToolLoopPolicy(input)`
+- 使用 `afterToolResult(ctx, event, info)`：
+  - 对 `event.role === "tool" | "error"` 且有 `event.toolName` 的事件调用 `earlyStop.recordReadTool(event.toolName)`
+  - 当工具成功且是写入类工具时调用 `earlyStop.recordWriteTool(event.toolName)`
+  - 如果 `recordReadTool()` 返回 signal，则复用 `buildEarlyStopSignalEvents()`
+- native 与 salvage 路径都必须保留现有行为。
+
+不要做：
+
+- 不迁 greeting regression。
+- 不改 `EarlyStopDetector` 的阈值或工具集合。
+- 不改 signal 文案。
+
+验收：
+
+- `core-loop.ts` 不再直接调用 `earlyStop.recordReadTool()` / `earlyStop.recordWriteTool()`。
+- read-loop warning 与 read-loop stop 都仍能产出相同 status/runtime_signal。
+- salvage 工具结果仍参与 read-loop/write tracking，与当前行为一致。
+
+测试建议：
+
+```bash
+bun test packages/core/__tests__/loop-policy-lifecycle.test.ts packages/core/__tests__/early-stop.test.ts
+bun run typecheck
+bun run build
+bun run smoke:cli
+```
+
+### PR-31：EarlyStop Greeting Policy
+
+目标：把最终文本阶段的 greeting regression 检测从 `core-loop.ts` 迁入 policy。
+
+需要先补一个 final text hook。推荐：
+
+```ts
+export interface FinalResponseInfo {
+  content: string
+  totalToolCalls: number
+  finishReason?: string
+}
+
+beforeAssistantFinal?(ctx: LoopPolicyContext, info: FinalResponseInfo): Promise<LoopPolicyEventResult> | LoopPolicyEventResult
+```
+
+触发位置：
+
+- stop 且没有进入 native/salvage tool execution 后
+- `ctx.log.append({ role: "assistant", content: fullContent })` 之前
+- TaskLedger plan ingestion 之前或之后均可，但必须保持旧行为相对顺序；建议先放在当前 greeting 检测所在位置。
+
+迁移范围：
+
+- `createEarlyStopGreetingLoopPolicy(input)`
+- 调用 `earlyStop.checkGreeting(info.content, info.totalToolCalls > 0)`
+- 复用 `buildEarlyStopSignalEvents()`
+
+验收：
+
+- `core-loop.ts` 不再直接调用 `earlyStop.checkGreeting()`。
+- 已发生工具调用后，如果模型回到问候语，仍注入 correction。
+- 未发生工具调用时，不触发 greeting regression。
+
+### PR-32：TaskLedger Plan Ingestion Policy
+
+目标：把最终文本中的 plan ingestion 从 `core-loop.ts` 迁入 policy。
+
+迁移范围：
+
+- 新增 `packages/core/src/loop/policies/task-ledger-plan-policy.ts`，或扩展 `task-ledger-policy.ts`
+- 使用 PR-31 新增的 `beforeAssistantFinal(ctx, info)` hook
+- 迁移以下行为：
+  - `taskLedger.ingestPlanFromText(fullContent)`
+  - 成功后调用 `refreshLedgerContext?.()`
+  - yield `role: "status", content: "task_ledger_plan"` 事件
+
+验收：
+
+- `core-loop.ts` 不再直接调用 `taskLedger.ingestPlanFromText()`。
+- plan ingestion 成功时仍产出相同 status event。
+- 空文本不触发。
+
+### PR-33：Tool Batch Duplicate-Call Guard
+
+目标：把 `recentToolCalls.check(tc)` 的重复工具调用防护从 `core-loop.ts` 中移出。
+
+这一步需要让 `beforeToolBatch` 支持“拦截并接管 batch”的返回值。推荐新增内部类型：
+
+```ts
+export interface ToolBatchInterception {
+  handled: true
+  events: LoopPolicyEventEmission[]
+  appendResults?: Array<{
+    toolCall: ToolCall
+    result: ToolResult
+  }>
+  done?: {
+    reason: string
+    metadata?: Record<string, unknown>
+  }
+}
+```
+
+迁移范围：
+
+- 新增 `tool-call-loop-policy.ts`
+- policy 内部执行 `recentToolCalls.check(tc)`
+- warning 继续作为 warning event 输出
+- blocked 时：
+  - 给 batch 中每个 tool call append error result
+  - 输出原有 error event
+  - 触发 `emitDone("toolCallLoop", metadata)`
+  - core-loop 只负责应用 interception 与 return
+
+验收：
+
+- `core-loop.ts` 不再包含 `blockedToolCall` 和 `recentToolCalls.check()` 循环。
+- toolCallLoop 的 done reason 与 metadata 不变。
+- orphan tool_call 防护不退化。
+
+### PR-34：BranchBudget Hard-Block Policy
+
+目标：把 BranchBudget enforce 模式下的硬拦截从 `core-loop.ts` 迁入 policy。
+
+依赖：
+
+- PR-33 的 `ToolBatchInterception` 或等价控制流机制。
+
+迁移范围：
+
+- 扩展 `createBranchBudgetLoopPolicy()`，在 `beforeToolBatch` 中处理 hard block。
+- 保留当前语义：
+  - 只有 `effectivePolicy.branchBudget === "enforce"` 才硬拦截。
+  - batch 中任意一个 tool_call 被拦截时，整个 batch 都不执行。
+  - 被拦截的 tool_call append `branch_budget_blocked`。
+  - 未被拦截但同 batch 被跳过的 tool_call append `branch_budget_batch_skipped`。
+  - 输出 `tools_completed` status 并进入下一轮。
+
+验收：
+
+- `core-loop.ts` 不再直接调用 `checkBranchBudgetBlocksFn()`。
+- `checkBranchBudgetBlocks()` 可继续作为 policy 内部纯函数。
+- 现有 F0-1 branch budget 测试全部通过。
+
+### PR-35：Two-Stage Tool Routing Virtual Tool Handler
+
+目标：把 `select_category` 虚拟工具处理从 `core-loop.ts` 移出。
+
+推荐位置：
+
+```text
+packages/core/src/loop/policies/tool-routing-policy.ts
+```
+
+或新增：
+
+```text
+packages/core/src/loop/policies/two-stage-routing-policy.ts
+```
+
+迁移范围：
+
+- 识别 `toolCalls.find(tc => tc.function.name === "select_category")`
+- 解析参数并更新 `selectedCategory`
+- append select_category 的 tool result
+- 对同 batch 其他 tool call append skip result
+- 输出 `two_stage_category_selected` 或 `tools_completed`
+- 跳过真实 tool execution，进入下一轮。
+
+注意：
+
+- `selectedCategory` 当前是 core-loop 闭包变量。迁移前先把它包装为小 state object，例如：
+
+```ts
+const toolRoutingState = {
+  selectedCategory,
+  setSelectedCategory(value?: ToolCategory) { selectedCategory = value },
+}
+```
+
+或直接把 state 下沉到 routing policy runtime。
+
+验收：
+
+- `core-loop.ts` 不再包含 `select_category` 特判。
+- two-stage routing 现有测试保持通过。
+
+### PR-36：Unify Native/Salvage Tool Batch Execution
+
+目标：把 native 和 salvage 两条工具执行路径中的重复编排抽成一个 batch runner。
+
+推荐新增：
+
+```text
+packages/core/src/loop/tool-batch-runner.ts
+```
+
+输入：
+
+```ts
+runToolBatchWithPolicies({
+  source: "native" | "salvage",
+  toolCalls,
+  toolExecutor,
+  appendToolResult,
+  policies,
+  policyCtx,
+  sessionWriter,
+  signal,
+  diagnostics,
+  effectiveAllowedToolNames,
+  maxParallelTools,
+})
+```
+
+职责：
+
+- 调用 `beforeToolBatch`
+- 执行 `toolExecutor.run(...)`
+- yield tool events
+- 非 `tool_progress` 事件持久化到 session
+- 解析 matched tool call 与 parsed args
+- 调用 `afterToolResult`
+- yield policy event emissions 并持久化
+- 捕获 batch error 并记录 logger warning
+- 执行 `afterToolBatch`
+- enqueue messages snapshot
+- yield `tools_completed`
+
+验收：
+
+- native 与 salvage 路径共用同一个 runner。
+- `core-loop.ts` 中不再重复出现两段 `for await (const toolEvent of toolExecutor.run(...))`。
+- policy source 信息仍正确传递。
+
+### PR-37：Text Tool Salvage Helper
+
+目标：把 stop-with-text 后的 salvage 判断和执行从 `core-loop.ts` 中移出。
+
+依赖：
+
+- PR-36 的 batch runner。
+
+推荐新增：
+
+```text
+packages/core/src/loop/text-salvage-runner.ts
+```
+
+迁移范围：
+
+- 读取 `effectivePolicy.textToolSalvage`
+- 调用 `salvageTextToolCallsInResponse()`
+- append assistant message with salvaged tool calls
+- 调用统一 batch runner
+- 返回是否已处理 salvage，以及是否需要 break 当前 stream loop。
+
+验收：
+
+- `core-loop.ts` 不再直接调用 `salvageTextToolCallsInResponse()`。
+- salvage source 仍传给 before/after tool hooks。
+- `on-native-failure` 当前语义不变：仍表示“无 native tool_calls 时 fallback”。
+
+### PR-38：Final Response Pipeline
+
+目标：把最终文本完成阶段整理为小 pipeline，减少 core-loop 中的顺序细节。
+
+候选步骤：
+
+```text
+flush textToolCallFilter tail
+run beforeAssistantFinal policies
+append assistant final message
+append pending instruction safe point
+run beforeFinal policies
+run verification gate
+run beforeFinalDraft policies
+persist messages
+emit done
+```
+
+推荐做法：
+
+- 先抽 helper，不要急着把 verification gate 迁成 policy。
+- helper 必须显式返回：
+
+```ts
+type FinalResponseOutcome =
+  | { kind: "done"; event: LoopEvent }
+  | { kind: "continue"; event?: LoopEvent }
+  | { kind: "blocked" }
+```
+
+验收：
+
+- `core-loop.ts` 的 text completion 分支只剩一个 `yield* runFinalResponsePipeline(...)` 或等价调用。
+- pending instruction 与 verification gate 顺序不变。
+
+### PR-39：Verification Gate Policyization
+
+目标：在 PR-38 之后，把 verification gate 从 final pipeline 中迁入 policy。
+
+这一步不要早做，因为 verification gate 有阻断 done、注入 continuation、写 session 的控制流副作用。
+
+需要先定义 policy 可返回的 final interception：
+
+```ts
+export interface FinalInterception {
+  blocked: true
+  events: LoopPolicyEventEmission[]
+  continueLoop?: true
+}
+```
+
+迁移范围：
+
+- `runVerificationGate()` 仍可保留为 policy 内部 generator/helper。
+- `beforeFinal` 或新增 `finalGate` hook 返回 interception。
+- core-loop 只负责应用 interception。
+
+验收：
+
+- `core-loop.ts` 不再直接调用 `runVerificationGate()`。
+- warn / require-or-waive / block 三种模式语义不变。
+- verification gate 现有测试全通过。
+
+### PR-40：Supervisor Guidance Safe-Point Policyization
+
+目标：把 tool batch 之后的 supervisor guidance safe point 迁入 policy 或 final-safe-point runner。
+
+当前它仍是合理的编排点，不急于迁移。建议在 PR-36/38 之后再做。
+
+验收：
+
+- tool batch 后仍能注入 supervisor guidance。
+- 注入后仍 break 当前 stream loop，进入下一轮。
+- child/delegated event 行为不变。
+
+### PR-41：Core-Loop Final Audit
+
+目标：不新增行为，只做结构审计和死代码清理。
+
+检查项：
+
+- `core-loop.ts` 是否仍直接调用具体治理实现：
+  - `earlyStop.*`
+  - `taskLedger.ingestPlanFromText`
+  - `recentToolCalls.check`
+  - `checkBranchBudgetBlocks`
+  - `salvageTextToolCallsInResponse`
+  - `runVerificationGate`
+  - `runSupervisorGuidanceSafePoint`
+- `core-loop.ts` 是否只保留必要的 stream/tool/final 编排。
+- `LoopPolicy` hook 类型是否仍是内部 API，没有泄漏到 public package surface。
+- 所有 policy 是否有最小测试覆盖。
+
+验收命令：
+
+```bash
+bun run typecheck
+bun test packages/core/__tests__/loop-policy-lifecycle.test.ts
+bun test packages/core/__tests__/f0-1-runtime-loop.test.ts
+bun test packages/core/__tests__/verification-gate.test.ts
+bun test packages/core/__tests__/early-stop.test.ts
+bun run test
+bun run build
+bun run smoke:cli
+bun run pack:dry-run
+```
+
+### 明天继续时的第一条指令
+
+给 agent 的建议指令：
+
+```text
+继续 /vol4/Agent/covalo 的 runtime boundary refactor。当前目标是让 core-loop 只剩编排骨架。请从 PR-30 开始：把 early-stop 的 read-loop/write tracking 从 core-loop 迁入 LoopPolicy。严格按 docs/covalo_runtime_boundary_refactor_spec_20260706.md 第 14 节执行；每个 PR 单独提交，行为不变，补测试，完成后说明下一 PR 应做什么。
+```
