@@ -1,4 +1,12 @@
-import type { RuntimeLogger } from "@covalo/core"
+interface RuntimeLogger {
+  debug(event: string, data?: Record<string, unknown>): void
+  info(event: string, data?: Record<string, unknown>): void
+  warn(event: string, data?: Record<string, unknown>): void
+  error(event: string, error?: unknown, data?: Record<string, unknown>): void
+  child(bindings: Record<string, unknown>): RuntimeLogger
+  isEnabled(level?: string): boolean
+  flush(): Promise<void>
+}
 
 export interface LspLogContext {
   sessionId?: string

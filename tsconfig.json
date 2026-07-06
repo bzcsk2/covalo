@@ -34,7 +34,9 @@
       "@covalo/plugin": ["./packages/plugin/src/index.ts"],
       "@covalo/plugin/*": ["./packages/plugin/src/*"],
       "@covalo/shell": ["./packages/shell/src/index.ts"],
-      "@covalo/shell/*": ["./packages/shell/src/*"]
+      "@covalo/shell/*": ["./packages/shell/src/*"],
+      "@covalo/protocol": ["./packages/protocol/src/index.ts"],
+      "@covalo/protocol/*": ["./packages/protocol/src/*"]
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx", "types/**/*.d.ts"],

@@ -1,5 +1,5 @@
 {
-  "name": "@covalo/tools",
+  "name": "@covalo/protocol",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,11 +15,8 @@
       "import": "./src/*.ts"
     }
   },
-  "scripts": {},
-  "dependencies": {
-    "@covalo/protocol": "workspace:*",
-    "vscode-jsonrpc": "^8.2.1",
-    "turndown": "^7.2.0",
-    "htmlparser2": "^8.0.2"
-  }
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {}
 }

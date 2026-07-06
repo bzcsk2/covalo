@@ -101,7 +101,7 @@
       "name": "@covalo/mcp",
       "version": "0.1.0",
       "dependencies": {
-        "@covalo/core": "workspace:*",
+        "@covalo/protocol": "workspace:*",
         "@covalo/tools": "workspace:*",
         "zod": "4.4.3",
       },
@@ -111,11 +111,16 @@
       "version": "0.1.0",
       "dependencies": {
         "@covalo/core": "workspace:*",
+        "@covalo/protocol": "workspace:*",
         "zod": "4.4.3",
       },
       "devDependencies": {
         "typescript": "^5.8.3",
       },
+    },
+    "packages/protocol": {
+      "name": "@covalo/protocol",
+      "version": "0.1.0",
     },
     "packages/security": {
       "name": "@covalo/security",
@@ -129,7 +134,7 @@
       "name": "@covalo/tools",
       "version": "0.1.0",
       "dependencies": {
-        "@covalo/core": "workspace:*",
+        "@covalo/protocol": "workspace:*",
         "htmlparser2": "^8.0.2",
         "turndown": "^7.2.0",
         "vscode-jsonrpc": "^8.2.1",
@@ -170,6 +175,8 @@
     "@covalo/mcp": ["@covalo/mcp@workspace:packages/mcp"],
 
     "@covalo/plugin": ["@covalo/plugin@workspace:packages/plugin"],
+
+    "@covalo/protocol": ["@covalo/protocol@workspace:packages/protocol"],
 
     "@covalo/security": ["@covalo/security@workspace:packages/security"],
 

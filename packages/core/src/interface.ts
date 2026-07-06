@@ -1,6 +1,6 @@
 import type { ChatMessage, ToolSpec, Usage } from "./types.js"
 import type { DeepSeekStreamEvent, DeepSeekClientOptions } from "./client.js"
-import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
+import type { QuestionInfo, QuestionAnswer } from "@covalo/protocol"
 import type { SandboxProvider } from "./sandbox/types.js"
 import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import type { WorkflowPhase } from "./workflow-coordinator/types.js"
@@ -104,51 +104,18 @@ export type OrchestrationEventPayload =
   | { kind: "agent_tree_upsert"; node: AgentTreeNode }
   | { kind: "checkpoint"; checkpoint: CheckpointSnapshot }
 
-/* ── Permission tiers ── */
+import type {
+  ToolTier,
+  ToolConcurrency,
+  AgentTool,
+  ToolContext,
+  ToolProgressUpdate,
+  ToolResult,
+  SubagentRunOptions,
+  SubagentRunResult,
+} from "@covalo/protocol"
 
-export type ToolTier = "read" | "write" | "exec"
-
-/* ── AgentTool — every tool must implement this ── */
-
-export type ToolConcurrency = "shared" | "exclusive"
-
-export interface AgentTool {
-  name: string
-  description: string
-  parameters: Record<string, unknown>
-  concurrency: ToolConcurrency
-  approval: ToolTier
-  execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>
-}
-
-/* ── Tool execution context ── */
-
-export interface ToolContext {
-  cwd: string
-  sessionId: string
-  sandboxProvider?: SandboxProvider
-  signal?: AbortSignal
-  reportProgress?: (update: ToolProgressUpdate) => void
-  invokeTool?: (name: string, args: Record<string, unknown>) => Promise<ToolResult>
-  delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
-  switchAgent?: (name: string) => string
-  spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
-  askUser?: (questions: QuestionInfo[]) => Promise<QuestionAnswer[]>
-}
-
-import type { SubagentRunOptions, SubagentRunResult } from "./subagent/types.js"
-
-export interface ToolProgressUpdate {
-  content: string
-  toolName?: string
-  metadata?: Record<string, unknown>
-}
-
-export interface ToolResult {
-  content: string
-  isError: boolean
-  metadata?: Record<string, unknown>
-}
+export type { ToolTier, ToolConcurrency, AgentTool, ToolContext, ToolProgressUpdate, ToolResult }
 
 /* ── AgentState — snapshot of current agent status ── */
 

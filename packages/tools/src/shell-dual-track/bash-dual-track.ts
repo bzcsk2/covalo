@@ -8,7 +8,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process"
-import type { AgentTool, ToolContext, ToolProgressUpdate } from "@covalo/core"
+import type { AgentTool, ToolContext, ToolProgressUpdate } from "@covalo/protocol"
 import { safeStringify, hasBinaryEncoding } from "../safe-stringify.js"
 import { normalizePlatform } from "../platform/capabilities.js"
 import { resolveShellBackend, type ShellBackendId } from "../platform/shell-backend.js"

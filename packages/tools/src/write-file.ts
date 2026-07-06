@@ -1,6 +1,6 @@
 import { writeFile as fsWriteFile, mkdir, stat } from "node:fs/promises"
 import { dirname } from "node:path"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { checkStale } from "./stale-read.js"
 import { isWriteProtected } from "./sensitive.js"

@@ -1,5 +1,4 @@
-import type { AgentTool } from "@covalo/core"
-import type { ToolSpec } from "@covalo/core"
+import type { AgentTool, ToolSpec } from "@covalo/protocol"
 
 export class ToolRegistry {
   private tools = new Map<string, AgentTool>()

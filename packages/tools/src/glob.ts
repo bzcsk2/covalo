@@ -1,5 +1,5 @@
 import { resolve } from "node:path"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { isSensitive } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"

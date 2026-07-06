@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
 import { isIP } from "node:net"
 import { fileURLToPath } from "node:url"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 import { hasPrivateIP, isPrivateHostname } from "./web-fetch.js"
 

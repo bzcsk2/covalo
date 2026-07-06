@@ -5,7 +5,7 @@
  * Asks the user questions and waits for their response.
  */
 
-import type { AgentTool, QuestionInfo } from "@covalo/core"
+import type { AgentTool, QuestionInfo } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 
 const QUESTION_DESCRIPTION = `Use this tool when you need to ask the user questions during execution. This allows you to:

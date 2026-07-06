@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { recordRead } from "./stale-read.js"
 import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { isSensitive } from "./sensitive.js"

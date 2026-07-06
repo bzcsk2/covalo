@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@covalo/core": "workspace:*",
+    "@covalo/protocol": "workspace:*",
     "zod": "4.4.3"
   },
   "devDependencies": {

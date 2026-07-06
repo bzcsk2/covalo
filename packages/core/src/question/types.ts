@@ -3,18 +3,8 @@
  * Source: packages/opencode/src/question/index.ts
  */
 
-export interface QuestionOption {
-  label: string
-  description: string
-}
-
-export interface QuestionInfo {
-  question: string
-  header: string
-  options: QuestionOption[]
-  multiple?: boolean
-  custom?: boolean
-}
+import type { QuestionOption, QuestionInfo, QuestionAnswer } from "@covalo/protocol"
+export type { QuestionOption, QuestionInfo, QuestionAnswer }
 
 export interface QuestionRequest {
   id: string
@@ -23,8 +13,6 @@ export interface QuestionRequest {
   tool?: { toolCallId: string; toolName: string }
   parentSessionId?: string
 }
-
-export type QuestionAnswer = string[]
 
 export interface QuestionReply {
   requestId: string

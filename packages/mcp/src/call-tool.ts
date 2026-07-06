@@ -1,4 +1,4 @@
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "@covalo/tools"
 import { getMcpHost } from "./mcp-host-global.js"
 

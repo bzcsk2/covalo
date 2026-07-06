@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createGrepTool } from "../src/grep.js"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 
 describe("S1-7: grep include 输入约束", () => {
   let tmpDir: string

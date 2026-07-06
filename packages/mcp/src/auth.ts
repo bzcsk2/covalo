@@ -1,4 +1,4 @@
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "@covalo/tools"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"

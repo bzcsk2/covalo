@@ -7,7 +7,7 @@
  * - Environment variables: EXA_API_KEY, PARALLEL_API_KEY
  * - Provider selection: OPENCODE_WEBSEARCH_PROVIDER (exa|parallel)
  */
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 
 const SEARCH_TIMEOUT = 25_000

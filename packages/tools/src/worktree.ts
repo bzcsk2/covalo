@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { resolve } from "node:path"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 import { isSensitive } from "./sensitive.js"
 import { terminateProcessTree } from "./platform/process-tree.js"

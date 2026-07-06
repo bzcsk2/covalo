@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, stat, mkdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { dirname, resolve } from "node:path"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 import { isSensitive } from "./sensitive.js"
 

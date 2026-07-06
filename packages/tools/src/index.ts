@@ -1,4 +1,4 @@
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 
 import { ToolRegistry } from "./registry.js"
 import { createReadFileTool } from "./file-ops.js"

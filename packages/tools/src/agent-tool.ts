@@ -1,4 +1,4 @@
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 
 export function createAgentToolTool(): AgentTool {

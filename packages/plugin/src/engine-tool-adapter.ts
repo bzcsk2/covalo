@@ -1,4 +1,4 @@
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import type { PluginTool } from "./tool-adapter.js"
 import { executePluginTool } from "./tool-adapter.js"
 

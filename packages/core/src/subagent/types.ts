@@ -1,3 +1,6 @@
+import type { SubagentRunUsage, SubagentRunOptions, SubagentRunResult } from "@covalo/protocol"
+export type { SubagentRunUsage, SubagentRunOptions, SubagentRunResult }
+
 export type SubagentPermissionMode = "readonly" | "acceptEdits" | "denyExec" | "bubble"
 
 export interface SubagentDefinition {
@@ -20,11 +23,6 @@ export interface SubagentDefinition {
 
 export type SubagentRunStatus = "running" | "completed" | "failed" | "cancelled"
 
-export interface SubagentRunUsage {
-  promptTokens: number
-  completionTokens: number
-}
-
 export interface SubagentRun {
   id: string
   definitionName: string
@@ -40,55 +38,6 @@ export interface SubagentRun {
   createdAt: Date
   finishedAt?: Date
 }
-
-export interface SubagentRunOptions {
-  description: string
-  prompt: string
-  subagentType?: string
-  /** @deprecated 使用 target 替代，仅覆盖 model 字符串 */
-  model?: "inherit" | string
-  /** DRF-10: 角色化 target ID（如 worker.local、supervisor.zen-free） */
-  target?: string
-  runInBackground?: boolean
-  files?: string[]
-}
-
-export type SubagentRunResult =
-  | {
-      status: "completed"
-      id: string
-      subagent_type: string
-      description: string
-      result: string
-      files: string[]
-      usage: SubagentRunUsage
-      warnings: string[]
-    }
-  | {
-      status: "failed"
-      id: string
-      subagent_type: string
-      description: string
-      result: string
-      files: string[]
-      usage: SubagentRunUsage
-      warnings: string[]
-    }
-  | {
-      status: "cancelled"
-      id: string
-      subagent_type: string
-      description: string
-      result: string
-      files: string[]
-      usage: SubagentRunUsage
-      warnings: string[]
-    }
-  | {
-      status: "async_launched"
-      id: string
-      description: string
-    }
 
 export interface SubagentRunStoreEntry {
   run: SubagentRun

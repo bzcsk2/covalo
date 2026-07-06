@@ -12,7 +12,7 @@
  * - DNS resolution with all-address check
  * - Redirect following with per-hop re-validation
  */
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 import { isIP } from "node:net"
 import { promises as dns } from "node:dns"

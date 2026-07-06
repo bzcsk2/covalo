@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises"
 import { resolve } from "node:path"
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "./safe-stringify.js"
 import { sampleDisk, sampleMemory, sampleProcesses } from "./platform/monitor-backend.js"
 

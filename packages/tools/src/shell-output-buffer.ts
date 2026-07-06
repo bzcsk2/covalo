@@ -1,4 +1,4 @@
-import type { ToolProgressUpdate } from "@covalo/core"
+import type { ToolProgressUpdate } from "@covalo/protocol"
 
 export interface BoundedBuffer {
   text: string

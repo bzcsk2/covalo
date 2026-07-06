@@ -1,20 +1,43 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { LspLogger, createLspLogger } from "../src/lsp/logger.js"
-import { RuntimeLogger } from "@covalo/core"
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
+function createTestRuntimeLogger(opts: { filePath: string; level: string; bindings: Record<string, unknown> }) {
+  const records: string[] = []
+  return {
+    debug(event: string, data?: Record<string, unknown>) { this.write("debug", event, data) },
+    info(event: string, data?: Record<string, unknown>) { this.write("info", event, data) },
+    warn(event: string, data?: Record<string, unknown>) { this.write("warn", event, data) },
+    error(event: string, _error?: unknown, data?: Record<string, unknown>) { this.write("error", event, data) },
+    child(bindings: Record<string, unknown>) {
+      return createTestRuntimeLogger({ ...opts, bindings: { ...opts.bindings, ...bindings } })
+    },
+    isEnabled() { return true },
+    write(level: string, event: string, data?: Record<string, unknown>) {
+      records.push(JSON.stringify({ ts: new Date().toISOString(), level, event, ...opts.bindings, ...data }) + "\n")
+    },
+    flush() {
+      if (records.length > 0) {
+        writeFileSync(opts.filePath, records.join(""), { flag: "a" })
+        records.length = 0
+      }
+      return Promise.resolve()
+    },
+  }
+}
+
 describe("LspLogger", () => {
   const tmpDir = join(tmpdir(), "lsp-logger-test-" + Date.now())
   let logPath: string
-  let logger: RuntimeLogger
+  let logger: ReturnType<typeof createTestRuntimeLogger>
   let lspLogger: LspLogger
 
   beforeEach(() => {
     mkdirSync(tmpDir, { recursive: true })
     logPath = join(tmpDir, "lsp.log")
-    logger = new RuntimeLogger({ filePath: logPath, level: "debug", bindings: { sessionId: "test-session" } })
+    logger = createTestRuntimeLogger({ filePath: logPath, level: "debug", bindings: { sessionId: "test-session" } })
     lspLogger = createLspLogger(logger, {
       sessionId: "test-session",
       submitId: "submit-1",

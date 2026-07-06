@@ -1,4 +1,4 @@
-import type { AgentTool } from "@covalo/core"
+import type { AgentTool } from "@covalo/protocol"
 import { safeStringify } from "../safe-stringify.js"
 import { loadSkillsDirs, matchSkills } from "../skill-loader.js"
 import type { SkillDef } from "../skill-loader.js"

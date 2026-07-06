@@ -1,5 +1,5 @@
 import type { PluginLoaded } from "./loader.js"
-import type { ToolSpec } from "@covalo/core"
+import type { ToolSpec } from "@covalo/protocol"
 import { isSchemaAwareTool } from "./define-tool.js"
 import { convertSchemaToJsonSpec, validateSchemaArgs } from "./schema-adapter.js"
 import type { StandardSchemaLike } from "./schema-adapter.js"
