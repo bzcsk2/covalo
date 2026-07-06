@@ -23,10 +23,6 @@ import type { TaskLedgerTracker } from "../task-ledger.js"
 import { runVerificationGate } from "./policies/verification-gate-policy.js"
 import { parseToolCallArgs } from "../executor-helpers.js"
 import type { SupervisorGuidanceConfig } from "../supervisor/guided-loop.js"
-import {
-  recordSupervisorFailureEvidence,
-  recordSupervisorToolEvidence,
-} from "../supervisor/guided-loop.js"
 import { runSupervisorGuidanceSafePoint } from "./policies/supervisor-guidance-policy.js"
 import type { EffectiveHarnessPolicy } from "../harness/index.js"
 import { parseSelectedCategory } from "../tool-routing/two-stage-router.js"
@@ -34,6 +30,7 @@ import type { ToolCategory } from "../tool-routing/types.js"
 import { resolveLoopToolRouting } from "./policies/tool-routing-policy.js"
 import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
+import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -162,6 +159,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
       verificationGateState,
       requireVerificationBeforeFinal,
     }),
+    createSupervisorEvidenceLoopPolicy({ supervisorGuidance }),
   ]
   // F0-1: enforced 模式下初始化时即开启 forced policy
   if (currentExecutionMode === "forced") {
@@ -508,26 +506,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                     const argsResult = nativeParsedArgs
                     if (argsResult?.ok) {
                       const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
-                      if (supervisorGuidance) {
-                        recordSupervisorToolEvidence(
-                          supervisorGuidance.state,
-                          toolName,
-                          !isErr,
-                          (toolEvent.content ?? "").slice(0, 200),
-                        )
-                        if (isErr) {
-                          const sigKey = typeof argsResult.args.path === "string"
-                            ? argsResult.args.path
-                            : typeof argsResult.args.command === "string"
-                              ? argsResult.args.command
-                              : "err"
-                          recordSupervisorFailureEvidence(
-                            supervisorGuidance.state,
-                            `${toolName}:${sigKey}`,
-                            toolEvent.content,
-                          )
-                        }
-                      }
                       // S2-1: 重复失败签名追踪
                       // 同 {toolName, args, errorContent} 连续 3 次才报告 blocked
                       // 不同错误或修复后的新错误不算重复

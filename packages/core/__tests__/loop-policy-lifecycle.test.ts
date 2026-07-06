@@ -11,6 +11,9 @@ import type { ModeDecisionEngine } from "../src/governance/mode-decision.js"
 import { TaskLedgerTracker } from "../src/task-ledger.js"
 import { createCheckpointLoopPolicy } from "../src/loop/policies/checkpoint-policy.js"
 import { createTaskLedgerLoopPolicy } from "../src/loop/policies/task-ledger-policy.js"
+import { SupervisorBudgetTracker } from "../src/supervisor/budget.js"
+import { createSupervisorGuidanceState } from "../src/supervisor/guided-loop.js"
+import type { SupervisorGuidanceConfig } from "../src/supervisor/guided-loop.js"
 
 type RunCoreLoopFn = typeof import("../src/loop/core-loop.js").runCoreLoop
 let runCoreLoop: RunCoreLoopFn
@@ -24,6 +27,16 @@ const noopSignal = new AbortController().signal
 
 function emptyStats(): SessionStats {
   return { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0, apiCalls: 0, toolCalls: 0, totalCost: 0 }
+}
+
+function makeSupervisorGuidance(): SupervisorGuidanceConfig {
+  return {
+    pool: { candidates: [] },
+    budget: new SupervisorBudgetTracker(),
+    state: createSupervisorGuidanceState(),
+    resolveTarget: () => null,
+    supervisorConfigured: false,
+  }
 }
 
 function mockContextManager(overrides?: Partial<ContextManager>): ContextManager {
@@ -1194,5 +1207,117 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(tracker.changedFiles).toContain("src/a.ts")
     expect(refreshLedgerContext).toHaveBeenCalledTimes(1)
     expect(gateState.continuationCount).toBe(5)
+  })
+
+  it("native tool result records supervisor tool evidence", async () => {
+    const supervisorGuidance = makeSupervisorGuidance()
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "read_file", arguments: '{"path":"src/a.ts"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "file content", isError: false })
+          yield { role: "tool", content: "file content", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      supervisorGuidance,
+    }))
+
+    expect(supervisorGuidance.state.recentTools).toEqual([
+      { name: "read_file", success: true, summary: "file content" },
+    ])
+    expect(supervisorGuidance.state.recentFailures).toEqual([])
+  })
+
+  it("native tool error records supervisor failure evidence", async () => {
+    const supervisorGuidance = makeSupervisorGuidance()
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: '{"path":"src/a.ts"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "write failed", isError: true, metadata: { error: "EACCES" } })
+          yield { role: "error", content: "write failed", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id, metadata: { error: "EACCES" } } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "write_file", description: "w", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      supervisorGuidance,
+    }))
+
+    expect(supervisorGuidance.state.recentTools).toEqual([
+      { name: "write_file", success: false, summary: "write failed" },
+    ])
+    expect(supervisorGuidance.state.recentFailures).toEqual([
+      { signature: "write_file:src/a.ts", count: 1, lastError: "write failed" },
+    ])
+  })
+
+  it("salvage tool result does not record supervisor evidence", async () => {
+    const supervisorGuidance = makeSupervisorGuidance()
+
+    const client = makeClient([[
+      { type: "text_delta", delta: '<tool_call><function=read_file><parameter=path>/tmp/x</parameter></function></tool_call>' },
+      { type: "done", finishReason: "stop" },
+    ]])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "file content", isError: false })
+          yield { role: "tool", content: "file content", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      effectivePolicy: makePolicy("strict"),
+      supervisorGuidance,
+    }))
+
+    expect(supervisorGuidance.state.recentTools).toEqual([])
+    expect(supervisorGuidance.state.recentFailures).toEqual([])
   })
 })
