@@ -30,7 +30,7 @@ import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policie
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
-import { createEarlyStopRepetitionLoopPolicy, createEarlyStopToolLoopPolicy, emitEarlyStopSignal } from "./policies/early-stop-policy.js"
+import { createEarlyStopGreetingLoopPolicy, createEarlyStopRepetitionLoopPolicy, createEarlyStopToolLoopPolicy } from "./policies/early-stop-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -167,6 +167,11 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
       supervisorState: supervisorGuidance?.state,
     }),
     createEarlyStopToolLoopPolicy({
+      earlyStop,
+      sessionWriter,
+      supervisorState: supervisorGuidance?.state,
+    }),
+    createEarlyStopGreetingLoopPolicy({
       earlyStop,
       sessionWriter,
       supervisorState: supervisorGuidance?.state,
@@ -629,10 +634,12 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               }
             }
 
-            if (earlyStop) {
-              const greetSignal = earlyStop.checkGreeting(fullContent, totalToolCalls > 0)
-              if (greetSignal) yield* emitEarlyStopSignal(greetSignal, ctx, sessionWriter, supervisorGuidance?.state)
-            }
+            yield* emitPolicyEvents(await runPolicyHookEvents(
+              policies,
+              "beforeAssistantFinal",
+              policyCtx,
+              { content: fullContent, totalToolCalls, finishReason: reason },
+            ))
 
             // DRF-40: 尝试从模型响应提取计划
             if (taskLedger && fullContent.trim()) {

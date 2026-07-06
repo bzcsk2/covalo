@@ -1578,4 +1578,68 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(appended.some(msg => msg.content.includes("read 5 files"))).toBe(true)
     expect(sessionEvents.some(e => (e as any).type === "messages")).toBe(true)
   })
+
+  it("early-stop greeting policy emits correction after previous tool calls", async () => {
+    const appended: Array<{ role: string; content: string }> = []
+    const ctx = mockContextManager({
+      buildMessages: () => [{ role: "user", content: "greeting correction" }],
+      log: { append: (msg: any) => appended.push(msg), get: () => [], clear: () => {} } as any,
+    })
+    const sessionEvents: any[] = []
+    const sessionWriter = {
+      enqueue(entry: unknown) {
+        sessionEvents.push(entry)
+      },
+    }
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "write_file", arguments: '{"path":"src/a.ts"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "Hello! I'm ready to help. What would you like me to do?" }, { type: "done", finishReason: "stop" }],
+    ])
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(toolCalls: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of toolCalls) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    const events = await collectEvents(runCoreLoop({
+      ctx,
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "write_file", description: "w", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      sessionWriter: sessionWriter as any,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      earlyStop: new EarlyStopDetector(),
+    }))
+
+    expect(events.filter(e => e.role === "status" && e.content === "early_stop" && e.metadata?.reason === "greeting_regression")).toHaveLength(1)
+    expect(events.filter(e => e.role === "orchestration" && e.orchestration?.kind === "runtime_signal")).toHaveLength(1)
+    expect(appended.some(msg => typeof msg.content === "string" && msg.content.includes("greeting"))).toBe(true)
+    expect(sessionEvents.some(e => (e as any).payload?.metadata?.reason === "greeting_regression")).toBe(true)
+  })
+
+  it("early-stop greeting policy does not trigger before any tool calls", async () => {
+    const events = await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client: makeClient([[{ type: "text_delta", delta: "Hello! I'm ready to help. What would you like me to do?" }, { type: "done", finishReason: "stop" }]]),
+      toolExecutor: makeEmptyExecutor(),
+      toolSpecs: [],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      earlyStop: new EarlyStopDetector(),
+    }))
+
+    expect(events.filter(e => e.role === "status" && e.content === "early_stop")).toHaveLength(0)
+  })
 })

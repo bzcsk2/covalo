@@ -3,7 +3,7 @@ import type { ContextManager } from "../../context/manager.js"
 import type { LoopEvent } from "../../interface.js"
 import type { EarlyStopDetector, StopSignal } from "../../early-stop.js"
 import type { SupervisorGuidanceConfig } from "../../supervisor/guided-loop.js"
-import type { LoopPolicy, LoopPolicyContext, ModelEventInfo, LoopPolicyEventEmission } from "../policy.js"
+import type { FinalResponseInfo, LoopPolicy, LoopPolicyContext, ModelEventInfo, LoopPolicyEventEmission } from "../policy.js"
 
 export function buildEarlyStopSignalEvents(
   signal: StopSignal,
@@ -61,6 +61,12 @@ export interface CreateEarlyStopToolLoopPolicyInput {
   supervisorState?: SupervisorGuidanceConfig["state"]
 }
 
+export interface CreateEarlyStopGreetingLoopPolicyInput {
+  earlyStop?: EarlyStopDetector
+  sessionWriter?: AsyncSessionWriter
+  supervisorState?: SupervisorGuidanceConfig["state"]
+}
+
 function isTextDeltaEvent(event: unknown): event is { type: "text_delta" } {
   return typeof event === "object"
     && event !== null
@@ -101,6 +107,21 @@ export function createEarlyStopToolLoopPolicy(input: CreateEarlyStopToolLoopPoli
       if (!event.metadata?.error) {
         earlyStop.recordWriteTool(event.toolName)
       }
+      if (!signal) return
+
+      const events = buildEarlyStopSignalEvents(signal, ctx.ctx, sessionWriter, supervisorState)
+      return events.map(event => ({ event, sessionEvent: event }))
+    },
+  }
+}
+
+export function createEarlyStopGreetingLoopPolicy(input: CreateEarlyStopGreetingLoopPolicyInput): LoopPolicy {
+  const { earlyStop, sessionWriter, supervisorState } = input
+  return {
+    name: "early-stop-greeting",
+    beforeAssistantFinal(ctx: LoopPolicyContext, info: FinalResponseInfo): LoopPolicyEventEmission[] | void {
+      if (!earlyStop) return
+      const signal = earlyStop.checkGreeting(info.content, info.totalToolCalls > 0)
       if (!signal) return
 
       const events = buildEarlyStopSignalEvents(signal, ctx.ctx, sessionWriter, supervisorState)
