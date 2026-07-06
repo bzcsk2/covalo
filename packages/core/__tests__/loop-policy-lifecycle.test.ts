@@ -850,4 +850,128 @@ describeOrSkip("loop policy lifecycle", () => {
 
     expect(saveSpy).not.toHaveBeenCalledWith(expect.objectContaining({ trigger: "tool_failed" }))
   })
+
+  it("native afterToolResult info.parsedArgs contains parsed tool arguments", async () => {
+    const parsedArgsList: (Record<string, unknown> | undefined)[] = []
+    const policy: LoopPolicy = {
+      name: "parsed-args-native",
+      afterToolResult(_ctx: LoopPolicyContext, _event: LoopEvent, info: ToolResultInfo) {
+        parsedArgsList.push(info.parsedArgs)
+      },
+    }
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "read_file", arguments: '{"path":"/tmp/x"}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      policies: [policy],
+    }))
+
+    expect(parsedArgsList.length).toBeGreaterThan(0)
+    expect(parsedArgsList[0]).toEqual({ path: "/tmp/x" })
+  })
+
+  it("salvage afterToolResult info.parsedArgs contains parsed tool arguments", async () => {
+    const parsedArgsList: (Record<string, unknown> | undefined)[] = []
+    const policy: LoopPolicy = {
+      name: "parsed-args-salvage",
+      afterToolResult(_ctx: LoopPolicyContext, _event: LoopEvent, info: ToolResultInfo) {
+        parsedArgsList.push(info.parsedArgs)
+      },
+    }
+
+    const client = makeClient([[
+      { type: "text_delta", delta: '<tool_call><function=read_file><parameter=path>/tmp/y</parameter></function></tool_call>' },
+      { type: "done", finishReason: "stop" },
+    ]])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      effectivePolicy: makePolicy("strict"),
+      policies: [policy],
+    }))
+
+    expect(parsedArgsList.length).toBeGreaterThan(0)
+    expect(parsedArgsList[0]).toEqual({ path: "/tmp/y" })
+  })
+
+  it("afterToolResult info.parsedArgs is undefined when arguments cannot be parsed", async () => {
+    const parsedArgsList: (Record<string, unknown> | undefined)[] = []
+    const policy: LoopPolicy = {
+      name: "parsed-args-parse-fail",
+      afterToolResult(_ctx: LoopPolicyContext, _event: LoopEvent, info: ToolResultInfo) {
+        parsedArgsList.push(info.parsedArgs)
+      },
+    }
+
+    const client = makeClient([
+      [{ type: "tool_call_end", toolCallIndex: 0, id: "tc1", name: "read_file", arguments: '{invalid}' }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(_tc: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of _tc) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      policies: [policy],
+    }))
+
+    expect(parsedArgsList.length).toBeGreaterThan(0)
+    expect(parsedArgsList[0]).toBeUndefined()
+  })
 })

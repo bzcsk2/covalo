@@ -514,12 +514,13 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                 const matchedTc = (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName
                   ? findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
                   : undefined
-                await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc })
+                const nativeParsedArgs = matchedTc ? parseToolCallArgs(matchedTc.function.arguments, matchedTc.function.name) : undefined
+                await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc, parsedArgs: nativeParsedArgs?.ok ? nativeParsedArgs.args : undefined })
                 if (matchedTc) {
                     const tc = matchedTc
                     const toolName = toolEvent.toolName!
-                    const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
-                    if (argsResult.ok) {
+                    const argsResult = nativeParsedArgs
+                    if (argsResult?.ok) {
                       const isErr = toolEvent.role === "error" || !!toolEvent.metadata?.error
                       // DRF-40: 记录工具结果到 TaskLedger（仅在 ledger 存在时）
                       if (taskLedger) {
@@ -667,18 +668,16 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                     const salvageMatchedTc = (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName
                       ? findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
                       : undefined
-                    await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc })
-                    if (taskLedger && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
-                      const tc = findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex)
-                      if (tc) {
-                        const argsResult = parseToolCallArgs(tc.function.arguments, tc.function.name)
-                        if (argsResult.ok) {
-                          recordLedgerTool(toolEvent.toolName, argsResult.args, {
-                            isError: toolEvent.role === "error" || !!toolEvent.metadata?.error,
-                            content: toolEvent.content ?? "",
-                            metadata: toolEvent.metadata,
-                          })
-                        }
+                    const salvageParsedArgs = salvageMatchedTc ? parseToolCallArgs(salvageMatchedTc.function.arguments, salvageMatchedTc.function.name) : undefined
+                    await runPolicyHook(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc, parsedArgs: salvageParsedArgs?.ok ? salvageParsedArgs.args : undefined })
+                    if (taskLedger && salvageMatchedTc) {
+                      const argsResult = salvageParsedArgs
+                      if (argsResult?.ok) {
+                        recordLedgerTool(toolEvent.toolName!, argsResult.args, {
+                          isError: toolEvent.role === "error" || !!toolEvent.metadata?.error,
+                          content: toolEvent.content ?? "",
+                          metadata: toolEvent.metadata,
+                        })
                       }
                     }
                     if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {

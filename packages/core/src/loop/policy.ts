@@ -15,6 +15,7 @@ export interface ToolResultInfo {
   source: ToolBatchSource
   toolCalls: readonly ToolCall[]
   toolCall?: ToolCall
+  parsedArgs?: Record<string, unknown>
 }
 
 export interface LoopPolicyContext {
