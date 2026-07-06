@@ -32,6 +32,7 @@ import { EngineGovernanceRuntime } from "./engine-runtime/governance-runtime.js"
 import { buildSupervisorLoopModePrompt } from "./engine-runtime/build-supervisor-loop-prompt.js"
 import { buildActiveSkillsPrompt } from "./engine-runtime/build-active-skills-prompt.js"
 import { injectExperienceRecall } from "./engine-runtime/inject-experience-recall.js"
+import { recoverCheckpoint, saveFinalCheckpoint } from "./engine-runtime/checkpoint-policy.js"
 
 import type { EngineStatusSnapshot } from "./status.js"
 import type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
@@ -574,22 +575,13 @@ export class ReasonixEngine implements CoreEngine {
       }
     }
 
-    // F0-1: shutdown 时最后落盘一次 checkpoint
-    try {
-      if (this.checkpointEngine) {
-        await this.checkpointEngine.save({
-          trigger: "final_draft",
-          branchBudget: this.governanceRuntime.branchBudgetTracker,
-          lastStopReason: "aborted",
-          taskLedger: this.taskLedger?.snapshot(),
-          verificationGate: this.governanceRuntime.verificationGateState,
-        })
-      }
-    } catch (e) {
-      if (this.logger.isEnabled("warn")) {
-        this.logger.warn("engine.shutdown.checkpoint_save_error", { error: e instanceof Error ? e.message : String(e) })
-      }
-    }
+    await saveFinalCheckpoint(
+      this.checkpointEngine,
+      this.governanceRuntime.branchBudgetTracker,
+      this.taskLedger?.snapshot(),
+      this.governanceRuntime.verificationGateState,
+      this.logger,
+    )
 
     if (this.logger.isEnabled("info")) this.logger.info("engine.shutdown.done", { sessionId: this.sessionRuntime.sessionId })
 
@@ -812,31 +804,14 @@ Do not change goal status.`
     // 恢复的三维计数会延续到本 submit，不会被立即清空（不再调用 resetRoundBudget）。
     // recoverTriggers 也从快照恢复（跨 submit recovery 去重）。
     //
-    // F0-1/B6-2: 仅在 adaptive 模式下向 ModeDecisionEngine 提交 checkpoint_resumed signal。
-    // free/forced 模式下 loop.evaluateExecutionMode() 不调用 evaluate()，submitted signal
-    // 不会被消费，会残留到下一次 submit 污染 mode decision。BranchBudget 快照恢复与 mode
-    // signal 解耦——快照恢复对硬拦截/enforce 仍有意义，但 mode signal 只在 adaptive 下提交。
-    const isAdaptiveMode = this.governanceRuntime.effectivePolicy.executionMode === "adaptive"
-    try {
-      const v2 = await this.checkpointEngine.loadV2()
-      if (v2) {
-        this.governanceRuntime.branchBudgetTracker.applySnapshot(v2.branchBudget)
-        if (isAdaptiveMode) {
-          this.governanceRuntime.modeDecisionEngine.submitSignal("checkpoint_engine", "checkpoint_resumed")
-        } else {
-          // 非 adaptive 模式下，pending recovery signals 直接标记为已消费，
-          // 避免 engine 层恢复 checkpoint 后 signal 残留。
-          this.checkpointEngine.markRecoverySignalsConsumed(() => true)
-        }
-        if (this.logger.isEnabled("info")) {
-          this.logger.info("engine.checkpoint.resumed", { sessionId: this.sessionRuntime.sessionId, executionMode: this.governanceRuntime.effectivePolicy.executionMode })
-        }
-      }
-    } catch (e) {
-      if (this.logger.isEnabled("warn")) {
-        this.logger.warn("engine.checkpoint.resume_error", { error: e instanceof Error ? e.message : String(e) })
-      }
-    }
+    await recoverCheckpoint(
+      this.checkpointEngine,
+      this.governanceRuntime.branchBudgetTracker,
+      this.governanceRuntime.modeDecisionEngine,
+      this.logger,
+      this.sessionRuntime.sessionId,
+      this.governanceRuntime.effectivePolicy.executionMode,
+    )
 
     this.governanceRuntime.verificationGateState = { continuationCount: 0 }
     this.supervisorRuntime.supervisorGuidanceState = createSupervisorGuidanceState()
