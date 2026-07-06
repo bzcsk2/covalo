@@ -1056,7 +1056,7 @@ git checkout -b refactor/protocol-boundary
 refactor/protocol-boundary
 ```
 
-截至 `PR-29: Move early-stop repetition into LoopPolicy`，已完成：
+截至 `PR-31: Move early-stop greeting into LoopPolicy`，已完成：
 
 - `@covalo/protocol` 已建立，`core/tools/plugin/mcp` 的稳定协议类型边界已打通。
 - `core -> tools` 的运行时循环依赖已移除。
@@ -1072,6 +1072,7 @@ afterModelEvent
 beforeToolBatch
 afterToolResult
 afterToolBatch
+beforeAssistantFinal
 beforeFinal
 beforeFinalDraft
 afterDone
@@ -1084,9 +1085,9 @@ onError
 - TaskLedger tool-result 记录已迁入 policy，plan ingestion 仍留在 core-loop。
 - Supervisor evidence 记录已迁入 policy。
 - repeated failure warning 已迁入 policy。
-- early-stop repetition 检测已迁入 policy；read-loop/write tracking/greeting regression 仍留在 core-loop。
+- early-stop repetition、read-loop/write tracking、greeting regression 已迁入 policy。
 
-当前 `packages/core/src/loop/core-loop.ts` 约 771 行。目标不是追求任意行数下降，而是让它只保留：
+当前 `packages/core/src/loop/core-loop.ts` 约 767 行。目标不是追求任意行数下降，而是让它只保留：
 
 ```text
 stream iteration
@@ -1096,9 +1097,11 @@ policy hook invocation
 done/error control flow
 ```
 
-以下 PR 是明天继续执行的剩余工作。原则仍然是：每个 PR 只迁一个行为边界，行为不变，测试补齐。
+以下 PR 是继续执行的剩余工作。原则仍然是：每个 PR 只迁一个行为边界，行为不变，测试补齐。
 
 ### PR-30：EarlyStop Tool Tracking Policy
+
+状态：已完成，提交 `d6eda7f PR-30: Move early-stop tool tracking into LoopPolicy`。
 
 目标：把工具结果阶段的 early-stop read-loop/write tracking 从 `core-loop.ts` 迁入 policy。
 
@@ -1135,6 +1138,8 @@ bun run smoke:cli
 
 ### PR-31：EarlyStop Greeting Policy
 
+状态：已完成，提交 `247fec2 PR-31: Move early-stop greeting into LoopPolicy`。
+
 目标：把最终文本阶段的 greeting regression 检测从 `core-loop.ts` 迁入 policy。
 
 需要先补一个 final text hook。推荐：
@@ -1168,6 +1173,8 @@ beforeAssistantFinal?(ctx: LoopPolicyContext, info: FinalResponseInfo): Promise<
 - 未发生工具调用时，不触发 greeting regression。
 
 ### PR-32：TaskLedger Plan Ingestion Policy
+
+状态：下一步。
 
 目标：把最终文本中的 plan ingestion 从 `core-loop.ts` 迁入 policy。
 
@@ -1474,10 +1481,10 @@ bun run smoke:cli
 bun run pack:dry-run
 ```
 
-### 明天继续时的第一条指令
+### 下一次继续时的第一条指令
 
 给 agent 的建议指令：
 
 ```text
-继续 /vol4/Agent/covalo 的 runtime boundary refactor。当前目标是让 core-loop 只剩编排骨架。请从 PR-30 开始：把 early-stop 的 read-loop/write tracking 从 core-loop 迁入 LoopPolicy。严格按 docs/covalo_runtime_boundary_refactor_spec_20260706.md 第 14 节执行；每个 PR 单独提交，行为不变，补测试，完成后说明下一 PR 应做什么。
+继续 /vol4/Agent/covalo 的 runtime boundary refactor。当前目标是让 core-loop 只剩编排骨架。请从 PR-32 开始：把 TaskLedger plan ingestion 从 core-loop 迁入 LoopPolicy，复用 beforeAssistantFinal hook。严格按 docs/covalo_runtime_boundary_refactor_spec_20260706.md 第 14 节执行；每个 PR 单独提交，行为不变，补测试，完成后说明下一 PR 应做什么。
 ```
