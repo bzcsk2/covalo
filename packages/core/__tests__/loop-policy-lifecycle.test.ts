@@ -12,7 +12,7 @@ import { TaskLedgerTracker } from "../src/task-ledger.js"
 import { EarlyStopDetector } from "../src/early-stop.js"
 import { createCheckpointLoopPolicy } from "../src/loop/policies/checkpoint-policy.js"
 import { createTaskLedgerLoopPolicy } from "../src/loop/policies/task-ledger-policy.js"
-import { emitEarlyStopSignal } from "../src/loop/policies/early-stop-policy.js"
+import { createEarlyStopToolLoopPolicy, emitEarlyStopSignal } from "../src/loop/policies/early-stop-policy.js"
 import { SupervisorBudgetTracker } from "../src/supervisor/budget.js"
 import { createSupervisorGuidanceState } from "../src/supervisor/guided-loop.js"
 import type { SupervisorGuidanceConfig } from "../src/supervisor/guided-loop.js"
@@ -1488,5 +1488,94 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(appended.some(msg => msg.content.includes("repeating"))).toBe(true)
     expect(sessionEvents.some(e => (e as any).type === "messages")).toBe(true)
     expect(sessionEvents.some(e => (e as any).payload?.content === "early_stop")).toBe(true)
+  })
+
+  it("early-stop tool policy emits read-loop signal from native tool results", async () => {
+    const appended: Array<{ role: string; content: string }> = []
+    const ctx = mockContextManager({
+      buildMessages: () => [{ role: "user", content: "read-loop correction" }],
+      log: { append: (msg: any) => appended.push(msg), get: () => [], clear: () => {} } as any,
+    })
+    const sessionEvents: any[] = []
+    const sessionWriter = {
+      enqueue(entry: unknown) {
+        sessionEvents.push(entry)
+      },
+    }
+    const earlyStop = new EarlyStopDetector()
+    const toolCallEvents = Array.from({ length: 5 }, (_, idx) => ({
+      type: "tool_call_end" as const,
+      toolCallIndex: idx,
+      id: `tc${idx}`,
+      name: "read_file",
+      arguments: `{"path":"src/${idx}.ts"}`,
+    }))
+    const client = makeClient([
+      [...toolCallEvents, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text_delta", delta: "done" }, { type: "done", finishReason: "stop" }],
+    ])
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(toolCalls: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of toolCalls) {
+          appendResult(tc, { content: "ok", isError: false })
+          yield { role: "tool", content: "ok", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    const events = await collectEvents(runCoreLoop({
+      ctx,
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_file", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      sessionWriter: sessionWriter as any,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      earlyStop,
+    }))
+
+    expect(events.filter(e => e.role === "status" && e.content === "early_stop" && e.metadata?.reason === "read_loop_warning")).toHaveLength(1)
+    expect(events.filter(e => e.role === "orchestration" && e.orchestration?.kind === "runtime_signal")).toHaveLength(1)
+    expect(appended.some(msg => typeof msg.content === "string" && msg.content.includes("read 5 files"))).toBe(true)
+    expect(sessionEvents.some(e => (e as any).type === "messages")).toBe(true)
+    expect(sessionEvents.some(e => (e as any).payload?.metadata?.reason === "read_loop_warning")).toBe(true)
+  })
+
+  it("early-stop tool policy tracks salvage tool results", async () => {
+    const appended: Array<{ role: string; content: string }> = []
+    const ctx = mockContextManager({
+      buildMessages: () => [{ role: "user", content: "salvage read-loop correction" }],
+      log: { append: (msg: any) => appended.push(msg), get: () => [], clear: () => {} } as any,
+    })
+    const sessionEvents: any[] = []
+    const policy = createEarlyStopToolLoopPolicy({
+      earlyStop: new EarlyStopDetector(),
+      sessionWriter: { enqueue: entry => sessionEvents.push(entry) } as any,
+    })
+    const policyCtx: LoopPolicyContext = {
+      turnCount: 1,
+      logger: noopLogger,
+      signal: noopSignal,
+      ctx,
+    }
+
+    let result: unknown
+    for (let idx = 0; idx < 5; idx++) {
+      result = await policy.afterToolResult?.(
+        policyCtx,
+        { role: "tool", content: "ok", toolName: "read_file", toolCallId: `tc${idx}`, toolCallIndex: idx } as LoopEvent,
+        { source: "salvage", toolCalls: [] },
+      )
+    }
+
+    const emissions = Array.isArray(result) ? result : []
+    expect(emissions.map(emission => emission.event.role)).toEqual(["status", "orchestration"])
+    expect(emissions[0]?.event.metadata?.reason).toBe("read_loop_warning")
+    expect(appended.some(msg => msg.content.includes("read 5 files"))).toBe(true)
+    expect(sessionEvents.some(e => (e as any).type === "messages")).toBe(true)
   })
 })

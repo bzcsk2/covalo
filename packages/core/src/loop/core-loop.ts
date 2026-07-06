@@ -16,7 +16,6 @@ import {
   createRepeatedFailureTracker,
   injectPendingInstruction,
 } from "../loop-helpers.js"
-import { EarlyStopDetector } from "../early-stop.js"
 import { salvageTextToolCallsInResponse, TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
 import type { TaskLedgerTracker } from "../task-ledger.js"
 import { runVerificationGate } from "./policies/verification-gate-policy.js"
@@ -31,7 +30,7 @@ import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policie
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
-import { createEarlyStopRepetitionLoopPolicy, emitEarlyStopSignal } from "./policies/early-stop-policy.js"
+import { createEarlyStopRepetitionLoopPolicy, createEarlyStopToolLoopPolicy, emitEarlyStopSignal } from "./policies/early-stop-policy.js"
 import {
   createEmptyRuntimeExecutionState,
   resolveInitialExecutionMode,
@@ -163,6 +162,11 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     createSupervisorEvidenceLoopPolicy({ supervisorGuidance }),
     createRepeatedFailureLoopPolicy({ repeatedFailures }),
     createEarlyStopRepetitionLoopPolicy({
+      earlyStop,
+      sessionWriter,
+      supervisorState: supervisorGuidance?.state,
+    }),
+    createEarlyStopToolLoopPolicy({
       earlyStop,
       sessionWriter,
       supervisorState: supervisorGuidance?.state,
@@ -518,14 +522,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                   yield emission.event
                   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
                 }
-                // DRF-20: 早停信号检测
-                if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
-                  const toolSignal = earlyStop.recordReadTool(toolEvent.toolName)
-                  if (toolSignal) yield* emitEarlyStopSignal(toolSignal, ctx, sessionWriter, supervisorGuidance?.state)
-                  if (!toolEvent.metadata?.error && ["write_file", "edit", "NotebookEdit", "bash"].includes(toolEvent.toolName)) {
-                    earlyStop.recordWriteTool(toolEvent.toolName)
-                  }
-                }
               }
               // persist messages with tool results for crash recovery
               sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
@@ -611,13 +607,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                     for (const emission of policyEvents) {
                       yield emission.event
                       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
-                    }
-                    if (earlyStop && (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName) {
-                      const toolSignal = earlyStop.recordReadTool(toolEvent.toolName)
-                      if (toolSignal) yield* emitEarlyStopSignal(toolSignal, ctx, sessionWriter, supervisorGuidance?.state)
-                      if (!toolEvent.metadata?.error && ["write_file", "edit", "NotebookEdit", "bash"].includes(toolEvent.toolName)) {
-                        earlyStop.recordWriteTool(toolEvent.toolName)
-                      }
                     }
                   }
                   sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })

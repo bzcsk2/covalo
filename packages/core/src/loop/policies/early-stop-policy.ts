@@ -55,11 +55,23 @@ export interface CreateEarlyStopRepetitionLoopPolicyInput {
   supervisorState?: SupervisorGuidanceConfig["state"]
 }
 
+export interface CreateEarlyStopToolLoopPolicyInput {
+  earlyStop?: EarlyStopDetector
+  sessionWriter?: AsyncSessionWriter
+  supervisorState?: SupervisorGuidanceConfig["state"]
+}
+
 function isTextDeltaEvent(event: unknown): event is { type: "text_delta" } {
   return typeof event === "object"
     && event !== null
     && "type" in event
     && (event as { type?: unknown }).type === "text_delta"
+}
+
+function isToolResultEvent(event: LoopEvent): event is LoopEvent & { role: "tool" | "error"; toolName: string } {
+  return (event.role === "tool" || event.role === "error")
+    && typeof event.toolName === "string"
+    && event.toolName.length > 0
 }
 
 export function createEarlyStopRepetitionLoopPolicy(input: CreateEarlyStopRepetitionLoopPolicyInput): LoopPolicy {
@@ -71,6 +83,26 @@ export function createEarlyStopRepetitionLoopPolicy(input: CreateEarlyStopRepeti
       if (!isTextDeltaEvent(event)) return
       const signal = earlyStop.checkRepetition(info.fullContent)
       if (!signal) return
+      const events = buildEarlyStopSignalEvents(signal, ctx.ctx, sessionWriter, supervisorState)
+      return events.map(event => ({ event, sessionEvent: event }))
+    },
+  }
+}
+
+export function createEarlyStopToolLoopPolicy(input: CreateEarlyStopToolLoopPolicyInput): LoopPolicy {
+  const { earlyStop, sessionWriter, supervisorState } = input
+  return {
+    name: "early-stop-tool-tracking",
+    afterToolResult(ctx: LoopPolicyContext, event: LoopEvent): LoopPolicyEventEmission[] | void {
+      if (!earlyStop) return
+      if (!isToolResultEvent(event)) return
+
+      const signal = earlyStop.recordReadTool(event.toolName)
+      if (!event.metadata?.error) {
+        earlyStop.recordWriteTool(event.toolName)
+      }
+      if (!signal) return
+
       const events = buildEarlyStopSignalEvents(signal, ctx.ctx, sessionWriter, supervisorState)
       return events.map(event => ({ event, sessionEvent: event }))
     },
