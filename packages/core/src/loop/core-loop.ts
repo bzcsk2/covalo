@@ -3,10 +3,8 @@ import type { LoopEvent, SessionStats, ChatClient } from "../interface.js"
 import { isToolUseFinishReason } from "../finish-reason.js"
 import type { ContextManager } from "../context/manager.js"
 import type { AsyncSessionWriter } from "../session.js"
-import type { FoldDecision } from "../context/token-estimator.js"
 import { runPolicyHook, runPolicyHookEvents } from "./policy.js"
 import type { ThinkingMode } from "../provider-thinking.js"
-import { createDeepSeekCapabilities } from "../provider-thinking.js"
 import { calculateCost } from "../pricing.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "../runtime-logger.js"
 import {
@@ -45,6 +43,7 @@ import { runToolBatch } from "./tool-batch-runner.js"
 import { runTextToolSalvage } from "./text-salvage-runner.js"
 import { runFinalResponse } from "./final-response-runner.js"
 import { recoverFromStreamError } from "./stream-error-runner.js"
+import { buildChatStreamOptions, createFoldStatusEvent } from "./request-prep.js"
 
 const DEFAULT_MAX_TURNS = 100
 
@@ -108,12 +107,9 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
 
   const contextWindow = ctx.getContextWindow()
 
-  // fold check before first turn (synchronous budget estimation)
-  const fold = ctx.getFoldDecision()
-  if (fold.action === "force") {
-    yield { role: "status", content: "Context budget exceeded — forcing fold on next turn", severity: "warning" as const, metadata: { fold } }
-  } else if (fold.action !== "none") {
-    yield { role: "status", content: `Context at ${(fold.ratio * 100).toFixed(0)}% — fold recommended`, metadata: { fold } }
+  const foldEvent = createFoldStatusEvent(ctx.getFoldDecision())
+  if (foldEvent) {
+    yield foldEvent
   }
   let consecutiveErrors = 0
   const recentToolCalls = createDuplicateDetector()
@@ -247,11 +243,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     let finishedWithToolUse = false
     const textToolCallFilter = new TextToolCallStreamFilter()
 
-    const provider = config.provider ?? ""
-    const isKeyless = provider === "kilo" || provider === "openai-compatible"
-    const useMaxTokens = provider === "kilo" || provider === "openai-compatible"
-    const supportsThinking = provider === "deepseek" || provider === "zen" || provider === "mimo"
-
     // ADV-HAR-07/TR-1: 根据 toolRouting 策略决定本轮注入的工具集
     const { routedTools, effectiveAllowedToolNames, routingDecision } = resolveLoopToolRouting({
       toolSpecs,
@@ -298,25 +289,17 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     }
 
     try {
-    await runPolicyHook(policies, "beforeModelCall", policyCtx)
-    streamLoop:
-    for await (const event of client.chatCompletionsStream(requestMessages, {
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model,
-      maxTokens: config.maxTokens,
-      temperature: config.temperature,
-      signal,
-      keyless: isKeyless,
-      useMaxCompletionTokens: !useMaxTokens,
-      tools: routedTools,
-      ...(supportsThinking ? createDeepSeekCapabilities(provider).mapMode(thinkingMode) : {}),
-      traceContext: diagnosticsEnabled ? { submitId, turnCount } : undefined,
-      firstEventTimeoutMs: config.provider === "zen" ? 15_000 : undefined,
-      fallbackModel: config.provider === "zen" && config.model !== "deepseek-v4-flash-free"
-        ? "deepseek-v4-flash-free"
-        : undefined,
-    })) {
+      await runPolicyHook(policies, "beforeModelCall", policyCtx)
+      streamLoop:
+      for await (const event of client.chatCompletionsStream(requestMessages, buildChatStreamOptions({
+        config,
+        signal,
+        tools: routedTools,
+        thinkingMode,
+        diagnosticsEnabled,
+        submitId,
+        turnCount,
+      }))) {
       if (isInterrupted()) {
         yield { role: "status", content: "interrupted" }
         yield await emitDone("interrupted")
