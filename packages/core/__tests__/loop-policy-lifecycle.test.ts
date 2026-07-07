@@ -13,6 +13,7 @@ import { EarlyStopDetector } from "../src/early-stop.js"
 import { createCheckpointLoopPolicy } from "../src/loop/policies/checkpoint-policy.js"
 import { createTaskLedgerLoopPolicy } from "../src/loop/policies/task-ledger-policy.js"
 import { createEarlyStopToolLoopPolicy, emitEarlyStopSignal } from "../src/loop/policies/early-stop-policy.js"
+import { createTwoStageRoutingLoopPolicy, createTwoStageRoutingState } from "../src/loop/policies/two-stage-routing-policy.js"
 import { SupervisorBudgetTracker } from "../src/supervisor/budget.js"
 import { createSupervisorGuidanceState } from "../src/supervisor/guided-loop.js"
 import type { SupervisorGuidanceConfig } from "../src/supervisor/guided-loop.js"
@@ -1298,6 +1299,53 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(executions).toBe(4)
     expect(events.some(event => event.role === "error" && event.metadata?.reason === "toolCallLoop")).toBe(true)
     expect(events.some(event => event.role === "done" && event.metadata?.reason === "toolCallLoop")).toBe(true)
+  })
+
+  it("two-stage routing policy intercepts select_category before tool execution", async () => {
+    const state = createTwoStageRoutingState()
+    const appended: { tc: ToolCall; result: ToolResult }[] = []
+    const policy = createTwoStageRoutingLoopPolicy({
+      state,
+      appendToolResult: (tc, result) => appended.push({ tc, result }),
+    })
+    const categoryCall: ToolCall = {
+      id: "category",
+      type: "function",
+      function: { name: "select_category", arguments: '{"category":"read"}' },
+    }
+    const extraCall: ToolCall = {
+      id: "extra",
+      type: "function",
+      function: { name: "write_file", arguments: '{"path":"x"}' },
+    }
+
+    const result = await policy.beforeToolBatch?.({} as LoopPolicyContext, [categoryCall, extraCall], { source: "native" })
+
+    expect(result).toMatchObject({ handled: true })
+    expect(state.selectedCategory).toBe("read")
+    expect(appended).toHaveLength(2)
+    expect(appended[0].result.metadata?.reason).toBe("two_stage_category_selected")
+    expect(appended[1].result.metadata?.reason).toBe("two_stage_batch_skipped")
+    expect((result as any).events[0]).toMatchObject({
+      role: "status",
+      content: "two_stage_category_selected",
+      metadata: { selectedCategory: "read" },
+    })
+  })
+
+  it("two-stage routing policy clears selected category after native tool batch", async () => {
+    const state = createTwoStageRoutingState()
+    state.setSelectedCategory("read")
+    const policy = createTwoStageRoutingLoopPolicy({
+      state,
+      appendToolResult: () => {},
+    })
+
+    await policy.afterToolBatch?.({} as LoopPolicyContext, [], { source: "salvage" })
+    expect(state.selectedCategory).toBe("read")
+
+    await policy.afterToolBatch?.({} as LoopPolicyContext, [], { source: "native" })
+    expect(state.selectedCategory).toBeUndefined()
   })
 
   it("native tool result records supervisor tool evidence", async () => {

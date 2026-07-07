@@ -23,14 +23,13 @@ import { parseToolCallArgs } from "../executor-helpers.js"
 import type { SupervisorGuidanceConfig } from "../supervisor/guided-loop.js"
 import { runSupervisorGuidanceSafePoint } from "./policies/supervisor-guidance-policy.js"
 import type { EffectiveHarnessPolicy } from "../harness/index.js"
-import { parseSelectedCategory } from "../tool-routing/two-stage-router.js"
-import type { ToolCategory } from "../tool-routing/types.js"
 import { resolveLoopToolRouting } from "./policies/tool-routing-policy.js"
 import { createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
 import { createToolCallLoopPolicy } from "./policies/tool-call-loop-policy.js"
+import { createTwoStageRoutingLoopPolicy, createTwoStageRoutingState } from "./policies/two-stage-routing-policy.js"
 import { createEarlyStopGreetingLoopPolicy, createEarlyStopRepetitionLoopPolicy, createEarlyStopToolLoopPolicy } from "./policies/early-stop-policy.js"
 import {
   createEmptyRuntimeExecutionState,
@@ -124,11 +123,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   const toolCallIdNormalizer = createToolCallIdNormalizer()
   let totalToolCalls = 0
 
-  // ADV-HAR-07/TR-1: Two-stage routing 的当前类别选择状态。
-  // 由 loop 内部拦截 select_category 工具调用后填充，下一轮 resolveToolRouting
-  // 会基于此返回 Stage 2（仅注入该 category 的工具）。这是 loop 内部协议状态，
-  // 不暴露给 StreamingToolExecutor 或 createDefaultTools。
-  let selectedCategory: ToolCategory | undefined
+  const twoStageRoutingState = createTwoStageRoutingState()
 
   // F0-1: governance/checkpoint 运行时状态
   // 从 effectivePolicy.executionMode 映射到 HarnessMode（free/adaptive/forced/strict）
@@ -160,6 +155,10 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
       appendToolResult,
       effectivePolicy,
       workspaceRoot,
+    }),
+    createTwoStageRoutingLoopPolicy({
+      state: twoStageRoutingState,
+      appendToolResult,
     }),
     createTaskLedgerLoopPolicy({
       taskLedger,
@@ -269,7 +268,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
       toolSpecs,
       toolRoutingMode,
       contextWindow: ctx.getContextWindow(),
-      selectedCategory,
+      selectedCategory: twoStageRoutingState.selectedCategory,
       effectivePolicy,
       role,
       customToolNames,
@@ -282,7 +281,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
         stage: routingDecision.stage,
         estimatedSchemaTokens: routingDecision.estimatedSchemaTokens,
         toolCount: routedTools?.length ?? 0,
-        selectedCategory,
+        selectedCategory: twoStageRoutingState.selectedCategory,
       })
     }
 
@@ -419,56 +418,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               break streamLoop
             }
 
-            // TR-1: 拦截 two-stage routing 的内部协议工具 select_category。
-            // select_category 是 loop 内部虚拟工具（不注册到 createDefaultTools，
-            // 不进入 StreamingToolExecutor），由 loop 直接处理：
-            // 1. 解析参数得到类别
-            // 2. appendToolResult 让 LLM 看到选择已生效
-            // 3. 更新 selectedCategory，下一轮 resolveToolRouting 进入 Stage 2
-            // 4. break streamLoop 进入下一轮
-            const categoryCall = toolCalls.find((tc) => tc.function.name === "select_category")
-            if (categoryCall) {
-              const parsedCategory = parseSelectedCategory(categoryCall.function.arguments)
-              if (parsedCategory) {
-                selectedCategory = parsedCategory
-                appendToolResult(categoryCall, {
-                  content: `Category selected: ${parsedCategory}. Continuing with tools from this category.`,
-                  isError: false,
-                  metadata: { reason: "two_stage_category_selected", selectedCategory: parsedCategory },
-                })
-                // 理论上 Stage 1 只注入 select_category，batch 不会有其他工具；
-                // 但为健壮起见，给 batch 中其他工具补 skip 消息避免 orphan tool_call
-                for (const tc of toolCalls) {
-                  if (tc.id !== categoryCall.id) {
-                    appendToolResult(tc, {
-                      content: "Skipped: select_category was called in this batch; please retry in the next turn.",
-                      isError: true,
-                      metadata: { reason: "two_stage_batch_skipped" },
-                    })
-                  }
-                }
-                yield {
-                  role: "status",
-                  content: "two_stage_category_selected",
-                  metadata: { selectedCategory: parsedCategory },
-                }
-                sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "two_stage_category_selected", metadata: { selectedCategory: parsedCategory } } })
-                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-                break streamLoop
-              } else {
-                // 解析失败：给 select_category 回错误，让模型重试
-                appendToolResult(categoryCall, {
-                  content: "Invalid category. Please select a valid category from: read, write, search, run, plan, code_intel, full.",
-                  isError: true,
-                  metadata: { reason: "two_stage_invalid_category" },
-                })
-                yield { role: "status", content: "tools_completed" }
-                sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
-                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-                break streamLoop
-              }
-            }
-
             try {
               for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
                 yield toolEvent
@@ -500,14 +449,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
             await runPolicyHook(policies, "afterToolBatch", policyCtx, toolCalls, { source: "native" })
-
-            // TR-1: selectedCategory 是一次性状态。
-            // Stage 2 的一批真实工具调用执行完成后清空，让下一轮模型
-            // 需要工具时重新走 select_category 选择新类别（避免被锁定
-            // 在第一次选择的类别里无法切换 read→write→search→run）。
-            if (selectedCategory) {
-              selectedCategory = undefined
-            }
 
             // DRF-60: Safe point — Supervisor 指导（暂停工具环后继续 Worker）
             const supervisorInjected = yield* trySupervisorGuidance()
