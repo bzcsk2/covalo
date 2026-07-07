@@ -34,11 +34,23 @@ export interface LoopPolicyEventEmission {
   persist?: boolean
 }
 
+export interface ToolBatchInterception {
+  handled: true
+  events?: readonly (LoopEvent | LoopPolicyEventEmission)[]
+  done?: {
+    reason: string
+    metadata?: Record<string, unknown>
+  }
+  persistMessages?: boolean
+}
+
 export type LoopPolicyEventResult =
   | void
   | LoopEvent
   | LoopPolicyEventEmission
   | readonly (LoopEvent | LoopPolicyEventEmission)[]
+
+export type LoopPolicyToolBatchResult = LoopPolicyEventResult | ToolBatchInterception
 
 export interface LoopPolicyContext {
   turnCount: number
@@ -69,7 +81,7 @@ export interface LoopPolicy {
   /** Called for each event received from the model stream. */
   afterModelEvent?(ctx: LoopPolicyContext, event: unknown, info: ModelEventInfo): Promise<LoopPolicyEventResult> | LoopPolicyEventResult
   /** Called before each tool batch execution, with the tool calls to execute. */
-  beforeToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<void> | void
+  beforeToolBatch?(ctx: LoopPolicyContext, toolCalls: readonly ToolCall[], info: ToolBatchInfo): Promise<LoopPolicyToolBatchResult> | LoopPolicyToolBatchResult
   /** Called after each tool/error event yielded from the tool executor. */
   afterToolResult?(ctx: LoopPolicyContext, event: LoopEvent, info: ToolResultInfo): Promise<LoopPolicyEventResult> | LoopPolicyEventResult
   /** Called after the entire tool batch completes (all tools settled), before safe-points. */
@@ -117,6 +129,13 @@ export async function runPolicyHook<K extends PolicyHook>(
   }
 }
 
+function isToolBatchInterception(result: LoopPolicyToolBatchResult): result is ToolBatchInterception {
+  return typeof result === "object"
+    && result !== null
+    && "handled" in result
+    && (result as { handled?: unknown }).handled === true
+}
+
 function normalizePolicyEvents(result: LoopPolicyEventResult): LoopPolicyEventEmission[] {
   if (!result) return []
   const items = Array.isArray(result) ? result : [result]
@@ -144,6 +163,38 @@ export async function runPolicyHookEvents<K extends PolicyHook>(
     }
   }
   return events
+}
+
+export interface ToolBatchPolicyResult {
+  events: LoopPolicyEventEmission[]
+  interception?: ToolBatchInterception
+}
+
+export async function runPolicyToolBatchHooks(
+  policies: LoopPolicy[],
+  ctx: LoopPolicyContext,
+  toolCalls: readonly ToolCall[],
+  info: ToolBatchInfo,
+): Promise<ToolBatchPolicyResult> {
+  const events: LoopPolicyEventEmission[] = []
+  let interception: ToolBatchInterception | undefined
+  for (const policy of policies) {
+    const fn = policy.beforeToolBatch
+    if (!fn) continue
+    try {
+      const result = await fn(ctx, toolCalls, info)
+      if (isToolBatchInterception(result)) {
+        const interceptionEvents = result.events ? normalizePolicyEvents(result.events) : []
+        events.push(...interceptionEvents)
+        interception = { ...result, events: interceptionEvents }
+        break
+      }
+      events.push(...normalizePolicyEvents(result))
+    } catch {
+      // Individual hook errors must not break the pipeline
+    }
+  }
+  return { events, interception }
 }
 
 export function createPoliciesFromLoopOptions(_opts: unknown): LoopPolicy[] {

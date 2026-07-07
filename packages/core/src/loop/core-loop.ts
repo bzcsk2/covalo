@@ -5,7 +5,7 @@ import type { ContextManager } from "../context/manager.js"
 import type { StreamingToolExecutor } from "../streaming-executor.js"
 import type { AsyncSessionWriter } from "../session.js"
 import type { FoldDecision } from "../context/token-estimator.js"
-import { runPolicyHook, runPolicyHookEvents } from "./policy.js"
+import { runPolicyHook, runPolicyHookEvents, runPolicyToolBatchHooks } from "./policy.js"
 import type { ThinkingMode } from "../provider-thinking.js"
 import { createDeepSeekCapabilities } from "../provider-thinking.js"
 import { calculateCost } from "../pricing.js"
@@ -30,6 +30,7 @@ import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policie
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
+import { createToolCallLoopPolicy } from "./policies/tool-call-loop-policy.js"
 import { createEarlyStopGreetingLoopPolicy, createEarlyStopRepetitionLoopPolicy, createEarlyStopToolLoopPolicy } from "./policies/early-stop-policy.js"
 import {
   createEmptyRuntimeExecutionState,
@@ -152,6 +153,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   }
   const policies: LoopPolicy[] = [
     ...(_policies ?? []),
+    createToolCallLoopPolicy({ recentToolCalls, appendToolResult }),
     createBranchBudgetLoopPolicy({ branchBudgetTracker, runtimeState }),
     createTaskLedgerLoopPolicy({
       taskLedger,
@@ -399,32 +401,23 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               yield { role: "warning", content: "API returned tool_calls finish_reason but no tool calls found", severity: "warning" as const }
               break
             }
-            // CL-51: duplicate tool call detection
-            let blockedToolCall: { name: string; count: number } | null = null
-            for (const tc of toolCalls) {
-              const { warning, blocked, count } = recentToolCalls.check(tc)
-              if (warning) {
-                yield { role: "warning", content: warning, severity: "warning" as const }
-              }
-              if (blocked && !blockedToolCall) {
-                blockedToolCall = { name: tc.function.name, count }
-              }
-            }
-
             finishedWithToolUse = true
             ctx.log.append({ role: "assistant", content: fullContent || null, reasoning_content: fullReasoning || undefined, tool_calls: toolCalls })
             sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             totalToolCalls += toolCalls.length
 
-            if (blockedToolCall) {
-              const content = `Stopped repeated tool-call loop: ${blockedToolCall.name} was requested ${blockedToolCall.count} times with identical arguments.`
-              for (const tc of toolCalls) {
-                appendToolResult(tc, { content, isError: true, metadata: { reason: "toolCallLoop" } })
+            const toolBatchPolicy = await runPolicyToolBatchHooks(policies, policyCtx, toolCalls, { source: "native" })
+            yield* emitPolicyEvents(toolBatchPolicy.events)
+            if (toolBatchPolicy.interception) {
+              if (toolBatchPolicy.interception.persistMessages !== false) {
+                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
               }
-              yield { role: "error", content, severity: "error" as const, metadata: { reason: "toolCallLoop", toolName: blockedToolCall.name, count: blockedToolCall.count } }
-              sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-              yield await emitDone("toolCallLoop", { toolName: blockedToolCall.name, count: blockedToolCall.count } as Record<string, unknown>)
-              return
+              if (toolBatchPolicy.interception.done) {
+                const { reason: doneReason, metadata } = toolBatchPolicy.interception.done
+                yield await emitDone(doneReason, metadata)
+                return
+              }
+              break streamLoop
             }
 
             // F0-1/B2: 工具批次执行前做 BranchBudget 硬拦截。
@@ -511,7 +504,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               }
             }
 
-            await runPolicyHook(policies, "beforeToolBatch", policyCtx, toolCalls, { source: "native" })
             try {
               for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
                 yield toolEvent
@@ -599,7 +591,19 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                 sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
                 totalToolCalls += salvagedCalls.length
 
-                await runPolicyHook(policies, "beforeToolBatch", policyCtx, salvagedCalls, { source: "salvage" })
+                const salvageBatchPolicy = await runPolicyToolBatchHooks(policies, policyCtx, salvagedCalls, { source: "salvage" })
+                yield* emitPolicyEvents(salvageBatchPolicy.events)
+                if (salvageBatchPolicy.interception) {
+                  if (salvageBatchPolicy.interception.persistMessages !== false) {
+                    sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+                  }
+                  if (salvageBatchPolicy.interception.done) {
+                    const { reason: doneReason, metadata } = salvageBatchPolicy.interception.done
+                    yield await emitDone(doneReason, metadata)
+                    return
+                  }
+                  break
+                }
                 try {
                   for await (const toolEvent of toolExecutor.run(salvagedCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
                     yield toolEvent

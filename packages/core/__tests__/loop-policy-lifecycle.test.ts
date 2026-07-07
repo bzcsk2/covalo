@@ -1264,6 +1264,42 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(refreshLedgerContext).not.toHaveBeenCalled()
   })
 
+  it("tool-call-loop policy blocks the fifth identical native tool batch before execution", async () => {
+    let executions = 0
+    const repeatedTurn = () => [
+      { type: "tool_call_end" as const, toolCallIndex: 0, id: crypto.randomUUID(), name: "read_same", arguments: '{"path":"README.md"}' },
+      { type: "done" as const, finishReason: "tool_calls" },
+    ]
+    const client = makeClient([repeatedTurn(), repeatedTurn(), repeatedTurn(), repeatedTurn(), repeatedTurn()])
+    const toolExecutor: StreamingToolExecutor = {
+      async *run(toolCalls: ToolCall[], _signal: AbortSignal, appendResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+        for (const tc of toolCalls) {
+          executions++
+          appendResult(tc, { content: "same", isError: false })
+          yield { role: "tool", content: "same", toolName: tc.function.name, toolCallIndex: 0, toolCallId: tc.id } as LoopEvent
+        }
+      },
+    } as unknown as StreamingToolExecutor
+
+    const events = await collectEvents(runCoreLoop({
+      ctx: mockContextManager(),
+      client,
+      toolExecutor,
+      toolSpecs: [{ type: "function", function: { name: "read_same", description: "r", parameters: {} } }],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      maxTurns: 10,
+    }))
+
+    expect(executions).toBe(4)
+    expect(events.some(event => event.role === "error" && event.metadata?.reason === "toolCallLoop")).toBe(true)
+    expect(events.some(event => event.role === "done" && event.metadata?.reason === "toolCallLoop")).toBe(true)
+  })
+
   it("native tool result records supervisor tool evidence", async () => {
     const supervisorGuidance = makeSupervisorGuidance()
 
