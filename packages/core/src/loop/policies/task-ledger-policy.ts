@@ -1,7 +1,7 @@
 import type { TaskLedgerTracker } from "../../task-ledger.js"
 import type { VerificationGateState } from "../../governance/verification-gate.js"
 import { maybeResetVerificationGateCounter } from "../../governance/verification-gate.js"
-import type { LoopPolicy, LoopPolicyContext, ToolResultInfo } from "../policy.js"
+import type { FinalResponseInfo, LoopPolicy, LoopPolicyContext, LoopPolicyEventEmission, ToolResultInfo } from "../policy.js"
 import type { LoopEvent } from "../../interface.js"
 
 export interface CreateTaskLedgerLoopPolicyInput {
@@ -35,6 +35,20 @@ export function createTaskLedgerLoopPolicy(input: CreateTaskLedgerLoopPolicyInpu
           taskLedger.verificationPending,
           blockingAfter && !!requireVerificationBeforeFinal,
         )
+      }
+    },
+    beforeAssistantFinal(_ctx: LoopPolicyContext, info: FinalResponseInfo): LoopPolicyEventEmission | void {
+      if (!taskLedger) return
+      if (!info.content.trim()) return
+      if (!taskLedger.ingestPlanFromText(info.content)) return
+      refreshLedgerContext?.()
+      return {
+        event: {
+          role: "status",
+          content: "task_ledger_plan",
+          metadata: { stepCount: taskLedger.plan.length },
+        },
+        persist: false,
       }
     },
   }

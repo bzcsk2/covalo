@@ -31,6 +31,7 @@ export interface FinalResponseInfo {
 export interface LoopPolicyEventEmission {
   event: LoopEvent
   sessionEvent?: LoopEvent
+  persist?: boolean
 }
 
 export type LoopPolicyEventResult =

@@ -205,6 +205,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
       yield emission.event
     }
     for (const emission of emissions) {
+      if (emission.persist === false) continue
       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
     }
   }
@@ -525,6 +526,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                 const policyEvents = await runPolicyHookEvents(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc, parsedArgs: nativeParsedArgs?.ok ? nativeParsedArgs.args : undefined })
                 for (const emission of policyEvents) {
                   yield emission.event
+                  if (emission.persist === false) continue
                   sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
                 }
               }
@@ -611,6 +613,7 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                     const policyEvents = await runPolicyHookEvents(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc, parsedArgs: salvageParsedArgs?.ok ? salvageParsedArgs.args : undefined })
                     for (const emission of policyEvents) {
                       yield emission.event
+                      if (emission.persist === false) continue
                       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
                     }
                   }
@@ -640,18 +643,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               policyCtx,
               { content: fullContent, totalToolCalls, finishReason: reason },
             ))
-
-            // DRF-40: 尝试从模型响应提取计划
-            if (taskLedger && fullContent.trim()) {
-              if (taskLedger.ingestPlanFromText(fullContent)) {
-                refreshLedgerContext?.()
-                yield {
-                  role: "status",
-                  content: "task_ledger_plan",
-                  metadata: { stepCount: taskLedger.plan.length },
-                }
-              }
-            }
 
             ctx.log.append({ role: "assistant", content: fullContent })
 

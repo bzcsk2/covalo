@@ -1211,6 +1211,59 @@ describeOrSkip("loop policy lifecycle", () => {
     expect(gateState.continuationCount).toBe(5)
   })
 
+  it("task-ledger policy ingests final response plan before assistant message append", async () => {
+    const tracker = new TaskLedgerTracker("implement feature")
+    const refreshLedgerContext = vi.fn()
+    const appended: Array<{ role: string; content: string }> = []
+    const sessionEvents: any[] = []
+    const content = "PLAN:\n1. design\n2. implement\n3. test"
+
+    const events = await collectEvents(runCoreLoop({
+      ctx: mockContextManager({
+        log: { append: (msg: any) => appended.push(msg), get: () => [], clear: () => {} } as any,
+      }),
+      client: makeClient([[{ type: "text_delta", delta: content }, { type: "done", finishReason: "stop" }]]),
+      toolExecutor: makeEmptyExecutor(),
+      toolSpecs: [],
+      config: { apiKey: "x", baseUrl: "x", model: "x", maxTokens: 100, temperature: 0, provider: "test" },
+      signal: noopSignal,
+      sessionWriter: { enqueue: entry => sessionEvents.push(entry) } as any,
+      stats: emptyStats(),
+      isInterrupted: () => false,
+      appendToolResult: () => {},
+      logger: noopLogger,
+      taskLedger: tracker,
+      refreshLedgerContext,
+    }))
+
+    expect(events.filter(e => e.role === "status" && e.content === "task_ledger_plan")).toHaveLength(1)
+    expect(events.find(e => e.role === "status" && e.content === "task_ledger_plan")?.metadata?.stepCount).toBe(3)
+    expect(tracker.plan.map(step => step.text)).toEqual(["design", "implement", "test"])
+    expect(refreshLedgerContext).toHaveBeenCalledTimes(1)
+    expect(appended.some(msg => msg.role === "assistant" && msg.content === content)).toBe(true)
+    expect(sessionEvents.some(e => (e as any).type === "event" && (e as any).payload?.content === "task_ledger_plan")).toBe(false)
+  })
+
+  it("task-ledger policy does not ingest plan from empty final response", async () => {
+    const tracker = new TaskLedgerTracker("implement feature")
+    const refreshLedgerContext = vi.fn()
+
+    const policy = createTaskLedgerLoopPolicy({
+      taskLedger: tracker,
+      refreshLedgerContext,
+    })
+
+    const result = await policy.beforeAssistantFinal?.({} as LoopPolicyContext, {
+      content: "   ",
+      totalToolCalls: 0,
+      finishReason: "stop",
+    })
+
+    expect(result).toBeUndefined()
+    expect(tracker.plan).toHaveLength(0)
+    expect(refreshLedgerContext).not.toHaveBeenCalled()
+  })
+
   it("native tool result records supervisor tool evidence", async () => {
     const supervisorGuidance = makeSupervisorGuidance()
 
