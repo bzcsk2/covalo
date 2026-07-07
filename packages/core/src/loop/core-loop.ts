@@ -2,10 +2,9 @@ import type { ToolCall, ChatMessage } from "../types.js"
 import type { LoopEvent, SessionStats, ChatClient } from "../interface.js"
 import { isToolUseFinishReason } from "../finish-reason.js"
 import type { ContextManager } from "../context/manager.js"
-import type { StreamingToolExecutor } from "../streaming-executor.js"
 import type { AsyncSessionWriter } from "../session.js"
 import type { FoldDecision } from "../context/token-estimator.js"
-import { runPolicyHook, runPolicyHookEvents, runPolicyToolBatchHooks } from "./policy.js"
+import { runPolicyHook, runPolicyHookEvents } from "./policy.js"
 import type { ThinkingMode } from "../provider-thinking.js"
 import { createDeepSeekCapabilities } from "../provider-thinking.js"
 import { calculateCost } from "../pricing.js"
@@ -19,7 +18,6 @@ import {
 import { salvageTextToolCallsInResponse, TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
 import type { TaskLedgerTracker } from "../task-ledger.js"
 import { runVerificationGate } from "./policies/verification-gate-policy.js"
-import { parseToolCallArgs } from "../executor-helpers.js"
 import type { SupervisorGuidanceConfig } from "../supervisor/guided-loop.js"
 import { runSupervisorGuidanceSafePoint } from "./policies/supervisor-guidance-policy.js"
 import type { EffectiveHarnessPolicy } from "../harness/index.js"
@@ -44,6 +42,7 @@ import type { AgentRole } from "../agent-profile/types.js"
 import type { LoopPolicy, LoopPolicyEventEmission } from "./policy.js"
 import type { LoopOptions } from "../loop.js"
 import type { LoopPolicyContext } from "./policy.js"
+import { runToolBatch } from "./tool-batch-runner.js"
 
 const DEFAULT_MAX_TURNS = 100
 
@@ -404,51 +403,32 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
             sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             totalToolCalls += toolCalls.length
 
-            const toolBatchPolicy = await runPolicyToolBatchHooks(policies, policyCtx, toolCalls, { source: "native" })
-            yield* emitPolicyEvents(toolBatchPolicy.events)
-            if (toolBatchPolicy.interception) {
-              if (toolBatchPolicy.interception.persistMessages !== false) {
-                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-              }
-              if (toolBatchPolicy.interception.done) {
-                const { reason: doneReason, metadata } = toolBatchPolicy.interception.done
-                yield await emitDone(doneReason, metadata)
-                return
-              }
+            const toolBatchResult = yield* runToolBatch({
+              source: "native",
+              toolCalls,
+              toolExecutor,
+              signal,
+              appendToolResult,
+              diagnosticsEnabled,
+              submitId,
+              turnCount,
+              effectiveAllowedToolNames,
+              maxParallelTools: effectivePolicy?.maxParallelTools,
+              ctx,
+              sessionWriter,
+              policies,
+              policyCtx,
+              logger,
+              errorLogName: "loop.tool_batch_error",
+            })
+            if (toolBatchResult.done) {
+              const { reason: doneReason, metadata } = toolBatchResult.done
+              yield await emitDone(doneReason, metadata)
+              return
+            }
+            if (toolBatchResult.intercepted) {
               break streamLoop
             }
-
-            try {
-              for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
-                yield toolEvent
-                // P5.5: tool_progress is transient — don't persist to session
-                if (toolEvent.role !== 'tool_progress') {
-                  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
-                }
-                const matchedTc = (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName
-                  ? findToolCallByIdOrName(toolCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
-                  : undefined
-                const nativeParsedArgs = matchedTc ? parseToolCallArgs(matchedTc.function.arguments, matchedTc.function.name) : undefined
-                const policyEvents = await runPolicyHookEvents(policies, "afterToolResult", policyCtx, toolEvent, { source: "native", toolCalls, toolCall: matchedTc, parsedArgs: nativeParsedArgs?.ok ? nativeParsedArgs.args : undefined })
-                for (const emission of policyEvents) {
-                  yield emission.event
-                  if (emission.persist === false) continue
-                  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
-                }
-              }
-              // persist messages with tool results for crash recovery
-              sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-            } catch (err) {
-              logger?.warn("loop.tool_batch_error", {
-                error: err instanceof Error ? err.message : String(err),
-                turnCount,
-              })
-              // P1: StreamingToolExecutor handles settling remaining tools internally.
-              // No blind batch补写 here — it would duplicate results for already-completed tools.
-            }
-            yield { role: "status", content: "tools_completed" }
-            sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
-            await runPolicyHook(policies, "afterToolBatch", policyCtx, toolCalls, { source: "native" })
 
             // DRF-60: Safe point — Supervisor 指导（暂停工具环后继续 Worker）
             const supervisorInjected = yield* trySupervisorGuidance()
@@ -497,47 +477,32 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                 sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
                 totalToolCalls += salvagedCalls.length
 
-                const salvageBatchPolicy = await runPolicyToolBatchHooks(policies, policyCtx, salvagedCalls, { source: "salvage" })
-                yield* emitPolicyEvents(salvageBatchPolicy.events)
-                if (salvageBatchPolicy.interception) {
-                  if (salvageBatchPolicy.interception.persistMessages !== false) {
-                    sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-                  }
-                  if (salvageBatchPolicy.interception.done) {
-                    const { reason: doneReason, metadata } = salvageBatchPolicy.interception.done
-                    yield await emitDone(doneReason, metadata)
-                    return
-                  }
+                const salvageBatchResult = yield* runToolBatch({
+                  source: "salvage",
+                  toolCalls: salvagedCalls,
+                  toolExecutor,
+                  signal,
+                  appendToolResult,
+                  diagnosticsEnabled,
+                  submitId,
+                  turnCount,
+                  effectiveAllowedToolNames,
+                  maxParallelTools: effectivePolicy?.maxParallelTools,
+                  ctx,
+                  sessionWriter,
+                  policies,
+                  policyCtx,
+                  logger,
+                  errorLogName: "loop.tool_batch_error_secondary",
+                })
+                if (salvageBatchResult.done) {
+                  const { reason: doneReason, metadata } = salvageBatchResult.done
+                  yield await emitDone(doneReason, metadata)
+                  return
+                }
+                if (salvageBatchResult.intercepted) {
                   break
                 }
-                try {
-                  for await (const toolEvent of toolExecutor.run(salvagedCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined, effectiveAllowedToolNames, effectivePolicy?.maxParallelTools)) {
-                    yield toolEvent
-                    if (toolEvent.role !== "tool_progress") {
-                      sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
-                    }
-                    const salvageMatchedTc = (toolEvent.role === "tool" || toolEvent.role === "error") && toolEvent.toolName
-                      ? findToolCallByIdOrName(salvagedCalls, toolEvent.toolCallId, toolEvent.toolName, toolEvent.toolCallIndex) ?? undefined
-                      : undefined
-                    const salvageParsedArgs = salvageMatchedTc ? parseToolCallArgs(salvageMatchedTc.function.arguments, salvageMatchedTc.function.name) : undefined
-                    const policyEvents = await runPolicyHookEvents(policies, "afterToolResult", policyCtx, toolEvent, { source: "salvage", toolCalls: salvagedCalls, toolCall: salvageMatchedTc, parsedArgs: salvageParsedArgs?.ok ? salvageParsedArgs.args : undefined })
-                    for (const emission of policyEvents) {
-                      yield emission.event
-                      if (emission.persist === false) continue
-                      sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: emission.sessionEvent ?? emission.event })
-                    }
-                  }
-                  sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-                } catch (err) {
-                  logger?.warn("loop.tool_batch_error_secondary", {
-                    error: err instanceof Error ? err.message : String(err),
-                    turnCount,
-                  })
-                  // StreamingToolExecutor handles settling remaining tools internally
-                }
-                yield { role: "status", content: "tools_completed" }
-                sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
-                await runPolicyHook(policies, "afterToolBatch", policyCtx, salvagedCalls, { source: "salvage" })
 
                 const injectedAfterSalvage = appendPendingInstruction()
                 if (injectedAfterSalvage) {
@@ -645,24 +610,4 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   if (diagnosticsEnabled) logger.warn("loop.max_turns", { maxTurns })
   yield { role: "warning", content: `Reached maximum tool loop count (${maxTurns}).`, severity: "warning" as const }
   yield await emitDone("maxTurns")
-}
-
-/** Find tool call by id (preferred), then index, then name (fallback). */
-function findToolCallByIdOrName(
-  toolCalls: import("../types.js").ToolCall[],
-  toolCallId?: string,
-  toolName?: string,
-  toolCallIndex?: number,
-): import("../types.js").ToolCall | undefined {
-  if (toolCallId) {
-    const byId = toolCalls.find(t => t.id === toolCallId)
-    if (byId) return byId
-  }
-  if (toolCallIndex !== undefined && toolCallIndex >= 0 && toolCallIndex < toolCalls.length) {
-    return toolCalls[toolCallIndex]
-  }
-  if (toolName) {
-    return toolCalls.find(t => t.function.name === toolName)
-  }
-  return undefined
 }
