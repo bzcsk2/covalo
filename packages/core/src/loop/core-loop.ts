@@ -17,7 +17,6 @@ import {
 } from "../loop-helpers.js"
 import { TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
 import type { TaskLedgerTracker } from "../task-ledger.js"
-import { runVerificationGate } from "./policies/verification-gate-policy.js"
 import type { SupervisorGuidanceConfig } from "../supervisor/guided-loop.js"
 import { runSupervisorGuidanceSafePoint } from "./policies/supervisor-guidance-policy.js"
 import type { EffectiveHarnessPolicy } from "../harness/index.js"
@@ -44,6 +43,7 @@ import type { LoopOptions } from "../loop.js"
 import type { LoopPolicyContext } from "./policy.js"
 import { runToolBatch } from "./tool-batch-runner.js"
 import { runTextToolSalvage } from "./text-salvage-runner.js"
+import { runFinalResponse } from "./final-response-runner.js"
 
 const DEFAULT_MAX_TURNS = 100
 
@@ -214,18 +214,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   const trySupervisorGuidance = () => runSupervisorGuidanceSafePoint({
     supervisorGuidance, taskLedger, buildSupervisorExtras, ctx, sessionWriter,
   })
-
-  /** DRF-40: 尝试拦截 done 并注入验证提示 */
-  const tryVerificationGate = function* (): Generator<LoopEvent, boolean> {
-    return yield* runVerificationGate({
-      taskLedger,
-      requireVerificationBeforeFinal,
-      verificationMode,
-      verificationGateState,
-      ctx,
-      sessionWriter,
-    })
-  }
 
   while (turnCount < maxTurns) {
     turnCount++
@@ -487,35 +475,25 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               break
             }
 
-            yield* emitPolicyEvents(await runPolicyHookEvents(
+            const finalResult = yield* runFinalResponse({
+              content: fullContent,
+              finishReason: reason,
+              totalToolCalls,
+              ctx,
+              sessionWriter,
               policies,
-              "beforeAssistantFinal",
               policyCtx,
-              { content: fullContent, totalToolCalls, finishReason: reason },
-            ))
-
-            ctx.log.append({ role: "assistant", content: fullContent })
-
-            // P2: Safe point 2 — check for pending instructions before ending turn
-            const injectedBeforeDone = appendPendingInstruction()
-            if (injectedBeforeDone) {
-              yield injectedBeforeDone
-              // Don't yield done — continue the loop to process the injected instruction
-              break
+              appendPendingInstruction,
+              taskLedger,
+              requireVerificationBeforeFinal,
+              verificationMode,
+              verificationGateState,
+            })
+            if (finalResult.done) {
+              yield await emitDone("success", { reason })
+              return
             }
-
-            await runPolicyHook(policies, "beforeFinal", policyCtx)
-            // DRF-40: Verification Gate — 拦截未验证的 done
-            const gated = yield* tryVerificationGate()
-            if (gated) {
-              break
-            }
-
-            await runPolicyHook(policies, "beforeFinalDraft", policyCtx)
-
-            sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-            yield await emitDone("success", { reason })
-            return
+            break
           }
           break
         }
