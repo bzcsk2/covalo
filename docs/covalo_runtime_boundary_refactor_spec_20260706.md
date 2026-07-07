@@ -1409,82 +1409,97 @@ type FinalResponseOutcome =
 - `core-loop.ts` 的 text completion 分支只剩一个 `yield* runFinalResponsePipeline(...)` 或等价调用。
 - pending instruction 与 verification gate 顺序不变。
 
-### PR-39：Verification Gate Policyization
+### PR-39：Stream Error Recovery Runner
 
-目标：在 PR-38 之后，把 verification gate 从 final pipeline 中迁入 policy。
+状态：已完成，提交 `7f46187 PR-39: Extract stream error recovery runner`。
 
-这一步不要早做，因为 verification gate 有阻断 done、注入 continuation、写 session 的控制流副作用。
+实际变更：
 
-需要先定义 policy 可返回的 final interception：
+- 新增 `packages/core/src/loop/stream-error-runner.ts`
+- 将 stream error 后的 protocol repair、`afterStreamError` hook、连续错误计数、`error_limit` 判断从 `core-loop.ts` 抽出
+- `core-loop.ts` 只根据 runner 返回值决定 `interrupted` / `retry` / `error_limit`
 
-```ts
-export interface FinalInterception {
-  blocked: true
-  events: LoopPolicyEventEmission[]
-  continueLoop?: true
-}
-```
+行为约束：
 
-迁移范围：
+- stream 已产生 `tool_calls` 时仍补 assistant tool_calls 和每个 tool 的 error result
+- interrupt 优先级保持不变
+- checkpoint 的 `afterStreamError` 仍通过 policy pipeline 触发
 
-- `runVerificationGate()` 仍可保留为 policy 内部 generator/helper。
-- `beforeFinal` 或新增 `finalGate` hook 返回 interception。
-- core-loop 只负责应用 interception。
+### PR-40：Loop Request Preparation Helpers
 
-验收：
+状态：已完成，提交 `3125402 PR-40: Extract loop request preparation helpers`。
 
-- `core-loop.ts` 不再直接调用 `runVerificationGate()`。
-- warn / require-or-waive / block 三种模式语义不变。
-- verification gate 现有测试全通过。
+实际变更：
 
-### PR-40：Supervisor Guidance Safe-Point Policyization
-
-目标：把 tool batch 之后的 supervisor guidance safe point 迁入 policy 或 final-safe-point runner。
-
-当前它仍是合理的编排点，不急于迁移。建议在 PR-36/38 之后再做。
-
-验收：
-
-- tool batch 后仍能注入 supervisor guidance。
-- 注入后仍 break 当前 stream loop，进入下一轮。
-- child/delegated event 行为不变。
+- 新增 `packages/core/src/loop/request-prep.ts`
+- 抽出 `createFoldStatusEvent()`
+- 抽出 `buildChatStreamOptions()`
+- `core-loop.ts` 不再直接关心 provider keyless、max token 字段、thinking capability、Zen fallback 等请求参数细节
 
 ### PR-41：Core-Loop Final Audit
 
-目标：不新增行为，只做结构审计和死代码清理。
+状态：本轮收尾执行。
 
-检查项：
+截至 `3125402`，`packages/core/src/loop/core-loop.ts` 为 550 行。相比最初 1940 行，累计减少约 71.6%。当前 loop 目录新增了这些 runner/helper：
 
-- `core-loop.ts` 是否仍直接调用具体治理实现：
-  - `earlyStop.*`
-  - `taskLedger.ingestPlanFromText`
-  - `recentToolCalls.check`
-  - `checkBranchBudgetBlocks`
-  - `salvageTextToolCallsInResponse`
-  - `runVerificationGate`
-  - `runSupervisorGuidanceSafePoint`
-- `core-loop.ts` 是否只保留必要的 stream/tool/final 编排。
-- `LoopPolicy` hook 类型是否仍是内部 API，没有泄漏到 public package surface。
-- 所有 policy 是否有最小测试覆盖。
-
-验收命令：
-
-```bash
-bun run typecheck
-bun test packages/core/__tests__/loop-policy-lifecycle.test.ts
-bun test packages/core/__tests__/f0-1-runtime-loop.test.ts
-bun test packages/core/__tests__/verification-gate.test.ts
-bun test packages/core/__tests__/early-stop.test.ts
-bun run test
-bun run build
-bun run smoke:cli
-bun run pack:dry-run
+```text
+packages/core/src/loop/final-response-runner.ts
+packages/core/src/loop/request-prep.ts
+packages/core/src/loop/stream-error-runner.ts
+packages/core/src/loop/text-salvage-runner.ts
+packages/core/src/loop/tool-batch-runner.ts
 ```
+
+policy 模块目前覆盖：
+
+```text
+branch-budget-policy.ts
+checkpoint-policy.ts
+early-stop-policy.ts
+execution-mode-policy.ts
+repeated-failure-policy.ts
+supervisor-evidence-policy.ts
+supervisor-guidance-policy.ts
+task-ledger-policy.ts
+tool-call-loop-policy.ts
+tool-routing-policy.ts
+two-stage-routing-policy.ts
+verification-gate-policy.ts
+```
+
+已从 `core-loop.ts` 移出的实现逻辑：
+
+- TaskLedger plan ingestion
+- duplicate tool-call guard
+- BranchBudget hard block and result recording
+- two-stage `select_category` virtual tool handling
+- native/salvage tool batch execution
+- text tool salvage execution
+- final response append / verification gate / final draft hook
+- stream error recovery and protocol repair
+- fold status event and provider stream option building
+
+仍留在 `core-loop.ts` 的合理编排职责：
+
+- turn loop and interrupt exits
+- model stream event switch
+- assistant delta/reasoning/tool-call accumulation
+- usage accounting
+- routing decision invocation
+- safe-point sequencing after tool batches
+- unified `done` event emission
+
+后续如果继续瘦身，优先级建议：
+
+1. 抽 `model-stream-event-runner`，统一处理 `text_delta/reasoning_delta/tool_call_end/usage/error/done` 的事件分发。
+2. 将 `runSupervisorGuidanceSafePoint()` 接入 runner 或 policy interception，减少 tool batch 后的 safe-point 内联逻辑。
+3. 将 usage accounting 抽成 `usage-accounting.ts`，让 core-loop 不再直接调用 `calculateCost()`。
+4. 最后做一次 public API 审计，确认 loop policy 类型仍是内部 API。
 
 ### 下一次继续时的第一条指令
 
 给 agent 的建议指令：
 
 ```text
-继续 /vol4/Agent/covalo 的 runtime boundary refactor。当前目标是让 core-loop 只剩编排骨架。请从 PR-32 开始：把 TaskLedger plan ingestion 从 core-loop 迁入 LoopPolicy，复用 beforeAssistantFinal hook。严格按 docs/covalo_runtime_boundary_refactor_spec_20260706.md 第 14 节执行；每个 PR 单独提交，行为不变，补测试，完成后说明下一 PR 应做什么。
+继续 /vol4/Agent/covalo 的 runtime boundary refactor。当前分支是 refactor/protocol-boundary，PR-32 到 PR-40 已完成，core-loop.ts 约 550 行。请先阅读 docs/covalo_runtime_boundary_refactor_spec_20260706.md 的 PR-41 状态，然后从后续建议第 1 项开始：抽 model-stream-event-runner。每个 PR 单独提交，行为不变，补/跑相关测试，最后更新本文档并推送分支。
 ```
