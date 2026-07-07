@@ -26,7 +26,7 @@ import type { EffectiveHarnessPolicy } from "../harness/index.js"
 import { parseSelectedCategory } from "../tool-routing/two-stage-router.js"
 import type { ToolCategory } from "../tool-routing/types.js"
 import { resolveLoopToolRouting } from "./policies/tool-routing-policy.js"
-import { checkBranchBudgetBlocks, createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
+import { createBranchBudgetLoopPolicy } from "./policies/branch-budget-policy.js"
 import { createTaskLedgerLoopPolicy } from "./policies/task-ledger-policy.js"
 import { createSupervisorEvidenceLoopPolicy } from "./policies/supervisor-evidence-policy.js"
 import { createRepeatedFailureLoopPolicy } from "./policies/repeated-failure-policy.js"
@@ -154,7 +154,13 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
   const policies: LoopPolicy[] = [
     ...(_policies ?? []),
     createToolCallLoopPolicy({ recentToolCalls, appendToolResult }),
-    createBranchBudgetLoopPolicy({ branchBudgetTracker, runtimeState }),
+    createBranchBudgetLoopPolicy({
+      branchBudgetTracker,
+      runtimeState,
+      appendToolResult,
+      effectivePolicy,
+      workspaceRoot,
+    }),
     createTaskLedgerLoopPolicy({
       taskLedger,
       refreshLedgerContext,
@@ -194,13 +200,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     executionModeLockRemaining = newLock
     return decision
   }
-
-  /**
-   * F0-1: 工具批次前对每个 toolCall 做 BranchBudget 硬拦截。
-   * 返回被拦截的 toolCall → 拦截消息映射。
-   */
-  const checkBranchBudgetBlocksFn = (toolCalls: ToolCall[]): Map<string, string> =>
-    checkBranchBudgetBlocks({ branchBudgetTracker, toolCalls, workspaceRoot })
 
   const emitPolicyEvents = function* (emissions: LoopPolicyEventEmission[]): Generator<LoopEvent> {
     for (const emission of emissions) {
@@ -417,40 +416,6 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
                 yield await emitDone(doneReason, metadata)
                 return
               }
-              break streamLoop
-            }
-
-            // F0-1/B2: 工具批次执行前做 BranchBudget 硬拦截。
-            // 仅当 effectivePolicy.branchBudget === "enforce" 时才硬拦截；
-            // "recover" 模式只记录、触发 recovery_pending，不阻断工具执行。
-            const shouldHardBlock = effectivePolicy?.branchBudget === "enforce"
-            const branchBudgetBlocks = shouldHardBlock ? checkBranchBudgetBlocksFn(toolCalls) : new Map<string, string>()
-            if (branchBudgetBlocks.size > 0) {
-              // F0-1/B5: 一旦 batch 中有任意 tool_call 被 BranchBudget 拦截，
-              // 整个 batch 全部不执行，并给每个 tool_call 都 append 一个 tool_result，
-              // 避免产生 orphan tool_call 破坏 provider 协议（assistant.tool_calls 与
-              // tool_result 必须一一配对）。
-              for (const tc of toolCalls) {
-                const blockMsg = branchBudgetBlocks.get(tc.id)
-                if (blockMsg) {
-                  appendToolResult(tc, { content: blockMsg, isError: true, metadata: { reason: "branch_budget_blocked" } })
-                  yield {
-                    role: "error",
-                    content: blockMsg,
-                    severity: "warning" as const,
-                    metadata: { reason: "branch_budget_blocked", toolName: tc.function.name, toolCallId: tc.id },
-                  }
-                  sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "error", content: blockMsg, metadata: { reason: "branch_budget_blocked", toolName: tc.function.name } } })
-                } else {
-                  // 未被拦截的 tool_call 也补一个 tool_result，避免 orphan tool_call
-                  const skipMsg = "Skipped: BranchBudget blocked another tool in this batch; please retry in the next turn."
-                  appendToolResult(tc, { content: skipMsg, isError: true, metadata: { reason: "branch_budget_batch_skipped" } })
-                }
-              }
-              // 跳过本轮工具执行，直接进入下一轮让模型看到拦截消息
-              yield { role: "status", content: "tools_completed" }
-              sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
-              sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
               break streamLoop
             }
 
