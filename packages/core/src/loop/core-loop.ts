@@ -44,6 +44,7 @@ import type { LoopPolicyContext } from "./policy.js"
 import { runToolBatch } from "./tool-batch-runner.js"
 import { runTextToolSalvage } from "./text-salvage-runner.js"
 import { runFinalResponse } from "./final-response-runner.js"
+import { recoverFromStreamError } from "./stream-error-runner.js"
 
 const DEFAULT_MAX_TURNS = 100
 
@@ -531,27 +532,27 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
     }
 
     if (streamError) {
-      if (isInterrupted()) {
-        yield { role: "status", content: "interrupted" }
+      const recovery = yield* recoverFromStreamError({
+        streamError,
+        toolCalls,
+        fullContent,
+        consecutiveErrors,
+        turnCount,
+        diagnosticsEnabled,
+        isInterrupted,
+        appendToolResult,
+        ctx,
+        sessionWriter,
+        policies,
+        policyCtx,
+        logger,
+      })
+      consecutiveErrors = recovery.consecutiveErrors
+      if (recovery.action === "interrupted") {
         yield await emitDone("interrupted")
         return
       }
-      await runPolicyHook(policies, "afterStreamError", policyCtx, streamError)
-      if (toolCalls.length > 0) {
-        // Stream error after tool_calls were emitted: append tool_calls + error results
-        // to maintain protocol consistency, then retry
-        ctx.log.append({ role: "assistant", content: fullContent || null, tool_calls: toolCalls })
-        for (const tc of toolCalls) {
-          appendToolResult(tc, { content: "Stream error: tool call result not available", isError: true, metadata: { error: "stream_error" } })
-        }
-        sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-      } else if (fullContent) {
-        ctx.log.append({ role: "assistant", content: fullContent })
-      }
-      consecutiveErrors++
-      if (diagnosticsEnabled) logger.warn("loop.stream.retry", { consecutiveErrors, turnCount })
-      if (consecutiveErrors >= 3) {
-        yield { role: "error", content: `Stream failed after ${consecutiveErrors} consecutive attempts`, severity: "error" as const }
+      if (recovery.action === "error_limit") {
         yield await emitDone("error_limit")
         return
       }
