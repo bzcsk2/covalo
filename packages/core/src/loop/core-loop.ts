@@ -15,7 +15,7 @@ import {
   createRepeatedFailureTracker,
   injectPendingInstruction,
 } from "../loop-helpers.js"
-import { salvageTextToolCallsInResponse, TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
+import { TextToolCallStreamFilter } from "../tool-calls/text-salvage.js"
 import type { TaskLedgerTracker } from "../task-ledger.js"
 import { runVerificationGate } from "./policies/verification-gate-policy.js"
 import type { SupervisorGuidanceConfig } from "../supervisor/guided-loop.js"
@@ -43,6 +43,7 @@ import type { LoopPolicy, LoopPolicyEventEmission } from "./policy.js"
 import type { LoopOptions } from "../loop.js"
 import type { LoopPolicyContext } from "./policy.js"
 import { runToolBatch } from "./tool-batch-runner.js"
+import { runTextToolSalvage } from "./text-salvage-runner.js"
 
 const DEFAULT_MAX_TURNS = 100
 
@@ -453,63 +454,37 @@ export async function* runCoreLoop(opts: LoopOptions & { policies?: LoopPolicy[]
               sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "assistant_delta", content: filterTail } })
             }
 
-            // DRF-31: stop 且无原生 tool_calls 时，抢救正文中的嵌入工具调用
-            // FIX-H2: 只有 textToolSalvage 设置为 "always" 或 "on-native-failure" 时才允许抢救
-            const salvageMode = effectivePolicy?.textToolSalvage ?? "on-native-failure"
-            const allowTextToolSalvage = salvageMode === "always" || salvageMode === "on-native-failure"
-            // TODO: "on-native-failure" currently means "fallback when no native tool_calls were produced".
-            // Provider-level native parse error telemetry is not yet available.
-            if (allowTextToolSalvage && reason === "stop" && toolCalls.length === 0 && fullContent.trim()) {
-              const salvaged = salvageTextToolCallsInResponse({
-                content: fullContent,
-                finishReason: reason,
-                toolCalls: [],
-              })
-              if (salvaged.toolCalls?.length) {
-                const salvagedCalls = salvaged.toolCalls
-                const cleanContent = salvaged.content || ""
-                ctx.log.append({
-                  role: "assistant",
-                  content: cleanContent || null,
-                  reasoning_content: fullReasoning || undefined,
-                  tool_calls: salvagedCalls,
-                })
-                sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-                totalToolCalls += salvagedCalls.length
-
-                const salvageBatchResult = yield* runToolBatch({
-                  source: "salvage",
-                  toolCalls: salvagedCalls,
-                  toolExecutor,
-                  signal,
-                  appendToolResult,
-                  diagnosticsEnabled,
-                  submitId,
-                  turnCount,
-                  effectiveAllowedToolNames,
-                  maxParallelTools: effectivePolicy?.maxParallelTools,
-                  ctx,
-                  sessionWriter,
-                  policies,
-                  policyCtx,
-                  logger,
-                  errorLogName: "loop.tool_batch_error_secondary",
-                })
-                if (salvageBatchResult.done) {
-                  const { reason: doneReason, metadata } = salvageBatchResult.done
-                  yield await emitDone(doneReason, metadata)
-                  return
-                }
-                if (salvageBatchResult.intercepted) {
-                  break
-                }
-
-                const injectedAfterSalvage = appendPendingInstruction()
-                if (injectedAfterSalvage) {
-                  yield injectedAfterSalvage
-                }
-                break
+            const salvageResult = yield* runTextToolSalvage({
+              fullContent,
+              fullReasoning,
+              finishReason: reason,
+              nativeToolCalls: toolCalls,
+              effectivePolicy,
+              toolExecutor,
+              signal,
+              appendToolResult,
+              diagnosticsEnabled,
+              submitId,
+              turnCount,
+              effectiveAllowedToolNames,
+              ctx,
+              sessionWriter,
+              policies,
+              policyCtx,
+              logger,
+            })
+            totalToolCalls += salvageResult.toolCallCount
+            if (salvageResult.done) {
+              const { reason: doneReason, metadata } = salvageResult.done
+              yield await emitDone(doneReason, metadata)
+              return
+            }
+            if (salvageResult.handled) {
+              const injectedAfterSalvage = appendPendingInstruction()
+              if (injectedAfterSalvage) {
+                yield injectedAfterSalvage
               }
+              break
             }
 
             yield* emitPolicyEvents(await runPolicyHookEvents(
